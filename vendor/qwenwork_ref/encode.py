@@ -24,7 +24,7 @@ from qwenwork_ref.constants import (
     SCENE,
 )
 
-WASM_PATH = Path(__file__).resolve().parent / "native" / "qoder_auth_wasm_bg.wasm"
+WASM_PATH = Path(os.environ["QWENWORK_WASM"]) if os.environ.get("QWENWORK_WASM") else Path(__file__).resolve().parent / "native" / "qoder_auth_wasm_bg.wasm"
 _IMPORT_MODULE = "./qoder_auth_wasm_bg.js"
 _RESERVED = 1028
 _lock = threading.Lock()

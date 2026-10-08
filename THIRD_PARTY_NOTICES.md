@@ -36,7 +36,7 @@ QwenWork 个人版账号上下文与加密存储形状依据本机已安装 Qwen
 - [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign)：MIT，Copyright (c) 2026 Shuffle-1992。参考 ZCode 官方 Aliyun SDK 验证流程；将 SDK 调用和领取回执持久化改为本网关实现。完整 MIT 文本保存在 `vendor/LICENSE.TraeSign`。ZCode 实际免费权益领取与余额回执已核验，更新上表早期“尚未完成”的状态。
 - MiniMax Code 已安装桌面版中的本地 OAuth lease v1、原生请求头和账号配置形状：只读观察后独立实现客户端，不复制、不分发其产品源码。通过本机具备 capability 的管道向客户端取短期 access-token；refresh-token 的轮换交由客户端处理。
 - QwenWorkCN 个人版的 `code: ok`、`account-context` 和 `wallets` 按实际响应解析。每日额度是服务器自动重置，不声称存在手动签到接口。
-- [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)：未发现明确 LICENSE，只核对接口名称，不复制其程序。
+- [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)：README License 声明 MIT（没有独立 LICENSE）；提交 17933d242621d4482ed1ce11c8eaf938b4e08e78。复用三个上下文模块，去除 TypeScript 类型；来源、改动和版权记录见 vendor/zcode-context/NOTICE.md。此项更正早期仅参考的描述。
 
 ## MiniMax Code 官方协议参照
 MiniMax-AI/minimax-code，MIT；模型目录、Mavis Messages 与 Matrix 余额协议按官方源码验证，本工程独立实现统一 OpenAI 映射。许可证 vendor/minimax-code.LICENSE。

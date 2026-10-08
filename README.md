@@ -59,4 +59,4 @@ node scripts/install-dsh.mjs --config /ABSOLUTE/PATH/config.local.json
 
 ## 致谢与许可证
 项目原创部分 MIT。请保留 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 vendor 中完整许可证。感谢 dingminhua/dsh-connect-workbuddy、dingminhua/dsh-connect-trae、hawklithm/workbuddy2api、spirodelazz/ide-daily-checkin、88lin/workbuddy-auto-signin、linguo2625469/workbuddy2api-panel、wangmingdong/workbuddy-signin、Shuffle-1992/TraeSign、MiniMax-AI/minimax-code、wicm84266964/Buddy2api 和 deepseek-ai/deepseek-harness。
-ZCode 客户端协议形状按本机观察实现，未分发客户端二进制；TriDefender/zcode-api 仅用于接口核对，未复制未声明许可证的代码。具体复用、参考和版本见 Notices。
+ZCode 客户端协议形状按本机观察实现，未分发客户端二进制；TriDefender/zcode-api 的 README 声明 MIT，复用模块及提交号记录在 vendor/zcode-context/NOTICE.md。具体复用、参考和版本见 Notices。
