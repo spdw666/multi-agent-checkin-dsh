@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "server": {
+    "host": "127.0.0.1",
+    "port": 19421,
+    "allowRemote": false,
+    "requestTimeoutMs": 180000,
+    "bodyLimitBytes": 4194304
+  },
+  "dataDir": "./data",
+  "scheduler": {
+    "enabled": true,
+    "startup": true,
+    "timezone": "Asia/Shanghai",
+    "hour": 10,
+    "minute": 0,
+    "jitterSeconds": 600,
+    "retryMinutes": 60
+  },
+  "accounts": [
+    {
+      "id": "workbuddy-main",
+      "platform": "workbuddy",
+      "label": "WorkBuddy 国内",
+      "enabled": true,
+      "credentials": {
+        "kind": "desktop",
+        "file": "auto",
+        "executable": "auto"
+      },
+      "tasks": [
+        {
+          "id": "daily-checkin",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "qwenwork-main",
+      "platform": "qwenwork",
+      "label": "千问办公 · 我的 AI 团队",
+      "enabled": false,
+      "credentials": {
+        "kind": "desktop",
+        "file": "auto"
+      },
+      "personalTeamId": "",
+      "tasks": [
+        {
+          "id": "daily-quota",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "trae-code-cn",
+      "platform": "trae",
+      "label": "TraeCode CN",
+      "enabled": false,
+      "edition": "cn",
+      "credentials": {
+        "kind": "desktop",
+        "file": "auto"
+      },
+      "tasks": [
+        {
+          "id": "daily-checkin",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "trae-work-cn",
+      "platform": "trae",
+      "label": "TraeWork CN",
+      "enabled": false,
+      "edition": "solo",
+      "credentials": {
+        "kind": "desktop",
+        "file": "auto"
+      },
+      "tasks": [
+        {
+          "id": "daily-checkin",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "zcode-main",
+      "platform": "zcode",
+      "label": "ZCode 国内",
+      "enabled": false,
+      "credentials": {
+        "kind": "desktop",
+        "file": "auto"
+      },
+      "tasks": [
+        {
+          "id": "free-plan-claim",
+          "enabled": false
+        }
+      ]
+    },
+    {
+      "id": "minimax-main",
+      "platform": "minimax",
+      "label": "MiniMax Code 国内",
+      "enabled": false,
+      "credentials": {
+        "kind": "desktop",
+        "file": "auto",
+        "autoLaunch": true
+      },
+      "tasks": [
+        {
+          "id": "daily-checkin",
+          "enabled": true
+        }
+      ]
+    }
+  ],
+  "upstreams": [
+    {
+      "id": "workbuddy",
+      "kind": "workbuddy",
+      "accountId": "workbuddy-main",
+      "enabled": true
+    },
+    {
+      "id": "trae-code-cn",
+      "kind": "trae",
+      "accountId": "trae-code-cn",
+      "enabled": false
+    },
+    {
+      "id": "trae-work-cn",
+      "kind": "trae",
+      "accountId": "trae-work-cn",
+      "enabled": false
+    }
+  ],
+  "routes": [
+    {
+      "id": "workbuddy/deepseek-v4.1-flash",
+      "name": "WorkBuddy · DeepSeek V4.1 Flash",
+      "enabled": true,
+      "targets": [
+        {
+          "upstreamId": "workbuddy",
+          "model": "deepseek-v4.1-flash"
+        }
+      ],
+      "fallbackStatuses": [
+        408,
+        429,
+        500,
+        502,
+        503,
+        504
+      ]
+    }
+  ]
+}

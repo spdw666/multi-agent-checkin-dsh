@@ -1,0 +1,4 @@
+# Add this provider without modifying the profile's default model or other bundles.
+- insert:
+    - id: dsh-ai-credit-gateway
+      name: dsh-ai-credit-gateway

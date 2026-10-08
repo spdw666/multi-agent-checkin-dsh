@@ -1,0 +1,11 @@
+node_modules/
+data/
+config.local.json
+*.log
+.env*
+vendor/qwen-python/
+__pycache__/
+*.pyc
+vendor/workbuddy-core.mjs
+vendor/trae-core.mjs
+*.wasm

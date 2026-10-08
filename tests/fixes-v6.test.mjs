@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {Platforms} from '../src/platforms.mjs';
+import {thinkingMetadata} from '../src/reasoning.mjs';
+import {Router} from '../src/router.mjs';
+import {importModels} from '../src/model-directory.mjs';
+import {TraeSoloBridge} from '../vendor/trae-core.mjs';
+import {readFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+test('model directory single-flight deduplicates concurrent refreshes',async()=>{
+ const p=new Platforms({},{});let calls=0;p.fetchModels=async()=>{calls++;await new Promise(r=>setTimeout(r,30));return [{id:'a'}]};
+ const results=await Promise.all(Array.from({length:25},()=>p.models('u',{refresh:true})));assert.equal(calls,1);assert.equal(results.length,25);assert.equal(p.catalogFlights.size,0);
+});
+test('single-flight rejection clears queue and permits recovery',async()=>{const p=new Platforms({},{});p.fetchModels=async()=>{throw Error('fixture')};await assert.rejects(p.models('u'));assert.equal(p.catalogFlights.size,0);p.fetchModels=async()=>[];assert.deepEqual(await p.models('u'),[]);});
+test('reasoning strengths expose exact upstream values, including xhigh',()=>{const m=thinkingMetadata({reasoning:true,reasoningEfforts:{low:'light',high:'high',xhigh:'extra_high'}});assert.equal(m.thinkingLevelMap.xhigh,'extra_high');assert.equal(m.thinkingLevelMap.low,'light');assert.equal(m.thinkingLevelMap.max,null);assert.equal(m.compat.supportsReasoningEffort,true);});
+test('fixed reasoning never invents adjustable effort levels',()=>{const m=thinkingMetadata({reasoning:true});assert.equal(m.reasoning,true);assert.equal(m.compat.supportsReasoningEffort,false);assert.ok(Object.values(m.thinkingLevelMap).every(v=>v===null));});
+test('actual Trae bridge preserves mapped effort using supplied current catalog',async()=>{let sent;const bridge=new TraeSoloBridge({async chatStream(body){sent=JSON.parse(body);return {ok:false,status:400,kind:'fixture',message:'fixture'}}},{current:()=>[{id:'m',wireConfigName:'m',wireFunction:'solo_coder',reasoningEfforts:{xhigh:'extra_high'}}]});await bridge.chatStream(JSON.stringify({model:'m',reasoning_effort:'extra_high'}));assert.equal(sent.reasoning_effort,'extra_high');assert.equal(sent.function,'solo_coder');});
+test('WorkBuddy reasoning ladder is preserved in published metadata',async()=>{const config={value:{upstreams:[{id:'u',kind:'workbuddy'}],routes:[{id:'r',targets:[{upstreamId:'u',model:'m'}]}]}};const r=new Router(config,{models:async()=>[{id:'m',reasoning:{supportedEfforts:['low','high','max']}}]});const m=(await r.models()).data[0];assert.deepEqual(m.reasoningEfforts,{low:'low',high:'high',max:'max'});});
+test('directory-only model stays in catalog but is excluded from published models',async()=>{const config={value:{upstreams:[{id:'u',kind:'trae'}],routes:[{id:'r',targets:[{upstreamId:'u',model:'flash'}]}]}};const r=new Router(config,{models:async()=>[{id:'flash',callable:false}]});assert.deepEqual((await r.models()).data,[]);});
+test('directory-only model cannot be imported as a callable route',async()=>{const s={config:{value:{upstreams:[{id:'u'}],routes:[]},save(){throw Error('must not save')}},platforms:{models:async()=>[{id:'flash',callable:false}]}};await assert.rejects(importModels(s,[{upstreamId:'u',model:'flash'}]),e=>e.status===400&&e.code==='model_transport_unavailable');});
+test('Trae unavailable model fails before remote chat and supported effort maps to wire',async()=>{const p=new Platforms({value:{upstreams:[{id:'u',kind:'trae',accountId:'a'}]}},{});let sent;p.catalogs.set('u',[{id:'bad',callable:false},{id:'ok',reasoningEfforts:{low:'light',xhigh:'extra_high'}}]);p.traeStack=()=>({bridge:{async chatStream(body){sent=JSON.parse(body);return {ok:true,response:'fixture'}}}});await assert.rejects(p.chat({upstreamId:'u',model:'bad'},{}),e=>e.status===400);assert.equal(sent,undefined);await p.chat({upstreamId:'u',model:'ok'},{reasoning_effort:'xhigh'});assert.equal(sent.reasoning_effort,'extra_high');await assert.rejects(p.chat({upstreamId:'u',model:'ok'},{reasoning_effort:'max'}),e=>e.status===400);});

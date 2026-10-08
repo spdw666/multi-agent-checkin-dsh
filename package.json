@@ -1,0 +1,76 @@
+{
+  "name": "dsh-ai-credit-gateway",
+  "version": "0.2.0",
+  "description": "Local multi-account credits ledger and OpenAI-compatible model gateway with a DSH bundle",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "ai-credit": "./bin/ai-credit.mjs"
+  },
+  "main": "./bundle/index.mjs",
+  "exports": {
+    ".": "./bundle/index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "bin",
+    "src",
+    "vendor",
+    "bundle",
+    "scripts",
+    "docs",
+    "tests",
+    "config.example.json",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "start": "node bin/ai-credit.mjs serve",
+    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "npm run build && npm test",
+    "setup": "npm run build && node bin/ai-credit.mjs init"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.4 <5.0.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.7-rc.1 <0.3.0-0",
+    "@deepseek-ai/schemastery": ">=3.18.4 <4.0.0",
+    "@earendil-works/pi-ai": ">=0.85.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm-pi-ai": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/spdw666/multi-agent-checkin-dsh.git"
+  }
+}
