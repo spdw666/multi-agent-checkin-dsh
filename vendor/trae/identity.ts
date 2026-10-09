@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir, open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { cpus, homedir, release } from 'node:os'
 import type { TraeEdition, TraeStorageCandidate } from './paths.ts'
@@ -21,10 +21,42 @@ function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
 }
 
-function deviceCenterId(storage: Record<string, unknown>): string | undefined {
+async function deviceCenterId(storage: Record<string, unknown>, appRoot: string): Promise<string | undefined> {
   const prefix = 'iCubeAuthInfo://icube-dc:'
   const ids = Object.keys(storage).filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)).filter(Boolean)
-  return ids.length === 1 ? ids[0] : undefined
+  if (ids.length <= 1) return ids[0]
+  // These entries hold historical device key pairs, not the currently active
+  // device. Selecting an arbitrary entry or telemetry.devDeviceId sends a wrong
+  // x-device-id; check-in then returns 9074 although read-only billing succeeds.
+  // The native client's ICDRS init log names guaranteedDeviceId explicitly.
+  const logs = join(appRoot, 'logs')
+  const sessions = (await readdir(logs).catch(() => []))
+    .filter(name => /^\d{8}T\d{6}$/.test(name)).sort().reverse().slice(0, 1)
+  for (const session of sessions) {
+    let file
+    try {
+      file = await open(join(logs, session, 'main.log'), 'r')
+      // Identity is logged at startup; cap reads even for long-lived sessions.
+      const size = (await file.stat()).size
+      const head = Buffer.alloc(Math.min(size, 262144))
+      const { bytesRead } = await file.read(head, 0, head.length, 0)
+      let text = head.subarray(0, bytesRead).toString('utf8')
+      if (size > head.length) {
+        const tail = Buffer.alloc(Math.min(size - head.length, 65536))
+        const read = await file.read(tail, 0, tail.length, size - tail.length)
+        text += '\n' + tail.subarray(0, read.bytesRead).toString('utf8')
+      }
+      const current = [...text.matchAll(/\[ICDRS\] \(init\) initialization done, did: (\d+),/g)].at(-1)?.[1]
+        ?? [...text.matchAll(/\[ICDRS\] \(init\) resolve rdid: (\d+)/g)].at(-1)?.[1]
+      if (current) {
+        if (!ids.includes(current)) throw new Error('Trae active device is not present in its local identity records; reopen the client and recheck')
+        return current
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Trae active device')) throw error
+    } finally { await file?.close() }
+  }
+  throw new Error('Trae has multiple historical device identities; reopen the client to record its current device before check-in')
 }
 
 export interface TraeIdentityReadOptions {
@@ -46,7 +78,7 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate, options:
   const machineFile = nonEmpty(await readFile(join(appRoot, 'machineid'), 'utf8').catch(() => ''))
   const telemetryMachine = nonEmpty(storage['telemetry.machineId'])
   const devDevice = nonEmpty(storage['telemetry.devDeviceId'])
-  const dcDevice = deviceCenterId(storage)
+  const dcDevice = await deviceCenterId(storage, appRoot)
   // Historical official chat logs use the 64-char telemetry.machineId as
   // x-machine-id. The root machineid file remains a fallback only.
   const machineId = telemetryMachine ?? machineFile
