@@ -45,40 +45,58 @@ export function importedTargets(service){
  }
  return [...targets.values()];
 }
+export function retryTargets(service,previous=service.ledger.get('model-audit')){
+ const selected=new Map();
+ for(const row of previous?.results??[]){
+  if(!['failed','partial','uncertain','unavailable'].includes(row.status))continue;
+  const u=service.config.value.upstreams.find(u=>u.id===row.upstreamId);
+  if(!u||u.enabled===false||service.config.value.accounts?.find(a=>a.id===u.accountId)?.enabled===false)continue;
+  selected.set(jobKey(row),{upstreamId:row.upstreamId,model:row.model,routeIds:row.routeIds??[]});
+ }
+ return [...selected.values()];
+}
+function preserveAttempt(row,previous){
+ if(!previous||previous.status==='running')return row;
+ const {previousAttempts,...last}=previous;
+ return {...row,previousAttempts:[...(previousAttempts??[]),last].slice(-5)};
+}
 export function startModelAudit(service,{scope='all'}={}){
- if(!['all','imported'].includes(scope))throw new AppError('scope must be all or imported',400,'invalid_audit_scope');
+ if(!['all','imported','retry'].includes(scope))throw new AppError('scope must be all, imported or retry',400,'invalid_audit_scope');
  if(service.auditPromise){
   const active=service.auditReport??service.ledger.get('model-audit');
   if(active.scope!==scope){service.auditQueued=scope;active.queuedScope=scope;service.ledger.set('model-audit',active);}
   return active;
  }
  const previous=service.ledger.get('model-audit');
+ const oldRows=new Map((previous?.results??[]).map(r=>[jobKey(r),r]));
  const report={scope,startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),status:'running',total:0,completed:0,results:structuredClone(previous?.results??[]),jobKeys:[]};
- if(scope==='imported'){
-  const pending=importedTargets(service).map(t=>({...t,status:'running',reason:'刷新目录并准备本轮体检',tests:[]}));
+ if(scope!=='all'){
+  const pending=(scope==='imported'?importedTargets(service):retryTargets(service,previous)).map(t=>({...t,status:'running',reason:'刷新目录并准备本轮体检',tests:[]}));
   report.jobKeys=pending.map(jobKey);report.total=pending.length;const keys=new Set(report.jobKeys);
   report.results=report.results.filter(r=>!keys.has(jobKey(r))).concat(pending);
  }
  service.auditReport=report;service.ledger.set('model-audit',report);
  service.auditPromise=(async()=>{
-  const jobs=[],fresh=[],selected=scope==='imported'?importedTargets(service):null,c=service.config.value;
-  const upstreams=scope==='imported'?[...new Set(selected.map(t=>t.upstreamId))].map(id=>c.upstreams.find(u=>u.id===id)??{id,kind:'unknown',enabled:false}):c.upstreams.filter(u=>u.enabled!==false);
+  const jobs=[],fresh=[],resolvedCatalogKeys=new Set(),selected=scope==='imported'?importedTargets(service):scope==='retry'?retryTargets(service,previous):null,c=service.config.value;
+  const upstreams=selected?[...new Set(selected.map(t=>t.upstreamId))].map(id=>c.upstreams.find(u=>u.id===id)??{id,kind:'unknown',enabled:false}):c.upstreams.filter(u=>u.enabled!==false);
   for(const u of upstreams){
    const wanted=selected?.filter(t=>t.upstreamId===u.id);
    try{
     if(u.enabled===false||c.accounts?.find(a=>a.id===u.accountId)?.enabled===false)throw new AppError('Route account/upstream is disabled',409,'upstream_disabled');
     const catalog=await service.platforms.models(u.id,{refresh:true,signal:AbortSignal.timeout(45000)});
-    if(wanted){for(const t of wanted){const m=catalog.find(m=>m.id===t.model)??{id:t.model,callable:false,unavailableReason:'Model absent from refreshed live catalog'};jobs.push([u,m,t.routeIds]);}}
+    resolvedCatalogKeys.add(jobKey({upstreamId:u.id,model:'catalog'}));
+    if(wanted){for(const t of wanted){if(t.model==='catalog'){for(const m of catalog)jobs.push([u,m,t.routeIds]);continue;}const m=catalog.find(m=>m.id===t.model)??{id:t.model,callable:false,unavailableReason:'Model absent from refreshed live catalog'};jobs.push([u,m,t.routeIds]);}}
     else for(const m of catalog)jobs.push([u,m,[]]);
-   }catch(e){for(const t of wanted??[{model:'catalog',routeIds:[]}])fresh.push({upstreamId:u.id,platform:u.kind,model:t.model,routeIds:t.routeIds,status:'uncertain',reason:errorView(e).message,tests:[],finishedAt:new Date().toISOString()});}
+   }catch(e){for(const t of wanted??[{model:'catalog',routeIds:[]}]){const row={upstreamId:u.id,platform:u.kind,model:t.model,routeIds:t.routeIds,status:e.code==='zcode_no_active_entitlement'?'unavailable':'uncertain',reason:errorView(e).message,error:errorView(e),tests:[],finishedAt:new Date().toISOString()};fresh.push(preserveAttempt(row,oldRows.get(jobKey(row))));}}
   }
+  const uniqueJobs=new Map();for(const job of jobs){const key=jobKey({upstreamId:job[0].id,model:job[1].id}),prior=uniqueJobs.get(key);if(prior)prior[2]=[...new Set([...prior[2],...job[2]])];else uniqueJobs.set(key,job);}jobs.splice(0,jobs.length,...uniqueJobs.values());
   const running=jobs.map(([u,m,routeIds])=>({upstreamId:u.id,platform:u.kind,model:m.id,name:m.name,routeIds,status:'running',reason:'本轮体检排队中',tests:[]}));
   report.jobKeys=[...running,...fresh].map(jobKey);const replace=new Set(report.jobKeys);
   // Unrelated models retain their timestamped history; selected models lose stale green badges immediately.
-  report.results=report.results.filter(r=>!replace.has(jobKey(r))).concat(running,fresh);
+  report.results=report.results.filter(r=>!replace.has(jobKey(r))&&!resolvedCatalogKeys.has(jobKey(r))).concat(running,fresh);
   report.total=report.jobKeys.length;report.completed=fresh.length;await saveAudit(service,report);
   let index=0,saving=Promise.resolve();const persist=()=>{const snapshot=structuredClone(report);saving=saving.then(()=>saveAudit(service,snapshot));return saving;};
-  const worker=async()=>{for(;;){const i=index++;if(i>=jobs.length)return;const [u,m,routeIds]=jobs[i],r={...await testModel(service,u,m),routeIds};report.results[report.results.findIndex(old=>jobKey(old)===jobKey(r))]=r;report.completed++;report.updatedAt=new Date().toISOString();await persist();await appendFile(join(memoryRoot,'测试记录','体检事件.jsonl'),JSON.stringify(r)+'\n','utf8');}};
+  const worker=async()=>{for(;;){const i=index++;if(i>=jobs.length)return;const [u,m,routeIds]=jobs[i],row={...await testModel(service,u,m),routeIds},r=preserveAttempt(row,oldRows.get(jobKey(row)));report.results[report.results.findIndex(old=>jobKey(old)===jobKey(r))]=r;report.completed++;report.updatedAt=new Date().toISOString();await persist();await appendFile(join(memoryRoot,'测试记录','体检事件.jsonl'),JSON.stringify(r)+'\n','utf8');}};
   await Promise.all([worker(),worker()]);report.status='completed';report.updatedAt=new Date().toISOString();report.summary=Object.fromEntries(Object.keys(names).map(k=>[k,report.results.filter(r=>replace.has(jobKey(r))&&r.status===k).length]));await persist();return report;
  })().catch(async e=>{report.status='error';report.error=errorView(e);await saveAudit(service,report);return report;}).finally(()=>{service.auditPromise=undefined;service.auditReport=undefined;const queued=service.auditQueued;service.auditQueued=undefined;if(queued)startModelAudit(service,{scope:queued});});
  return report;
