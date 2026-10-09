@@ -14,7 +14,14 @@ import {collectChat,validateChat} from './openai.mjs';
 function equal(a,b){const x=Buffer.from(a??''),y=Buffer.from(b??'');return x.length===y.length&&timingSafeEqual(x,y);}
 function authorized(req,token){const h=req.headers.authorization;return typeof h==='string'&&h.startsWith('Bearer ')&&equal(h.slice(7),token);}
 function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
-async function readBody(req,limit=4194304){let bytes=0,chunks=[];for await(const chunk of req){bytes+=chunk.length;if(bytes>limit)throw new AppError('Request body exceeds limit',413,'body_too_large');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw new AppError('Invalid JSON body',400,'invalid_request_error');}}
+async function readBody(req,limit=4194304,{allowEmpty=false}={}){
+  let bytes=0;const chunks=[];
+  const tooLarge=size=>new AppError(`Request body exceeds limit (${size} bytes > ${limit} bytes). Increase server.bodyLimitBytes for long DSH conversations; message history was not trimmed.`,413,'body_too_large');
+  if(Number(req.headers['content-length'])>limit){req.resume();throw tooLarge(Number(req.headers['content-length']));}
+  try{for await(const chunk of req.iterator({destroyOnReturn:false})){bytes+=chunk.length;if(bytes>limit)throw tooLarge(bytes);chunks.push(chunk);}}catch(e){req.resume();throw e;}
+  if(allowEmpty&&bytes===0)return {};
+  try{return JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'))}catch{throw new AppError('Invalid JSON body',400,'invalid_request_error');}
+}
 export async function startServer(service,{host,port,key,adminKey,admin=true,onShutdown}={}) {
   const cfg=service.config.value.server;host??=cfg.host;port??=cfg.port;key??=service.keys.apiKey;adminKey??=service.keys.adminKey;
   const controllers=new Set();let baseUrl;
@@ -38,15 +45,15 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='POST'&&url.pathname==='/admin/workbuddy/switch'){const b=await readBody(req),r=service.config.value.routes.find(r=>r.id===b.routeId&&r.enabled!==false);if(!r)throw new AppError('Unknown enabled route',404,'model_not_found');return json(res,200,service.router.pool.select(r,b.accountId));}
         if(req.method==='POST'&&url.pathname==='/admin/restart-dsh')return json(res,200,await restartDsh());
         if(req.method==='GET'&&url.pathname==='/admin/model-tests')return json(res,200,service.ledger.get('model-audit')??{status:'not_started',results:[]});
-        if(req.method==='POST'&&url.pathname==='/admin/model-tests')return json(res,202,startModelAudit(service));
+        if(req.method==='POST'&&url.pathname==='/admin/model-tests')return json(res,202,startModelAudit(service,await readBody(req,4194304,{allowEmpty:true})));
         if(req.method==='GET'&&url.pathname==='/admin/balances')return json(res,200,await balances(service,{refresh:url.searchParams.get('refresh')==='1'}));
         if(req.method==='GET'&&url.pathname==='/admin/config')return json(res,200,service.config.value);
         if(req.method==='GET'&&url.pathname==='/admin/models')return json(res,200,await service.router.models());
         if(req.method==='GET'&&url.pathname==='/admin/model-directory')return json(res,200,await modelDirectory(service,{refresh:url.searchParams.get('refresh')==='1'}));
         if(req.method==='POST'&&url.pathname==='/admin/model-import'){const b=await readBody(req);return json(res,200,await importModels(service,b.items,{enabled:b.enabled!==false}));}
         if(req.method==='PUT'&&url.pathname==='/admin/config'){
-          const value=await readBody(req,cfg.bodyLimitBytes);if(value.dataDir!==service.config.value.dataDir)throw new AppError('Change dataDir with the service stopped',409,'restart_required');
-          await service.config.save(value);service.balanceCache?.clear();service.credentials.cache.clear();service.platforms.catalogs.clear();service.platforms.trae.clear();return json(res,200,{saved:true,serverRestartRequired:JSON.stringify(value.server)!==JSON.stringify(cfg)});
+          const value=await readBody(req);if(value.dataDir!==service.config.value.dataDir)throw new AppError('Change dataDir with the service stopped',409,'restart_required');
+          await service.config.save(value);service.balanceCache?.clear();service.credentials.cache.clear();service.platforms.catalogs.clear();service.platforms.trae.clear();return json(res,200,{saved:true,serverRestartRequired:value.server.host!==host||value.server.port!==port});
         }
         if(req.method==='GET'&&url.pathname==='/admin/records')return json(res,200,{records:service.ledger.records({limit:url.searchParams.get('limit')??100,accountId:url.searchParams.get('accountId')??'',platform:url.searchParams.get('platform')??''})});
         if(req.method==='GET'&&url.pathname==='/admin/state')return json(res,200,{baseUrl,keysFile:service.keysFile,configFile:service.config.file,schedule:service.ledger.get('schedule-plan'),lastRun:service.ledger.get('schedule-last')});
@@ -63,8 +70,10 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
       if(!authorized(req,key))throw new AppError('Gateway Bearer key required',401,'authentication_error');
       if(req.method==='GET'&&url.pathname==='/v1/models')return json(res,200,await service.router.models());
       if(req.method==='POST'&&url.pathname==='/v1/chat/completions'){
-        const body=validateChat(await readBody(req,cfg.bodyLimitBytes));const controller=new AbortController();controllers.add(controller);
-        const timeout=setTimeout(()=>controller.abort(),cfg.requestTimeoutMs??180000);
+        // Read live policy on every request, including the private DSH worker after config reload.
+        const policy=service.config.value.server;
+        const body=validateChat(await readBody(req,policy.bodyLimitBytes??67108864));const controller=new AbortController();controllers.add(controller);
+        const timeout=setTimeout(()=>controller.abort(),policy.requestTimeoutMs??180000);
         const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnect);
         try {
           const stream=service.router.chat(body,controller.signal);

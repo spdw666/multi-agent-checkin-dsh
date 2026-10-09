@@ -13,9 +13,9 @@ export function validateConfig(c) {
       ids.add(item.id);
     }
   }
-  for(const a of c.accounts)if(!['workbuddy','trae','qwenwork','zcode','minimax'].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');
+  for(const a of c.accounts)if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel'].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');
   for(const u of c.upstreams){
-    if(!['workbuddy','trae','qwenwork','zcode','minimax'].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
+    if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel'].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
     if(!c.accounts.some(a=>a.id===u.accountId&&a.platform===u.kind))throw new AppError(`Upstream ${u.id}: account/platform mismatch`,400,'invalid_config');
   }
   for(const r of c.routes){
@@ -24,6 +24,7 @@ export function validateConfig(c) {
     if(pool&&(!Array.isArray(pool.accountIds)||!pool.accountIds.length||new Set(pool.accountIds).size!==pool.accountIds.length||pool.accountIds.some(id=>!c.accounts.some(a=>a.id===id&&a.platform==='workbuddy'))||c.upstreams.find(u=>u.id===r.targets[0].upstreamId)?.kind!=='workbuddy'||pool.cooldownSeconds!==undefined&&(!Number.isInteger(pool.cooldownSeconds)||pool.cooldownSeconds<60||pool.cooldownSeconds>86400)))throw new AppError(`Route ${r.id}: invalid WorkBuddy account pool`,400,'invalid_config');
   }
   if(!c.server||!Number.isInteger(c.server.port)||c.server.port<0||c.server.port>65535)throw new AppError('Invalid server port',400,'invalid_config');
+  if(c.server.bodyLimitBytes!==undefined&&(!Number.isInteger(c.server.bodyLimitBytes)||c.server.bodyLimitBytes<1024||c.server.bodyLimitBytes>67108864))throw new AppError('server.bodyLimitBytes must be an integer from 1024 to 67108864 (64 MiB)',400,'invalid_config');
   if(!['127.0.0.1','::1','localhost'].includes(c.server.host)&&!c.server.allowRemote)throw new AppError('Non-loopback listening needs server.allowRemote=true',400,'invalid_config');
   const s=c.scheduler;
   if(!s||!Number.isInteger(s.hour)||s.hour<0||s.hour>23||!Number.isInteger(s.minute)||s.minute<0||s.minute>59||!Number.isInteger(s.jitterSeconds)||s.jitterSeconds<0||s.jitterSeconds>86400)throw new AppError('Invalid scheduler settings',400,'invalid_config');

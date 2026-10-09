@@ -21,7 +21,7 @@ export async function importModels(service,items,{enabled=true}={}) {
     if(found){found.enabled=selected;continue;}
     if(!selected)continue;
     const id=u.id+'/'+model.id;if(value.routes.some(r=>r.id===id))throw new AppError('Route ID collision',409,'route_collision');
-    value.routes.push({id,name:(u.kind==='trae'?'Trae CN':u.kind==='workbuddy'?'WorkBuddy':u.kind==='qwenwork'?'千问办公':u.kind==='zcode'?'ZCode':'MiniMax Code')+' · '+model.name,enabled:true,targets:[{upstreamId:u.id,model:model.id}]});
+    value.routes.push({id,name:(u.kind==='trae'?'Trae CN':u.kind==='workbuddy'?'WorkBuddy':u.kind==='qwenwork'?'千问办公':u.kind==='zcode'?'ZCode':u.kind==='bigmodel'?'智谱 BigModel':'MiniMax Code')+' · '+model.name,enabled:true,targets:[{upstreamId:u.id,model:model.id}]});
   }
   await service.config.save(value);
   return {saved:true,selected:items.length,enabled};

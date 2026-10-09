@@ -49,3 +49,7 @@ linguo2625469/workbuddy2api-panel，MIT，commit d66384d9e3d69655f799d7d8f2e5fba
 ## 公共源码包
 不包含原生/Web前端、客户端程序、WASM、凭据、数据库或会话档案。千问协议助手 vendor/qwenwork_ref 参考 wicm84266964/Buddy2api（MIT），完整许可证在该目录；编码器边界/UTF-8和上游映射由本网关实现。Galaxy/HTMLrev 仅作为本机桌面设计参考，公共包未分发其UI。
 
+## 智谱官方适配（2026-10-09）
+
+智谱 BigModel 官方 OpenAI 兼容文档用于核对模型调用契约；官方控制台的实际响应用于核对资源包字段。本工程独立实现 `src/bigmodel.mjs`，不复制或分发产品客户端/控制台源码。另参考 hucuyuu/zhipu-balance（MIT）的现金余额查询端点线索，未复制其程序；此处与原有参考项目一并致谢。README 展示图为用户提供的本机截图，不包含前端实现。
+

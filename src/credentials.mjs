@@ -1,3 +1,4 @@
+import {bigModelCredential} from './bigmodel.mjs';
 import {readFile, stat, access} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {join, dirname} from 'node:path';
@@ -69,7 +70,7 @@ export class CredentialManager {
       if(account.platform==='minimax') {
         const raw=await readJson(file).catch(()=>{throw new AppError('MiniMax Code 登录态待导入本机凭据文件',401,'minimax_login_required')});
         credential=account.credentials.kind==='desktop'?await readMiniMaxDesktop(file,account,this.config):{...parseMiniMaxCredential(raw),filePath:file};
-      }else if(account.credentials.kind==='file') {
+      }else if(account.platform==='bigmodel'){credential={...bigModelCredential(await readJson(file),account.id),filePath:file};}else if(account.credentials.kind==='file') {
         const raw=await readJson(file);credential={...raw,accessToken:raw.accessToken??raw.token,principal:raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub,expiresAtMs:raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000,source:'local-config',filePath:file};
       }else if(account.platform==='workbuddy') {
         const raw=await readJson(file);let accessToken=raw.auth?.accessToken;

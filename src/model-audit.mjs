@@ -1,9 +1,9 @@
 import {Router} from './router.mjs';
 import {collectChat} from './openai.mjs';
-import {errorView,atomicJson} from './util.mjs';
+import {errorView,atomicJson,AppError} from './util.mjs';
 import {mkdir,writeFile,appendFile} from 'node:fs/promises';
 import {join} from 'node:path';
-export const memoryRoot=process.env.AI_CREDIT_MEMORY??join(process.cwd(),'data','audit');
+export const memoryRoot=process.env.AI_CREDIT_MEMORY??'D:/AI Memory/AI积分网关-多平台签到与DSH反代';
 const names={passed:'全部通过',failed:'未通过',partial:'仅聊天 / 工具未通过',uncertain:'待复测',unavailable:'当前通道未提供',running:'检测中'};
 export function auditLabel(row){return row?names[row.status]??row.status:'未测试';}
 export async function saveAudit(service,report){
@@ -36,15 +36,50 @@ export async function testModel(service,u,m,{timeoutMs=45000}={}){
  const bad=result.tests.filter(t=>!t.ok),hard=bad.find(t=>t.error?.status>=400&&t.error.status<500&&![408,429,499].includes(t.error.status));
  result.status=!bad.length?'passed':hard?'failed':result.tests.slice(0,2).every(t=>t.ok)?'partial':'uncertain';result.reason=bad.map(t=>t.stage+': '+(t.reason??t.error?.message??'未通过')).join('; ');result.finishedAt=new Date().toISOString();return result;
 }
-export function startModelAudit(service){
- if(service.auditPromise)return service.ledger.get('model-audit');
- const report={startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),status:'running',total:0,completed:0,results:[]};service.ledger.set('model-audit',report);
+const jobKey=r=>r.upstreamId+'\0'+r.model;
+export function importedTargets(service){
+ const targets=new Map();
+ for(const route of service.config.value.routes.filter(r=>r.enabled!==false)){
+  const rows=service.router?.pool?service.router.pool.candidates(route,{ignoreCooldown:true}):route.targets;
+  for(const t of rows){const key=jobKey(t),prior=targets.get(key);if(prior)prior.routeIds.push(route.id);else targets.set(key,{...t,routeIds:[route.id]});}
+ }
+ return [...targets.values()];
+}
+export function startModelAudit(service,{scope='all'}={}){
+ if(!['all','imported'].includes(scope))throw new AppError('scope must be all or imported',400,'invalid_audit_scope');
+ if(service.auditPromise){
+  const active=service.auditReport??service.ledger.get('model-audit');
+  if(active.scope!==scope){service.auditQueued=scope;active.queuedScope=scope;service.ledger.set('model-audit',active);}
+  return active;
+ }
+ const previous=service.ledger.get('model-audit');
+ const report={scope,startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),status:'running',total:0,completed:0,results:structuredClone(previous?.results??[]),jobKeys:[]};
+ if(scope==='imported'){
+  const pending=importedTargets(service).map(t=>({...t,status:'running',reason:'刷新目录并准备本轮体检',tests:[]}));
+  report.jobKeys=pending.map(jobKey);report.total=pending.length;const keys=new Set(report.jobKeys);
+  report.results=report.results.filter(r=>!keys.has(jobKey(r))).concat(pending);
+ }
+ service.auditReport=report;service.ledger.set('model-audit',report);
  service.auditPromise=(async()=>{
-  const jobs=[];for(const u of service.config.value.upstreams.filter(u=>u.enabled!==false)){try{for(const m of await service.platforms.models(u.id))jobs.push([u,m]);}catch(e){report.results.push({upstreamId:u.id,model:'catalog',status:'uncertain',reason:errorView(e).message,tests:[]});}}
-  report.total=jobs.length+report.results.length;report.completed=report.results.length;await saveAudit(service,report);
+  const jobs=[],fresh=[],selected=scope==='imported'?importedTargets(service):null,c=service.config.value;
+  const upstreams=scope==='imported'?[...new Set(selected.map(t=>t.upstreamId))].map(id=>c.upstreams.find(u=>u.id===id)??{id,kind:'unknown',enabled:false}):c.upstreams.filter(u=>u.enabled!==false);
+  for(const u of upstreams){
+   const wanted=selected?.filter(t=>t.upstreamId===u.id);
+   try{
+    if(u.enabled===false||c.accounts?.find(a=>a.id===u.accountId)?.enabled===false)throw new AppError('Route account/upstream is disabled',409,'upstream_disabled');
+    const catalog=await service.platforms.models(u.id,{refresh:true,signal:AbortSignal.timeout(45000)});
+    if(wanted){for(const t of wanted){const m=catalog.find(m=>m.id===t.model)??{id:t.model,callable:false,unavailableReason:'Model absent from refreshed live catalog'};jobs.push([u,m,t.routeIds]);}}
+    else for(const m of catalog)jobs.push([u,m,[]]);
+   }catch(e){for(const t of wanted??[{model:'catalog',routeIds:[]}])fresh.push({upstreamId:u.id,platform:u.kind,model:t.model,routeIds:t.routeIds,status:'uncertain',reason:errorView(e).message,tests:[],finishedAt:new Date().toISOString()});}
+  }
+  const running=jobs.map(([u,m,routeIds])=>({upstreamId:u.id,platform:u.kind,model:m.id,name:m.name,routeIds,status:'running',reason:'本轮体检排队中',tests:[]}));
+  report.jobKeys=[...running,...fresh].map(jobKey);const replace=new Set(report.jobKeys);
+  // Unrelated models retain their timestamped history; selected models lose stale green badges immediately.
+  report.results=report.results.filter(r=>!replace.has(jobKey(r))).concat(running,fresh);
+  report.total=report.jobKeys.length;report.completed=fresh.length;await saveAudit(service,report);
   let index=0,saving=Promise.resolve();const persist=()=>{const snapshot=structuredClone(report);saving=saving.then(()=>saveAudit(service,snapshot));return saving;};
-  const worker=async()=>{for(;;){const i=index++;if(i>=jobs.length)return;const [u,m]=jobs[i],r=await testModel(service,u,m);report.results.push(r);report.completed++;report.updatedAt=new Date().toISOString();await persist();await appendFile(join(memoryRoot,'测试记录','体检事件.jsonl'),JSON.stringify(r)+'\n','utf8');}};
-  await Promise.all([worker(),worker()]);report.status='completed';report.updatedAt=new Date().toISOString();report.summary=Object.fromEntries(Object.keys(names).map(k=>[k,report.results.filter(r=>r.status===k).length]));await persist();return report;
- })().catch(async e=>{report.status='error';report.error=errorView(e);await saveAudit(service,report);return report;}).finally(()=>{service.auditPromise=undefined;});
+  const worker=async()=>{for(;;){const i=index++;if(i>=jobs.length)return;const [u,m,routeIds]=jobs[i],r={...await testModel(service,u,m),routeIds};report.results[report.results.findIndex(old=>jobKey(old)===jobKey(r))]=r;report.completed++;report.updatedAt=new Date().toISOString();await persist();await appendFile(join(memoryRoot,'测试记录','体检事件.jsonl'),JSON.stringify(r)+'\n','utf8');}};
+  await Promise.all([worker(),worker()]);report.status='completed';report.updatedAt=new Date().toISOString();report.summary=Object.fromEntries(Object.keys(names).map(k=>[k,report.results.filter(r=>replace.has(jobKey(r))&&r.status===k).length]));await persist();return report;
+ })().catch(async e=>{report.status='error';report.error=errorView(e);await saveAudit(service,report);return report;}).finally(()=>{service.auditPromise=undefined;service.auditReport=undefined;const queued=service.auditQueued;service.auditQueued=undefined;if(queued)startModelAudit(service,{scope:queued});});
  return report;
 }
