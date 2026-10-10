@@ -3,7 +3,7 @@
 <p align="center">
   <b>把多平台每日权益、账号余额和模型调用收拢到一个本地网关</b><br>
   WorkBuddy · Trae CN · 千问办公 · MiniMax Code · ZCode · 智谱 BigModel<br>
-  多账号签到 · 积分耗尽切号 · OpenAI 兼容 API · SSE · 工具调用 · DSH bundle
+  多账号签到 · 积分耗尽切号 · OpenAI 兼容 API · SSE · 工具调用 · DSH bundle · Hermes
 </p>
 
 <p align="center">
@@ -33,6 +33,7 @@
 - [WorkBuddy 多账号与积分耗尽切换](#workbuddy-多账号与积分耗尽切换)
 - [模型发现、体检与导入](#模型发现体检与导入)
 - [接入 DSH](#接入-dsh)
+- [接入 Hermes](#接入-hermes)
 - [OpenAI 兼容调用示例](#openai-兼容调用示例)
 - [管理 API 与自建前端](#管理-api-与自建前端)
 - [调用用量与额度明细](#调用用量与额度明细)
@@ -46,7 +47,7 @@
 AI积分网关是独立桌面应用；本仓库公开其中的后端、CLI 与 DSH 插件，不包含桌面前端实现或安装包。后端解决两件事：
 
 1. **每日权益管理**：读取本机客户端登录态，按账号执行签到、检查每日免费额度或领取免费套餐，将结果写入 SQLite 账本。
-2. **统一模型入口**：将各平台的模型协议映射为 OpenAI 兼容接口，让 DSH 等 Agent 工具通过统一入口调用。
+2. **统一模型入口**：将各平台的模型协议映射为 OpenAI 兼容接口，让 DSH、Hermes 等 Agent 工具通过统一入口调用。
 
 账号凭据、模型上游和对外路由分层配置。签到和模型调用可以使用同一平台账号；一个账号可以绑定多个模型路由；WorkBuddy 可配置多个独立账号作为同模型备用池。
 
@@ -65,12 +66,13 @@ AI积分网关是独立桌面应用；本仓库公开其中的后端、CLI 与 D
 | 模型目录 | 查询启用上游的模型，展示能力、已导入状态与体检结果；停用项不对外发布，配置仍保留 |
 | 定向复测 | 对历史未通过项执行 `scope=retry`，保留最多五次先前尝试，不修改路由及启用选择 |
 | OpenAI 兼容 | `GET /v1/models`、`POST /v1/chat/completions`，普通响应与 SSE 共用映射层 |
-| Agent 工具调用 | 结构化 `tool_calls` 和工具结果回传；工具在 DSH / 调用方本地执行 |
+| Agent 工具调用 | 结构化 `tool_calls` 和工具结果回传；工具在 DSH / Hermes / 调用方本地执行 |
 | 图片与推理选项 | 根据上游声明映射能力；不统一虚构图片支持或推理强度档位 |
 | 优先级 fallback | 按路由的 `targets` 顺序回退，结合 `fallbackStatuses`；已输出 SSE 后不重放整段请求 |
 | 余额查询 | 单账号查询设截止时间，失败可返回缓存与 `stale` 标记，不把未知余额当作零 |
 | 调用用量明细 | SQLite 持久化实际模型、路由、账号、起止时间、请求及首字耗时、Token 和上游返回的计费值；保留失败、取消及回退尝试 |
 | DSH 插件 | bundle 注册 provider，经独立 Node worker 和随机端口 loopback shim 接入 |
+| Hermes 接入 | 命名自定义 Provider 直连 HTTP API，动态发现启用路由；本机 `key_cmd` 读取推理密钥 |
 | 自建前端 | 模型 API 与管理 API 分离，前端可采用 React、Vue、原生桌面或其他方案 |
 
 第三方 API 中转站功能已移除；本仓库配置五类客户端平台及智谱官方 API 上游，不接受任意中转站 URL。活动任务不作为默认全自动功能，只有已实现的任务适配器才能执行。
@@ -377,6 +379,22 @@ dsh plugin --profile desktop add file:/ABSOLUTE/PATH/multi-agent-checkin-dsh
 
 运行中的目录刷新与宿主首次加载不是同一回事。遇初始化崩溃先看 worker / 宿主日志，不反复重启整台电脑。
 
+## 接入 Hermes
+
+Hermes 可通过命名自定义 Provider 直接调用本机网关，无需经过 DSH：
+
+```text
+Hermes → http://127.0.0.1:19421/v1 → 已启用的平台模型
+```
+
+在 Hermes 实际使用的 home/profile 中，为 `config.yaml` 添加 `providers.ai-credit`，使用 `chat_completions`、`discover_models: true` 和本仓库的 `scripts/hermes-key.mjs` 作为 `key_cmd`。helper 只从本机数据目录读取 `apiKey`，不使用管理密钥，也不把密钥写入配置正文。
+
+保留原默认模型，在 Hermes 模型选择器（CLI `/model`）选择“AI积分网关”及实际路由。停用模型仍保留网关配置但不对外发布；模型目录有缓存，启停后需刷新。
+
+**推理兼容要点：** Hermes 的通用 custom Provider 可能默认发送 `medium`，部分 Trae 路由会拒绝。推荐设置 `extra_body.reasoning_effort: null`，沿用网关/上游各模型默认策略；此模式不逐平台透传 Hermes 的思考强度菜单。工具执行仍由 Hermes 完成。
+
+完整 YAML、跨平台路径示例、验证与回滚见 [Hermes 接入说明](docs/hermes.md)。网关需保持运行；已有 DSH 设置和 Hermes 其他 Provider 无需改动。
+
 ## OpenAI 兼容调用示例
 
 ### PowerShell：模型列表与普通聊天
@@ -637,7 +655,7 @@ npm ci
 npm run check
 ```
 
-当前回归集包含 **144 项测试**，覆盖普通 / SSE / 工具调用、工具结果回传、跨进程幂等、账号池、手动切换竞争、临时拒绝恢复、余额查询超时、官方智谱适配、超过 4 MiB 的完整历史、已导入模型限定体检、Trae 真实设备身份选择、未通过项定向复测、ZCode 权益错误分类，以及调用账本、回退尝试、取消记录、用量缺失、余额差额、分页筛选与管理认证。离线回归使用模拟上游，不能由此推断每个真实账号 / 地区 / 模型已经通过。真实验证由部署者用自己的登录态执行并记录。
+当前回归集包含 **152 项测试**，覆盖普通 / SSE / 工具调用、工具结果回传、跨进程幂等、账号池、手动切换竞争、临时拒绝恢复、余额查询超时、官方智谱适配、超过 4 MiB 的完整历史、已导入模型限定体检、Trae 真实设备身份选择、未通过项定向复测、ZCode 权益错误分类，以及调用账本、回退尝试、取消记录、用量缺失、余额差额、分页筛选与管理认证，以及 Hermes 凭据 helper 的字段隔离、文件错误处理与轮换读取。离线回归使用模拟上游，不能由此推断每个真实账号 / 地区 / 模型已经通过。真实验证由部署者用自己的登录态执行并记录。
 
 ### SQLite 多进程启动与故障诊断
 
