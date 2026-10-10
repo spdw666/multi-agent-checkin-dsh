@@ -24,7 +24,7 @@ Hermes → http://127.0.0.1:19421/v1 → 已启用的平台路由
 ```yaml
 providers:
   ai-credit:
-    name: AI积分网关
+    name: 星桥 AI 网关
     base_url: http://127.0.0.1:19421/v1
     api_mode: chat_completions
     discover_models: true
@@ -41,7 +41,7 @@ Linux/macOS 可将 `key_cmd` 改为类似 `'/usr/bin/node "/opt/ai-credit/script
 
 ## 模型选择与推理档位
 
-打开 Hermes 模型选择器，或在 CLI 使用 `/model`，选择“AI积分网关”及实际返回的模型 ID。不要照抄别人的账号前缀，也不要删除模型 ID 中的斜杠。
+打开 Hermes 模型选择器，或在 CLI 使用 `/model`，选择“星桥 AI 网关”及实际返回的模型 ID。不要照抄别人的账号前缀，也不要删除模型 ID 中的斜杠。
 
 `discover_models: true` 从 `/v1/models` 获取启用路由；不写死模型清单，不恢复停用项。Hermes 可能缓存目录，网关启停模型后需刷新目录。添加 Provider 本身不要求覆盖原默认模型，已有会话也不应被迁移到新 Provider。
 

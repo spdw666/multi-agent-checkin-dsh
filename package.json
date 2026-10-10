@@ -1,7 +1,7 @@
 {
   "name": "dsh-ai-credit-gateway",
   "version": "0.2.0",
-  "description": "Local multi-account credits ledger and OpenAI-compatible model gateway with a DSH bundle",
+  "description": "Xingqiao AI Gateway: local account credits, dedicated model adapters, DSH and Hermes integration",
   "type": "module",
   "license": "MIT",
   "engines": {

@@ -1,3 +1,4 @@
+import {antigravityModels,antigravityChat} from './antigravity.mjs';
 import {bigModelModels,bigModelHealth,bigModelChat} from './bigmodel.mjs';
 import {zcodeModels,zcodeChat} from './zcode-models.mjs';
 import {qwenWorkModels,qwenWorkChat} from './qwenwork-models.mjs';
@@ -45,7 +46,7 @@ export class Platforms {
       for(const m of list){if(m.callable)stack.wire.set(m.id,{configName:m.wireConfigName??m.id,function:m.wireFunction??wire.find(w=>w.id===m.id)?.function,reasoningEfforts:m.reasoningEfforts});}
       // Retain direct wire mapping even if the remote directory is temporarily absent.
       for(const m of wire){if(m.id&&!stack.wire.has(m.id))stack.wire.set(m.id,{configName:m.id,function:m.wireFunction??m.function});}
-    }else if(u.kind==='bigmodel'){list=await bigModelModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='qwenwork'){list=await qwenWorkModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='zcode'){list=await zcodeModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='minimax'){list=await miniMaxModels(await this.credentials.resolve(u.accountId));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
+    }else if(u.kind==='antigravity'){list=await antigravityModels(u,await this.credentials.resolve(u.accountId),{signal,config:this.config});}else if(u.kind==='bigmodel'){list=await bigModelModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='qwenwork'){list=await qwenWorkModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='zcode'){list=await zcodeModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='minimax'){list=await miniMaxModels(await this.credentials.resolve(u.accountId));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
     if(!Array.isArray(list)||!list.length)throw new AppError(`Upstream ${u.id} returned an empty catalog`,502,'empty_catalog');
     this.catalogs.set(upstreamId,list);return list;
   }
@@ -57,6 +58,7 @@ export class Platforms {
       if(regionOfCredential(credential)!=='cn')return {status:'authenticated',subscription:await usage.payStatus(),checkin:{supported:false}};
       const [checkin,snapshot]=await Promise.all([usage.checkinStatus(),usage.snapshot()]);return {status:'authenticated',checkin,snapshot};
     }
+    if(a.platform==='antigravity'){const u=this.config.value.upstreams.find(u=>u.kind==='antigravity'&&u.accountId===id&&u.enabled!==false);if(!u)throw new AppError('Antigravity bridge disabled',503,'upstream_disabled');const models=await antigravityModels(u,credential,{config:this.config});return {status:'bridge_ready',models:models.length,quotaKnown:false};}
     if(a.platform==='bigmodel')return bigModelHealth(credential);
     if(a.platform==='zcode')return {status:'authenticated',...await zcodePreview(credential)};
     if(a.platform==='qwenwork')return {status:'authenticated',...await this.qwenContext(id,credential)};
@@ -113,6 +115,7 @@ export class Platforms {
       if(!result.ok)throw new AppError(`Trae ${result.kind}: ${result.message}`,result.status||502,result.kind);
       return {response:result.response};
     }
+    if(u.kind==='antigravity')return antigravityChat(u,await this.credentials.resolve(u.accountId),input,signal,this.config);
     if(u.kind==='bigmodel')return bigModelChat(await this.credentials.resolve(u.accountId),input,signal);
     if(u.kind==='zcode')return zcodeChat(await this.credentials.resolve(u.accountId),input,signal,this.credentials.ledger);
     if(u.kind==='qwenwork')return qwenWorkChat(await this.credentials.resolve(u.accountId),input,signal);

@@ -2,6 +2,7 @@ import {dirname, join} from 'node:path';
 import {readFile, copyFile, mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {AppError, atomicJson, localPath, readJson} from './util.mjs';
+import {antigravityBase} from './antigravity.mjs';
 export const projectRoot = fileURLToPath(new URL('../',import.meta.url));
 export function validateConfig(c) {
   const rejectInlineSecrets=(node)=>{if(!node||typeof node!=='object')return;for(const [k,v]of Object.entries(node)){if(/^(accessToken|refreshToken|apiKey|adminKey|password|cookie|authorization)$/i.test(k))throw new AppError('Store credentials in an account-specific local file, not the management config',400,'inline_credentials');rejectInlineSecrets(v);}};rejectInlineSecrets(c);
@@ -13,9 +14,10 @@ export function validateConfig(c) {
       ids.add(item.id);
     }
   }
-  for(const a of c.accounts)if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel'].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');
+  for(const a of c.accounts)if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity'].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');
   for(const u of c.upstreams){
-    if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel'].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
+    if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity'].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
+    if(u.kind==='antigravity')antigravityBase(u);
     if(!c.accounts.some(a=>a.id===u.accountId&&a.platform===u.kind))throw new AppError(`Upstream ${u.id}: account/platform mismatch`,400,'invalid_config');
   }
   for(const r of c.routes){
