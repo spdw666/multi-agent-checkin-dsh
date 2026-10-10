@@ -1,8 +1,8 @@
-<h1 align="center">星桥 AI 网关</h1>
+<h1 align="center">AI网关</h1>
 
 <p align="center">
   <b>多平台每日权益、账号余额与模型调用，收拢到一个本机网关</b><br>
-  星桥 AI 网关（曾用名 AI积分网关）· 原生独立 Windows 桌面应用<br>
+  AI网关· 原生独立 Windows 桌面应用<br>
   WorkBuddy · Trae · 千问办公 · MiniMax Code · ZCode · 智谱 BigModel · Antigravity 本机桥<br>
   多账号签到 · 积分耗尽切号 · OpenAI 兼容 API · SSE · 工具调用 · DSH bundle · Hermes
 </p>
@@ -20,7 +20,7 @@
 
 ## 界面展示
 
-![星桥 AI 网关：多账号余额、签到与已启用模型总览](docs/images/platform-balances.png)
+![AI网关：多账号余额、签到与已启用模型总览](docs/images/platform-balances.png)
 
 *用户提供的本机界面原图（文档资产，本次改版未重新截图，仓库不含该前端实现）。图中账号数、已启用模型、签到时间与余额为截图时的个人配置，非新部署默认值或额度承诺；积分、Token、现金与资源包保持各自单位，不合计成统一余额。*
 
@@ -32,7 +32,7 @@
 
 ## 产品定位
 
-星桥 AI 网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后端、CLI 与 DSH 插件。后端解决两件事：
+AI网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后端、CLI 与 DSH 插件。后端解决两件事：
 
 1. **每日权益管理**：读取本机客户端登录态，按账号签到、检查每日免费额度或领取免费套餐，结果写入 SQLite 幂等账本。
 2. **统一模型入口**：把各上游协议映射为 OpenAI 兼容接口，让 DSH、Hermes 等工具经同一入口调用；工具由**调用端**执行，网关只做协议映射。
@@ -200,7 +200,7 @@ Hermes 用命名自定义 Provider 直连本机网关，不需要 DSH 插件：`
 ```yaml
 providers:
   ai-credit:
-    name: 星桥 AI 网关
+    name: AI网关
     base_url: http://127.0.0.1:19421/v1
     api_mode: chat_completions
     discover_models: true
@@ -211,7 +211,7 @@ providers:
 
 - **`key_cmd`**：`scripts/hermes-key.mjs` 每次只读 `apiKey`，不使用 `adminKey`，经标准输出交付密钥，不写入 YAML 或 `.env`；缺文件、非法 JSON、空密钥只输出固定错误并返回退出码 1。**不要把 helper 输出复制到聊天、日志或工单。**
 - **`reasoning_effort: null`**：Hermes 通用 custom Provider 可能默认发送 `medium`，部分 Trae 路由只接受 `low/high/xhigh`，会返回 `400 / reasoning_effort_not_supported`；`null` 覆盖统一档位，由网关 / 上游按该路由默认策略处理。此模式下 Hermes 思考强度菜单**不逐平台透传**，也不改 DSH 推理设置与其他 Provider。
-- `discover_models: true` 从 `/v1/models` 获取启用路由，不写死清单、不恢复停用项，Hermes 侧目录缓存需刷新；保留原默认模型，在模型选择器中选择“星桥 AI 网关”及实际路由 ID。
+- `discover_models: true` 从 `/v1/models` 获取启用路由，不写死清单、不恢复停用项，Hermes 侧目录缓存需刷新；保留原默认模型，在模型选择器中选择“AI网关”及实际路由 ID。
 
 完整 YAML、跨平台路径、分层验证与回滚见 [docs/hermes.md](docs/hermes.md)。网关需保持运行，工具执行仍由 Hermes 完成。
 
@@ -309,7 +309,7 @@ node --test tests/sqlite-concurrency.test.mjs   # 账本并发与冷启动竞争
 
 ## 许可与致谢
 
-原创实现采用 [MIT](LICENSE)；第三方模块保留各自版权头、完整许可证与来源，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `vendor/`。下表区分代码复用与设计 / 协议参考：
+原创实现采用 [MIT](LICENSE)；第三方模块保留各自版权头、完整许可证与来源，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `vendor/`。下表区分代码复用、独立外部组件与设计 / 协议参考；列入致谢不表示相关项目代码均被打包到本仓库：
 
 | 项目 | 使用方式 |
 |---|---|
@@ -324,5 +324,8 @@ node --test tests/sqlite-concurrency.test.mjs   # 账本并发与冷启动竞争
 | [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign) | 参考 ZCode 登录态形状与官方验证流程 |
 | [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | 参照官方模型目录、Mavis Messages 与 Matrix 余额协议，独立实现 OpenAI 映射 |
 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | 对照 DSH bundle / provider / PiAiAdapter 宿主契约 |
+| [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) | Antigravity 接入使用的独立本机协议桥，负责上游认证与协议转换；本网关实现本地桥适配，桥的源码、二进制及凭据不随本仓库分发，安装时保留其 MIT 许可证 |
+| [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 对照自定义 Provider、模型发现与工具调用契约完成接入；Hermes 独立运行，本仓库未复制或打包其 Agent 实现 |
+| [hucuyuu/zhipu-balance](https://github.com/hucuyuu/zhipu-balance) | 参考智谱现金余额查询端点线索，本网关独立实现请求与字段归一化，未复制其程序 |
 
 感谢上述项目作者与贡献者。本仓库借鉴功能分组、部署步骤与 FAQ 的文档结构，不复制其他项目的功能承诺；上游代码、平台服务与本项目分别维护，具体功能以本仓库实现与实际回执为准。
