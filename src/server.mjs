@@ -47,6 +47,11 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='GET'&&url.pathname==='/admin/model-tests')return json(res,200,service.ledger.get('model-audit')??{status:'not_started',results:[]});
         if(req.method==='POST'&&url.pathname==='/admin/model-tests')return json(res,202,startModelAudit(service,await readBody(req,4194304,{allowEmpty:true})));
         if(req.method==='GET'&&url.pathname==='/admin/balances')return json(res,200,await balances(service,{refresh:url.searchParams.get('refresh')==='1'}));
+        if(req.method==='GET'&&url.pathname==='/admin/usage'){
+          const options=Object.fromEntries(['accountId','model','status','from','to','beforeId','limit'].map(k=>[k,url.searchParams.get(k)??'']));
+          for(const k of ['from','to'])if(options[k]){const date=new Date(options[k]);if(!Number.isFinite(date.getTime()))throw new AppError('Invalid usage date filter',400,'invalid_date');options[k]=date.toISOString();}
+          const report=service.ledger.usage(options);return json(res,200,{...report,balanceChanges:options.accountId?service.ledger.balanceChanges(options.accountId):[]});
+        }
         if(req.method==='GET'&&url.pathname==='/admin/config')return json(res,200,service.config.value);
         if(req.method==='GET'&&url.pathname==='/admin/models')return json(res,200,await service.router.models());
         if(req.method==='GET'&&url.pathname==='/admin/model-directory')return json(res,200,await modelDirectory(service,{refresh:url.searchParams.get('refresh')==='1'}));
@@ -76,7 +81,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         const timeout=setTimeout(()=>controller.abort(),policy.requestTimeoutMs??180000);
         const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnect);
         try {
-          const stream=service.router.chat(body,controller.signal);
+          const stream=service.router.chat(body,controller.signal,{source:admin?'api':'dsh'});
           if(!body.stream)return json(res,200,await collectChat(stream));
           let first=true;
           for await(const chunk of stream){if(first){first=false;res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});}

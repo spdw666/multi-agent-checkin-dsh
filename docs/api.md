@@ -3,8 +3,10 @@
 
 GET /health；GET /v1/models；POST /v1/chat/completions。
 GET /admin/config、PUT /admin/config（完整配置，无内联凭据）；GET /admin/balances?refresh=1；GET /admin/records。
+GET /admin/usage：模型调用用量与计费明细；支持 accountId/model/status/from/to/limit/beforeId。返回 records/total/nextBeforeId，指定账号时附最近余额变化；调用与领取分开，未返回计费为 null，完整契约见 [调用用量 API](usage.md)。
 POST /admin/claim {} 全部账号，或 {accountId,taskId} 单账号；响应每项有 status/reason/credits，别只按 HTTP200判断领取成功。
-GET /admin/model-directory；POST /admin/model-import {items:[{upstreamId,model,enabled}]}；GET /admin/model-tests；POST /admin/model-tests {scope:"all"|"imported"}。
+GET /admin/model-directory；POST /admin/model-import {items:[{upstreamId,model,enabled}]}；GET /admin/model-tests；POST /admin/model-tests {scope:"all"|"imported"|"retry"}。
+retry 只重测历史未通过项、跳过停用账号与上游并保留有限先前尝试，详见 [定向复测](model-retry.md)。
 scope 默认 all；imported 刷新启用路由目标的目录并执行普通、流式、工具、结果回传测试。返回 202 后轮询 GET，读取 scope/status/completed/total/summary，results 包括保留的历史条目，jobKeys 指明本轮目标。不得将 HTTP202 视为体检成功。不同范围运行时 queuedScope 表示排队，重复同范围复用任务；不改用户路由配置。
 POST /admin/workbuddy/capture {id,label}：读当前客户端账号，返回账号 ID 和本机文件路径，不返回凭据。
 POST /admin/workbuddy/pool {routeId,accountIds:["wb-a","wb-b"],enabled:true,cooldownSeconds:3600}。

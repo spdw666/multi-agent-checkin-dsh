@@ -15,7 +15,7 @@ export async function saveAudit(service,report){
 export async function testModel(service,u,m,{timeoutMs=45000}={}){
  const result={upstreamId:u.id,platform:u.kind,model:m.id,name:m.name,startedAt:new Date().toISOString(),tests:[]};
  if(m.callable===false)return {...result,status:'unavailable',reason:m.unavailableReason};
- const routeId='audit/model',config={value:{...service.config.value,routes:[{id:routeId,targets:[{upstreamId:u.id,model:m.id}]}]}},router=new Router(config,service.platforms);
+ const routeId='audit/model',config={value:{...service.config.value,routes:[{id:routeId,targets:[{upstreamId:u.id,model:m.id}]}]}},router=new Router(config,service.platforms,{ledger:service.ledger});
  const user={role:'user',content:'Reply with only AUDIT_OK.'},tool={type:'function',function:{name:'audit_add',description:'Adds two numbers locally',parameters:{type:'object',properties:{a:{type:'number'},b:{type:'number'}},required:['a','b']}}};
  let toolMessage;
  for(const stage of ['ordinary','stream','tools','roundtrip']){
@@ -25,8 +25,8 @@ export async function testModel(service,u,m,{timeoutMs=45000}={}){
   if(stage==='tools'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3. You must call the tool, not calculate it yourself.'}];request.tools=[tool];request.tool_choice={type:'function',function:{name:'audit_add'}};}
   if(stage==='roundtrip'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3.'},toolMessage,{role:'tool',tool_call_id:toolMessage.tool_calls[0].id,content:'5'},{role:'user',content:'The local tool returned 5. Reply with only 5; do not call another tool.'}];request.tools=[tool];request.tool_choice='none';}
   const start=Date.now();try{
-   let message;if(stage==='stream'){let text='',finished=false,chunks=0;for await(const c of router.chat({...request,stream:true},AbortSignal.timeout(timeoutMs))){text+=c.choices?.map(c=>c.delta?.content??'').join('')??'';finished||=c.choices?.some(c=>c.finish_reason!=null);chunks++;}if(!text.trim()||!finished)throw Error('流式没有完整文本或结束事件');message={content:text};result.tests.push({stage,ok:true,elapsedMs:Date.now()-start,chunks,text:text.slice(0,160)});continue;}
-   const response=await collectChat(router.chat(request,AbortSignal.timeout(timeoutMs)));message=response.choices?.[0]?.message;
+   let message;if(stage==='stream'){let text='',finished=false,chunks=0;for await(const c of router.chat({...request,stream:true},AbortSignal.timeout(timeoutMs),{source:"audit"})){text+=c.choices?.map(c=>c.delta?.content??'').join('')??'';finished||=c.choices?.some(c=>c.finish_reason!=null);chunks++;}if(!text.trim()||!finished)throw Error('流式没有完整文本或结束事件');message={content:text};result.tests.push({stage,ok:true,elapsedMs:Date.now()-start,chunks,text:text.slice(0,160)});continue;}
+   const response=await collectChat(router.chat(request,AbortSignal.timeout(timeoutMs),{source:"audit"}));message=response.choices?.[0]?.message;
    if(stage==='tools'){const call=message?.tool_calls?.[0];if(call?.function?.name!=='audit_add')throw Error('模型未返回约定的结构化工具调用');const args=JSON.parse(call.function.arguments);if(args.a!==2||args.b!==3)throw Error('工具参数与输入不一致');toolMessage=message;}
    else if(!message?.content?.trim())throw Error('模型返回空文本');
    if(stage==='roundtrip'&&!/5/.test(message.content))throw Error('回传结果未得到确认');

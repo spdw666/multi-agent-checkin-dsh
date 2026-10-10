@@ -35,6 +35,7 @@
 - [接入 DSH](#接入-dsh)
 - [OpenAI 兼容调用示例](#openai-兼容调用示例)
 - [管理 API 与自建前端](#管理-api-与自建前端)
+- [调用用量与额度明细](#调用用量与额度明细)
 - [目录与数据文件](#目录与数据文件)
 - [常见问题](#常见问题)
 - [验证与贡献](#验证与贡献)
@@ -68,6 +69,7 @@ AI积分网关是独立桌面应用；本仓库公开其中的后端、CLI 与 D
 | 图片与推理选项 | 根据上游声明映射能力；不统一虚构图片支持或推理强度档位 |
 | 优先级 fallback | 按路由的 `targets` 顺序回退，结合 `fallbackStatuses`；已输出 SSE 后不重放整段请求 |
 | 余额查询 | 单账号查询设截止时间，失败可返回缓存与 `stale` 标记，不把未知余额当作零 |
+| 调用用量明细 | SQLite 持久化实际模型、路由、账号、起止时间、请求及首字耗时、Token 和上游返回的计费值；保留失败、取消及回退尝试 |
 | DSH 插件 | bundle 注册 provider，经独立 Node worker 和随机端口 loopback shim 接入 |
 | 自建前端 | 模型 API 与管理 API 分离，前端可采用 React、Vue、原生桌面或其他方案 |
 
@@ -448,6 +450,7 @@ curl -N http://127.0.0.1:19421/v1/chat/completions \
 | POST | `/admin/claim` | `{}` 检查全部账号；或 `{accountId, taskId}` |
 | GET | `/admin/balances?refresh=1` | 明确刷新余额；查看错误与 `stale` |
 | GET | `/admin/records?limit=100` | 查询领取记录，可加账号 / 平台过滤 |
+| GET | `/admin/usage` | 查询模型调用明细，按账号、实际模型、日期、结果筛选及游标分页 |
 | GET | `/admin/model-directory` | 模型目录、能力、导入与检测状态 |
 | GET / POST | `/admin/model-tests` | 查询 / 开始异步模型体检 |
 | POST | `/admin/model-import` | 导入或停用选中的模型条目 |
@@ -509,6 +512,32 @@ ZCode 目录依据未过期且余量为正的模型权益生成。`zcode_no_acti
 资源包适用模型、单位、状态及到期日以控制台返回为准。GLM 文本/图片输入适配不等于已支持图像生成、视频生成或搜索任务。响应成功也不直接证明某个特定资源包已抵扣，需比较平台账单和余额更新时间。
 
 做 UI 时应保留结果与错误原因：HTTP 200 不等于权益发放成功；每项 `status / reason / credits` 才是结果。请求结束在 `finally` 释放忙碌状态，不让“正在处理”永久占据界面。余额读取失败展示缓存时间与失败原因，不把缺数据显示为零。
+
+## 调用用量与额度明细
+
+模型调用与领取记录分开保存。启用记录功能后，经网关普通、SSE、工具调用入口发出的请求，按实际上游尝试写入 SQLite；模型体检标记为 `audit` 来源，DSH worker 标记为 `dsh`，独立 HTTP 入口标记为 `api`。同一次请求回退到其他账号或模型时，各次尝试共享 `requestId`，但保留各自的实际模型、账号及结果。
+
+记录包含开始与结束时间、路由、实际模型、账号、上游、请求耗时、首字耗时、输入 / 输出 / 总 / 缓存 / 推理 Token，以及上游返回的积分和计费金额。**耗时是模型请求耗时，不是人工会话时长；Token、积分与金额不互相替代。** 未返回的计费字段为 `null`，不补成零或按 Token 猜测积分。
+
+使用本机管理密钥查询，不向终端输出密钥：
+
+```powershell
+$keys = Get-Content ./data/api-keys.json -Raw | ConvertFrom-Json
+$admin = @{ Authorization = "Bearer $($keys.adminKey)" }
+$base = 'http://127.0.0.1:19421'
+$accountId = 'ACCOUNT' # 改为 /admin/config 返回的真实账号 ID
+$report = Invoke-RestMethod "$base/admin/usage?accountId=$([Uri]::EscapeDataString($accountId))&limit=100" -Headers $admin
+$report.records | Select-Object startedAt, finishedAt, model, routeId, accountLabel, status,
+  durationMs, firstTokenMs, promptTokens, completionTokens, totalTokens, credits, cost, costUnit
+```
+
+`model` 筛选实际上游模型 ID，不是对外路由 ID；`from / to` 接受日期时间，`status` 可为 `running / completed / failed / cancelled`。响应的 `total` 是筛选范围的尝试条数，`nextBeforeId` 非空时作为下一页 `beforeId`；不要把尝试条数当成独立请求数。
+
+带 `accountId` 的响应还包含 `balanceChanges`：前次与本次核验时间、余额、单位和变化量。该差额包含窗口内所有消费、领取、套餐到期及客户端活动，**不归因于某一次模型请求**。失败或缓存余额不会制造新的核验差额，不同单位不合计。
+
+此账本仅覆盖功能启用后的网关调用；客户端绕过网关的调用、旧版本未记录的历史不补造。账本不保存提示词、回复正文、工具参数或凭据。已有领取历史保留；记录写入失败不改写聊天结果，后台输出明确的存储错误标记。
+
+本机原生桌面的“额度明细”使用这组数据，提供模型调用、余额变化、额度与套餐三页，以及筛选、分页和已加载明细的 CSV 导出；公开源码分发仍不包含该前端实现。完整字段、分页及计费语义见 [调用用量 API](docs/usage.md)。
 
 ## 目录与数据文件
 
@@ -608,7 +637,7 @@ npm ci
 npm run check
 ```
 
-当前回归集包含 **127 项测试**，覆盖普通 / SSE / 工具调用、工具结果回传、跨进程幂等、账号池、手动切换竞争、临时拒绝恢复、余额查询超时、官方智谱适配、超过 4 MiB 的完整历史、已导入模型限定体检、Trae 真实设备身份选择、未通过项定向复测及 ZCode 权益错误分类。离线回归使用模拟上游，不能由此推断每个真实账号 / 地区 / 模型已经通过。真实验证由部署者用自己的登录态执行并记录。
+当前回归集包含 **137 项测试**，覆盖普通 / SSE / 工具调用、工具结果回传、跨进程幂等、账号池、手动切换竞争、临时拒绝恢复、余额查询超时、官方智谱适配、超过 4 MiB 的完整历史、已导入模型限定体检、Trae 真实设备身份选择、未通过项定向复测、ZCode 权益错误分类，以及调用账本、回退尝试、取消记录、用量缺失、余额差额、分页筛选与管理认证。离线回归使用模拟上游，不能由此推断每个真实账号 / 地区 / 模型已经通过。真实验证由部署者用自己的登录态执行并记录。
 
 反馈问题时提供平台、客户端版本、路由 ID、错误码、普通或流式、工具调用阶段及去除秘密的日志。不要提交 token、Cookie、运行密钥、账号快照或个人数据库。
 
