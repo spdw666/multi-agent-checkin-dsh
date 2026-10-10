@@ -3,9 +3,19 @@ import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {hash, errorView, redact} from './util.mjs';
 export class Ledger {
-  constructor(dir) {
+  constructor(dir,{initializationTimeoutMs=5000}={}) {
+    if(!Number.isInteger(initializationTimeoutMs)||initializationTimeoutMs<0||initializationTimeoutMs>60000)throw new RangeError('initializationTimeoutMs must be an integer between 0 and 60000');
     mkdirSync(dir,{recursive:true,mode:0o700});this.db=new DatabaseSync(join(dir,'gateway.sqlite'));
-    this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
+    const deadline=performance.now()+initializationTimeoutMs;
+    const pause=new Int32Array(new SharedArrayBuffer(4));
+    try {
+      for(;;) {
+        // WAL activation may return SQLITE_BUSY without invoking SQLite's busy handler.
+        // Only idempotent initialization is replayed; never replay remote claims or writes.
+        const remaining=Math.max(0,Math.floor(deadline-performance.now()));
+        this.db.exec(`PRAGMA busy_timeout=${Math.min(100,remaining)}`);
+        try {
+          this.db.exec(`PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS bindings(account_id TEXT PRIMARY KEY, principal_hash TEXT NOT NULL, bound_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS claims(key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL, result TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY, time TEXT NOT NULL, day TEXT NOT NULL, platform TEXT NOT NULL, account_id TEXT NOT NULL, task TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL);
@@ -13,6 +23,18 @@ export class Ledger {
       CREATE TABLE IF NOT EXISTS usage_calls(id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, account_id TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS usage_account_time ON usage_calls(account_id,started_at);
       CREATE TABLE IF NOT EXISTS balance_observations(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL, checked_at TEXT NOT NULL, unit TEXT NOT NULL, value REAL NOT NULL, previous_at TEXT, previous_value REAL);`);
+          break;
+        }catch(e) {
+          const wait=deadline-performance.now();
+          if(e.code!=='ERR_SQLITE_ERROR'||!Number.isInteger(e.errcode)||(e.errcode&255)!==5||wait<=0)throw e;
+          Atomics.wait(pause,0,0,Math.min(10,wait));
+        }
+      }
+      this.db.exec('PRAGMA busy_timeout=5000');
+    }catch(e) {
+      try{this.db.close();}catch{} // Preserve the original SQLite error on constructor failure.
+      throw e;
+    }
   }
   bind(accountId,platform,principal) {
     const fingerprint=hash(platform+'\0'+principal);const prior=this.db.prepare('SELECT principal_hash FROM bindings WHERE account_id=?').get(accountId);
