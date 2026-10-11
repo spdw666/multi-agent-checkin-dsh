@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -190,8 +190,9 @@ test('CodeArts models expose the official catalog with honest capacity and calla
     ]});
   }});
   assert.deepEqual(rows.map(r=>r.id),['GLM-5.2','Qwen3-VL-235B','glm-5.2-sft-harmony']);
+  assert.equal(rows[0].toolRoundtripVerified,true);assert.ok(rows.slice(1).every(r=>r.toolRoundtripVerified===false));
   const glm=rows[0];
-  assert.equal(glm.contextWindow,16384);assert.equal(glm.maxTokens,2048);assert.equal(glm.tools,false);
+  assert.equal(glm.contextWindow,16384);assert.equal(glm.maxTokens,2048);assert.equal(glm.tools,true);assert.deepEqual(glm.toolChoiceModes,["auto","none"]);assert.equal(glm.auditToolChoice,"auto");
   assert.equal(glm.callable,true);assert.equal(glm.callableReason,null);
   assert.equal(glm.enabled,true);assert.equal(glm.verification,'official_catalog');assert.equal(glm.creditRate,0.7);
   assert.equal(rows[1].multimodal,true);assert.equal(rows[1].creditRate,null);assert.equal(rows[2].enabled,false);
@@ -313,7 +314,7 @@ test('CodeArts chat signs the v2 SSE endpoint, keeps securityToken in x-auth-tok
 
   const deterministic=await codeartsProvider.chat(null,CREDENTIAL,{model:'GLM-5.2',messages:[{role:'user',content:'ping'}]},undefined,
     {fetchImpl:async(url,o)=>{seen=[url,o];return new Response('data: [DONE]\n\n')}});
-  assert.equal(deterministic.chatId,chatId,'same messages must keep the same chat_id for prompt-cache affinity');
+  assert.notEqual(deterministic.chatId,chatId,'identical independent requests must not share an upstream session');
 
   await assert.rejects(codeartsProvider.chat(null,CREDENTIAL,{messages:[]},undefined,{fetchImpl:async()=>{throw new Error('unreachable')}}),{code:'codearts_chat_invalid'});
   await assert.rejects(codeartsProvider.chat(null,{}, {model:'GLM-5.2',messages:[]},undefined,{fetchImpl:async()=>{throw new Error('unreachable')}}),{code:'codearts_credential_missing'});
@@ -335,9 +336,105 @@ test('CodeArts response bound, JSON guard, abort and redaction hold with no gene
   assert.equal(codeartsErrorView(Object.assign(new Error(`bad ${ST}`),{code:'codearts_auth_failed',status:401})).message.includes(ST),false);
 });
 
+test('CodeArts tool choice never silently weakens forced modes and none sends no tools',async()=>{
+  const {buildCodeArtsChatBody}=await import('../src/provider-codearts.mjs');
+  const tools=[{type:'function',function:{name:'read_fixture',parameters:{type:'object',properties:{}}}}];
+  const input={messages:[{role:'user',content:'test'}],tools};
+  const auto=buildCodeArtsChatBody({...input,tool_choice:'auto'},'GLM-5.2','fixture');
+  assert.deepEqual(auto.tools,tools);assert.equal(auto.tool_choice,'auto');
+  const none=buildCodeArtsChatBody({...input,tool_choice:'none'},'GLM-5.2','fixture');
+  assert.equal('tools' in none,false);assert.equal('tool_choice' in none,false);
+  for(const choice of ['required',{type:'function',function:{name:'read_fixture'}},'unknown'])
+    assert.throws(()=>buildCodeArtsChatBody({...input,tool_choice:choice},'GLM-5.2','fixture'),{code:'codearts_tool_choice_unsupported'});
+  assert.deepEqual(buildCodeArtsChatBody({...input,tool_choice:null},'GLM-5.2','fixture').tools,tools);
+});
+
+test('CodeArts refresh uses exact official STS, PKCE and ES256 DPoP without secret diagnostics or retries',async()=>{
+  const {generateKeyPairSync,verify}=await import('node:crypto');
+  const {refreshCodeArtsAuth,CODEARTS_TOKEN_URL}=await import('../src/provider-codearts.mjs');
+  const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'P-256'});
+  const auth={account:{id:'fixture'},refresh_token:'fixture-refresh',loginContext:{pkcePair:{codeVerifier:'fixture-verifier'},dpopKeyPair:{privateKeyJwk:privateKey.export({format:'jwk'}),publicKeyJwk:publicKey.export({format:'jwk'})}}};
+  let calls=0;
+  const refreshed=await refreshCodeArtsAuth(auth,{now:100000,fetchImpl:async(url,o)=>{
+    calls++;assert.equal(url,CODEARTS_TOKEN_URL);assert.equal(o.redirect,'error');
+    const body=new URLSearchParams(o.body);assert.equal(body.get('client_id'),'codearts-agent');assert.equal(body.get('refresh_token'),'fixture-refresh');assert.equal(body.get('code_verifier'),'fixture-verifier');
+    const [h,p,s]=o.headers.DPoP.split('.');const header=JSON.parse(Buffer.from(h,'base64url'));const payload=JSON.parse(Buffer.from(p,'base64url'));
+    assert.equal(header.alg,'ES256');assert.equal('d' in header.jwk,false);assert.equal(payload.htu,CODEARTS_TOKEN_URL);assert.equal(payload.htm,'POST');assert.equal(payload.iat,100);
+    assert.equal(verify('sha256',Buffer.from(h+'.'+p),{key:publicKey,dsaEncoding:'ieee-p1363'},Buffer.from(s,'base64url')),true);
+    return Response.json({credentials:{access_key_id:'fixture-ak',secret_access_key:'fixture-sk',security_token:'fixture-token',expiration:new Date(200000).toISOString()},refresh_token:'fixture-next'});
+  }});
+  assert.equal(calls,1);assert.equal(refreshed.refresh_token,'fixture-next');assert.equal(auth.refresh_token,'fixture-refresh');
+  calls=0;const error=await refreshCodeArtsAuth(auth,{fetchImpl:async()=>{calls++;return Response.json({error_code:'STS5.1806',error_msg:'fixture-refresh'},{status:400})}}).catch(e=>e);
+  assert.equal(calls,1);assert.equal(error.code,'codearts_refresh_failed');assert.equal(error.upstreamCode,'STS5.1806');assert.equal(error.message.includes('fixture-refresh'),false);
+});
+
+test('CodeArts error codes distinguish IAM from concurrency and retain response size limits',async()=>{
+  const input={model:'GLM-5.2',messages:[{role:'user',content:'test'}]};
+  for(const [status,upstreamCode,retryable] of [[401,'APIG.0301',false],[400,'TM.00001041',true],[400,'OTHER',false],[401,'TM.00001041',false],[403,'TM.00001041',false],[500,'TM.00001041',false]]){
+    const e=await codeartsProvider.chat(null,CREDENTIAL,input,undefined,{fetchImpl:async()=>Response.json({error_code:upstreamCode,error_msg:'diagnostic'},{status})}).catch(e=>e);
+    assert.equal(e.upstreamCode,upstreamCode);assert.equal(e.retryable,retryable);
+    assert.equal(e.status,retryable?429:status);assert.equal(e.upstreamStatus,status);
+    assert.equal(e.message,`CodeArts 聊天接口 HTTP ${status} (${upstreamCode})`);
+  }
+  await assert.rejects(codeartsProvider.chat(null,CREDENTIAL,input,undefined,{fetchImpl:async()=>new Response('x'.repeat(1048577),{status:500})}),{code:'codearts_response_too_large'});
+});
+
+test('CodeArts private refresh cache is source-bound, single-flight, non-replaying and leaves the source untouched',async()=>{
+ const {generateKeyPairSync}=await import('node:crypto');const {resolveCodeArtsCredential}=await import('../src/provider-codearts.mjs');
+ const f=await fixture();const key='secret://'+JSON.stringify({extensionId:'huaweicloud.authentication',key:'HuaweiCloudSession'});
+ const writeSource=value=>{const db=new DatabaseSync(f.file);try{db.prepare('insert or replace into ItemTable values (?,?)').run(key,value)}finally{db.close()}};
+ const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'P-256'});
+ const auth={accessKey:AK,secretKey:SK,securitytoken:ST,expires_at:new Date(1).toISOString(),refresh_token:'fixture-original',loginContext:{pkcePair:{codeVerifier:'fixture-verifier'},dpopKeyPair:{privateKeyJwk:privateKey.export({format:'jwk'}),publicKeyJwk:publicKey.export({format:'jwk'})}}};
+ try{
+  writeSource('source-A');const before=await readFile(f.file);let calls=0;
+  const options={cacheFile:join(f.file+'-cache.json'),now:100000,decryptAuthImpl:async()=>auth,fetchImpl:async()=>{calls++;return Response.json({credentials:{access_key_id:'new-ak',secret_access_key:'new-sk',security_token:'new-st',expiration:new Date(300000).toISOString()},refresh_token:'next-refresh'})}};
+  const account={credentials:{file:f.file}};
+  const [a,b]=await Promise.all([resolveCodeArtsCredential(account,{},options),resolveCodeArtsCredential(account,{},options)]);
+  assert.equal(calls,1);assert.equal(a.accessKey,'new-ak');assert.equal(b.accessKey,'new-ak');assert.deepEqual(await readFile(f.file),before);
+  await resolveCodeArtsCredential(account,{},options);assert.equal(calls,1);
+  const failed={...options,now:400000,fetchImpl:async()=>{calls++;return Response.json({error_code:'STS5.1806'},{status:400})}};
+  await assert.rejects(resolveCodeArtsCredential(account,{},failed),{code:'codearts_refresh_failed'});
+  await assert.rejects(resolveCodeArtsCredential(account,{},failed),{code:'codearts_refresh_needs_login'});assert.equal(calls,2);
+  writeSource('source-B');const changed=await resolveCodeArtsCredential(account,{}, {...options,decryptAuthImpl:async()=>({...auth,accessKey:'source-B-ak',expires_at:new Date(900000).toISOString()})});
+  assert.equal(changed.accessKey,'source-B-ak');assert.equal(calls,2);
+ }finally{await f.cleanup();}
+});
+
+test('CodeArts tool result reuses its native chat ID but identical independent greetings stay isolated',async()=>{
+ const {codeartsChatId}=await import('../src/provider-codearts.mjs');
+ const input={model:'GLM-5.2',messages:[{role:'user',content:'same greeting'}]};
+ const c={...CREDENTIAL,principal:'session-fixture'};
+ assert.notEqual(codeartsChatId(input,c,input.model),codeartsChatId(input,c,input.model));
+ assert.equal(codeartsChatId({...input,sessionId:'explicit'},c,input.model),codeartsChatId({...input,sessionId:'explicit',messages:[{role:'user',content:'next'}]},c,input.model));
+ for(const stream of [false,true]){
+  const callId='tool-session-'+stream;const first=await codeartsProvider.chat(null,c,{...input,stream},undefined,{fetchImpl:async()=>new Response('data: '+JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:callId,type:'function',function:{name:'read_fixture',arguments:'{}'}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n')});
+  await first.response.text();
+  const follow={...input,messages:[...input.messages,{role:'tool',tool_call_id:callId,content:'result'}]};
+  assert.equal(codeartsChatId(follow,c,input.model),first.chatId);
+  assert.notEqual(codeartsChatId(follow,{...c,principal:'other-account'},input.model),first.chatId);
+ }
+});
+
 test('CodeArts campaigns list is read-only and the provider object matches the integration contract',async()=>{
   const {items,ended}=await codeartsCampaigns(CREDENTIAL,{fetchImpl:async()=>Response.json({code:0,message:'ok',data:{items:[{campaignId:1},{campaignId:3}],endedCampaigns:[]}})});
   assert.deepEqual(items.map(i=>i.campaignId),[1,3]);assert.equal(ended,0);
   for(const key of ['resolve','models','health','status','claim','chat'])assert.equal(typeof codeartsProvider[key],'function',key);
   assert.equal(Object.isFrozen(codeartsDescriptor),true);
+});
+
+test('CodeArts lock recheck uses another process rotation or failure without replaying old tokens',async()=>{
+ const fs=await import('node:fs/promises');const {syncBuiltinESMExports}=await import('node:module');const {generateKeyPairSync,createHash}=await import('node:crypto');const {resolveCodeArtsCredential}=await import('../src/provider-codearts.mjs');
+ const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'P-256'});
+ for(const mode of ['fresh','failed','expired']){
+  const f=await fixture(),now=100000,cacheFile=f.file+'.race-cache';let calls=0,injected=0;
+  const key='secret://'+JSON.stringify({extensionId:'huaweicloud.authentication',key:'HuaweiCloudSession'});const db=new DatabaseSync(f.file);db.prepare('insert or replace into ItemTable values (?,?)').run(key,'race-source');db.close();
+  const original=await readFile(f.file);const auth={accessKey:AK,secretKey:SK,securitytoken:ST,expires_at:new Date(1).toISOString(),refresh_token:'old-refresh',loginContext:{pkcePair:{codeVerifier:'fixture-verifier'},dpopKeyPair:{privateKeyJwk:privateKey.export({format:'jwk'}),publicKeyJwk:publicKey.export({format:'jwk'})}}};
+  const latest={sourceHash:createHash('sha256').update('race-source').digest('hex'),auth:{...auth,accessKey:'latest-ak',refresh_token:'latest-refresh',expires_at:new Date(mode==='fresh'?now+3600000:1).toISOString()},...(mode==='failed'?{refreshFailure:'already-attempted'}:{})};
+  const originalOpen=fs.default.open;fs.default.open=async(path,...args)=>{const lock=await originalOpen(path,...args);if(path===cacheFile+'.lock'){injected++;await fs.writeFile(cacheFile,JSON.stringify(latest));}return lock;};syncBuiltinESMExports();
+  try{
+   const request=resolveCodeArtsCredential({credentials:{file:f.file}},{},{now,cacheFile,decryptAuthImpl:async()=>auth,fetchImpl:async(_url,options)=>{calls++;assert.equal(new URLSearchParams(options.body).get('refresh_token'),'latest-refresh');return Response.json({credentials:{access_key_id:'renewed-ak',secret_access_key:'renewed-sk',security_token:'renewed-st',expiration:new Date(now+3600000).toISOString()},refresh_token:'next-refresh'})}});
+   if(mode==='failed')await assert.rejects(request,{code:'codearts_refresh_needs_login'});else assert.equal((await request).accessKey,mode==='fresh'?'latest-ak':'renewed-ak');
+   assert.equal(injected,1);assert.equal(calls,mode==='expired'?1:0);assert.deepEqual(await readFile(f.file),original);
+  }finally{fs.default.open=originalOpen;syncBuiltinESMExports();await f.cleanup();}
+ }
 });

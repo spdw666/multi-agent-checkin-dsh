@@ -107,3 +107,13 @@ node --test tests/nvidia.test.mjs tests/nvidia-catalog.test.mjs tests/nvidia-str
 
 ## Kimi K3 thinking and audit
 Official inference reference https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-infer documents low/high/max reasoning, upstream default max, and preserved assistant reasoning_content. The adapter forwards documented efforts and preserves full assistant messages; normal user calls keep the upstream default. Four-phase availability audits explicitly select low (reported in the audit record), separately from user settings. Audit scheduling serializes the same NVIDIA account to avoid queue waits exhausting inference deadlines.
+
+## Bounded slow-start handling
+
+Kimi K3 and DeepSeek V4.1 Flash have model-specific 600-second response-start and audit-stage budgets; other NVIDIA inference retains 180 seconds at transport and 120 seconds in an audit. Once an upstream response starts, a 180-second stream-idle limit still applies. Caller cancellation settles immediately even when proxy CONNECT is pending. Deadline expiration is HTTP 504 nvidia_timeout, distinct from HTTP 499 request_cancelled. A longer bounded wait handles observed slow startup; it is not a promise of availability or a quota increase. Official model semantics: https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-infer and https://docs.api.nvidia.com/nim/reference/nvidia-deepseek-v4_1-flash-infer .
+
+DeepSeek agent-sized tool payloads also exhausted the former 180-second response-start timer. Their schemas, messages and reasoning defaults are retained, not simplified to get a green result. A longer bounded allowance is a compatibility setting, not proof that every request will succeed.
+
+### Public HTTP deadline
+
+The gateway HTTP ceiling is independent from upstream and DSH timers. Keep the existing general server.requestTimeoutMs; configure server.modelRequestTimeouts with the two published NVIDIA route IDs and 600000 ms each. This exact-route override is bounded to 1000..1200000 ms, follows live configuration, and preserves cancellation. Without it, a 180-second HTTP ceiling cancels a slow request even when the transport allows 600 seconds. The deadline abort reason is TimeoutError, not a user cancellation.

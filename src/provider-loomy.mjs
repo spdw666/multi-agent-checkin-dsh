@@ -1,33 +1,19 @@
-import {desktopSseResponse} from './provider-sse.mjs';
-// provider-loomy.mjs — Loomy (讯飞) provider adapter, unified-contract edition. NOT Loom/openloomi.
-// Evidence (read-only; local install D:/Loomy + app.asar.unpacked source):
-//  - electron/auth/auth-session-runtime.js: electron-store `name:'auth-session'`, cwd = userDataPath,
-//    fields {session, userid, phone, updatedAt}; session runtime reads it on app start; login controller
-//    writes it via update(session, userid, phone).
-//  - electron/config-path.js: on win32 the userData path is
-//      C:\Users\Public\Loomy\<sha256(username)[0:12]>\userData   (NOT %APPDATA%/Loomy)
-//    → the auth-session file is <that>/auth-session.json. This is the REAL user session store.
-//  - electron/points-service.js endpoints (token header, envelope {code:'000000'|desc|data}):
-//      GET  /api/v1/user/identity, /api/v1/user/team-assets
-//      GET  /api/v1/pet-work              (daily pet-work snapshot — 宠物打工)
-//      POST /api/v1/pet-work/rewards      (body: businessDate/configVersion/reachedTierId ONLY)
-//      POST /api/v1/points/first-login    (one-time), POST /api/v1/points/activation
-//      GET  /api/v1/points/records, /api/v2/points/records, /api/v1/team-points/balance
-//      POST /api/v1/points/redemption-codes/redeem
-//    Live probe 2026-10-11: the local session file exists (session/userid present) but the server
-//    answered `{"code":"100002","desc":"登录已失效"}` on every read — a STALE session. This module
-//    reports that honestly; it never fabricates a login and never treats .env.prod as a session.
-//  - opencode provider "imodel": @ai-sdk/openai-compatible, baseURL <origin>/loomy/integration/api/v1,
-//    useSessionAuth — the app-runtime chat path. NOT live-verified here (stale session); the chat
-//    surface is implemented conservatively and marked unverified_live.
+import {desktopSseResponse,desktopCompletionLimit} from './provider-sse.mjs';
+// Loomy (iFlytek) production native-session adapter.
+// Actual current-user auth-session works at https://loomyad.xunfei.cn/api/v1.
+// Historical ossptest.voicecloud.cn responses were from the wrong environment;
+// their 100002 response did not prove that the production account session had expired.
+// Official production catalog, personal points and chat/tool roundtrip verified.
+// References: Patrick130306/loomy2api (MIT) and shipped official electron source.
 import {AppError, redact, hash, rememberSecret, dayIn} from './util.mjs';
 import {readFile, readdir} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {join} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {userInfo,homedir} from 'node:os';
 
-export const LOOMY_POINTS_ORIGIN = 'https://ossptest.voicecloud.cn';
-export const LOOMY_API_PREFIX = '/loomy/integration/';
+export const LOOMY_POINTS_ORIGIN = 'https://loomyad.xunfei.cn';
+export const LOOMY_API_PREFIX = '/api/';
 export const LOOMY_SUCCESS_CODES = ['000000', 0];
 const JSON_LIMIT = 1024 * 1024;
 const SSE_LIMIT = 8 * 1024 * 1024;
@@ -41,7 +27,7 @@ export const descriptor = Object.freeze({
   checkinKind: 'pet_work',
   checkinTasks: ['pet-work', 'daily-checkin'],
   claimSupported: true, // guarded: submits only official preconditions and re-verifies the snapshot
-  underlyingProvider: 'xfyun imodel gateway via voicecloud.cn integration proxy (openai-compatible, session-auth)',
+  underlyingProvider: 'xfyun imodel production gateway (openai-compatible, session-auth)',
   billing: 'official_points',
   byok: false,
   origin: LOOMY_POINTS_ORIGIN,
@@ -58,10 +44,9 @@ export async function findLoomyAuthSessionFiles({root = 'C:/Users/Public/Loomy'}
   if (process.env.LOOMY_AUTH_SESSION_FILE) found.push(process.env.LOOMY_AUTH_SESSION_FILE.replace(/\\/g, '/'));
   if (process.platform === 'win32' || process.env.LOOMY_SCAN_PUBLIC === '1') {
     try {
-      for (const dir of await readdir(root)) {
-        const candidate = `${root}/${dir}/userData/auth-session.json`;
-        if (existsSync(candidate)) found.push(candidate);
-      }
+      const dir=createHash('sha256').update(userInfo().username).digest('hex').slice(0,12);
+      const candidate=join(root,dir,'userData','auth-session.json');
+      if(existsSync(candidate))found.push(candidate);
     } catch { /* root missing: fall through */ }
   }
   const appData = (process.env.APPDATA ?? '').replace(/\\/g, '/');
@@ -177,7 +162,9 @@ export async function loomyFetch(fetchImpl, path, {method = 'GET', token, body, 
   if (typeof fetchImpl !== 'function') throw new AppError('Loomy 网络请求需要显式注入 fetchImpl', 400, 'loomy_fetch_not_injected');
   if (token) rememberSecret(token);
   const headers = {accept: 'application/json'};
-  if (token) headers.token = token;
+  if (token) {headers.token=token;headers.authorization='Bearer '+token;}
+  headers['traceparent']='00-'+randomUUID().replaceAll('-','')+'-'+randomUUID().replaceAll('-','').slice(0,16)+'-01';
+  headers['loomy-version']='0.9.38';
   if (body !== undefined) headers['content-type'] = 'application/json';
   const activeSignal = signal ?? AbortSignal.timeout(timeoutMs);
   try {
@@ -231,7 +218,7 @@ export async function loomyRequest(secret, {method = 'GET', path, query, body, f
 
 /** Identity check. Presence booleans only — no names/ids are surfaced. */
 export async function loomyIdentity(secret, options = {}) {
-  const data = await loomyRequest(secret, {path: '/loomy/integration/api/v1/user/identity', ...options});
+  const data = await loomyRequest(secret, {path: '/api/v1/user/identity', ...options});
   const d = data?.data ?? {};
   return {present: Object.keys(d).length > 0 || data?.code === '000000', fieldNames: Object.keys(d).slice(0, 20)};
 }
@@ -241,22 +228,27 @@ export async function loomyIdentity(secret, options = {}) {
  * never guessed. `keys` carries the top-level names for diagnostics.
  */
 export async function loomyPetWork(secret, options = {}) {
-  const data = await loomyRequest(secret, {path: '/loomy/integration/api/v1/pet-work', ...options});
+  const data = await loomyRequest(secret, {path: '/api/v1/pet-work', ...options});
   const d = data?.data ?? {};
   const claimMarkers = ['claimedToday', 'todayRewardClaimed', 'rewarded', 'claimed'].filter(k => typeof d?.[k] === 'boolean');
   const claimed = claimMarkers.length ? claimMarkers.some(k => d[k] === true) : null;
-  const tiers = Array.isArray(d?.tiers) ? d.tiers.slice(0, 50).map(t => ({
+  const native=d.status&&typeof d.status==='object'?d.status:null;
+  const tierData=d.tiers??d.config?.tiers;
+  const tiers = Array.isArray(tierData) ? tierData.slice(0, 50).map(t => ({
     id: typeof t?.id === 'string' || typeof t?.id === 'number' ? t.id : (typeof t?.tierId === 'string' || typeof t?.tierId === 'number' ? t.tierId : null),
     label: typeof t?.label === 'string' ? redact(t.label).slice(0, 60) : (typeof t?.name === 'string' ? redact(t.name).slice(0, 60) : null),
     points: Number.isFinite(t?.points) ? t.points : null,
   })) : [];
   return {
     businessDate: typeof d?.businessDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.businessDate) ? d.businessDate : null,
-    configVersion: typeof d?.configVersion === 'string' || Number.isFinite(d?.configVersion) ? d.configVersion : null,
+    earnedPointsToday:Number.isFinite(native?.earnedPointsToday)?native.earnedPointsToday:null,
+    rewardedTierIds:Array.isArray(native?.rewardedTierIds)?native.rewardedTierIds.filter(x=>typeof x==='string'):null,
+    nativeStatusKnown:!!native,
+    configVersion: typeof d?.configVersion === 'string' || Number.isFinite(d?.configVersion) ? d.configVersion : (d.config?.version??null),
     reachedTierId: typeof d?.reachedTierId === 'string' || Number.isFinite(d?.reachedTierId) ? d.reachedTierId : null,
     tiers,
     claimMarkers,
-    claimed,
+    claimed:claimed??(Array.isArray(native?.rewardedTierIds)?native.rewardedTierIds.length>0:null),
     balanceCandidate: Number.isFinite(d?.currentBalance) ? d.currentBalance : (Number.isFinite(d?.balance) ? d.balance : null),
     keys: Object.keys(d ?? {}).slice(0, 30),
   };
@@ -265,7 +257,7 @@ export async function loomyPetWork(secret, options = {}) {
 /** Records read (read-only). Kept as a helper; balance is NOT derived from records. */
 export async function loomyPointsRecords(secret, {version = 1, query = {}, ...options} = {}) {
   const v = version === 2 ? 'v2' : 'v1';
-  const data = await loomyRequest(secret, {path: `/loomy/integration/api/${v}/points/records`, query, ...options});
+  const data = await loomyRequest(secret, {path: `/api/${v}/points/records`, query, ...options});
   return data;
 }
 
@@ -276,13 +268,26 @@ function normalizeTask(task) {
   throw new AppError('Loomy 任务未登记', 400, 'loomy_task_unknown');
 }
 
+// Tri-state reward eligibility: null is an incomplete/failed snapshot, never a claim invitation.
+function petWorkClaimable(snapshot) {
+  if (!snapshot) return null;
+  if (snapshot.claimed === true) return false;
+  const progressKnown = snapshot.claimed === false || Number.isFinite(snapshot.earnedPointsToday) || Array.isArray(snapshot.rewardedTierIds);
+  if (!progressKnown) return null;
+  if (snapshot.reachedTierId === null) return false;
+  return snapshot.claimed === false && snapshot.businessDate !== null && snapshot.configVersion !== null ? true : null;
+}
 /** Contract `status`: real snapshot state; claimable only on an explicit server-side marker. */
 export async function loomyStatus(secret, task = 'pet-work', options = {}) {
+  if(task==='daily-quota'){const balance=await loomyPointBalance(secret,options);return {known:true,observed:true,task,claimed:null,claimable:false,reason:'server_auto_daily_quota',day:dayIn(new Date(),'Asia/Shanghai'),details:balance};}
   normalizeTask(task);
   const snapshot = await loomyPetWork(secret, options);
-  const claimable = snapshot.claimed === false && snapshot.reachedTierId !== null && snapshot.businessDate !== null && snapshot.configVersion !== null;
+  const claimable = petWorkClaimable(snapshot) === true;
   return {
     known: true,
+    observed:snapshot.nativeStatusKnown&&snapshot.reachedTierId===null,
+    reason:snapshot.nativeStatusKnown&&snapshot.reachedTierId===null?'pet_work_progress_observed':undefined,
+    details:{earnedPointsToday:snapshot.earnedPointsToday,rewardedTierIds:snapshot.rewardedTierIds,source:'/api/v1/pet-work'},
     task: 'pet-work',
     businessDate: snapshot.businessDate,
     configVersion: snapshot.configVersion,
@@ -303,6 +308,7 @@ export async function loomyStatus(secret, task = 'pet-work', options = {}) {
  * is never converted into a success claim.
  */
 export async function loomyClaim(secret, task = 'pet-work', options = {}) {
+  if(task==='daily-quota')return {observed:true,claimed:false,submitted:false,reason:'server_auto_daily_quota',note:'自动额度仅核验，本次没有领取请求。'};
   normalizeTask(task);
   const before = await loomyStatus(secret, task, options);
   if (before.claimed === true) return {...before, submitted: false, alreadyClaimed: true};
@@ -316,7 +322,7 @@ export async function loomyClaim(secret, task = 'pet-work', options = {}) {
   const body = {businessDate, configVersion, reachedTierId}; // exactly the three official fields
   let failure = null;
   try {
-    await loomyRequest(secret, {path: '/loomy/integration/api/v1/pet-work/rewards', method: 'POST', body, ...options});
+    await loomyRequest(secret, {path: '/api/v1/pet-work/rewards', method: 'POST', body, ...options});
   } catch (error) {
     failure = {code: error.code ?? 'loomy_claim_error', status: error.status ?? 502, message: redact(error.message ?? '').slice(0, 200)};
   }
@@ -343,7 +349,7 @@ function errorView(error) {
  */
 export async function loomyHealth(secret, options = {}) {
   const base = {
-    balance: {value: null, unit: 'points', parts: [], note: '官方未提供个人余额只读端点（个人侧余额未证实；团队 balance 端点不等价）', checkedIn: null},
+    balance: {value: null, unit: 'points', parts: [], note: '个人积分待官方接口返回；不使用团队余额替代', checkedIn: null},
     capabilities: {checkin: true, inference: false},
   };
   if (!secret?.accessToken) {
@@ -365,48 +371,60 @@ export async function loomyHealth(secret, options = {}) {
     base.balance.parts = [{kind: 'snapshot', label: 'pet-work 快照余额', value: pet.balanceCandidate}];
     base.balance.note = '来自官方 pet-work 快照的余额字段';
   }
+  let quota=null,quotaError=null,models=[],modelsError=null;
+  try{quota=await loomyPointBalance(secret,options);base.balance={...quota,checkedIn:pet?.claimed??null};}catch(error){quotaError=errorView(error);}
+  try{models=await loomyModels(secret,options);}catch(error){modelsError=errorView(error);}
+  base.capabilities.inference=models.some(m=>m.category==='chat');
   return {
     ...base,
-    status,
+    models,modelCount:models.length,
+    ...(quotaError?{balanceError:quotaError}:{}),...(modelsError?{modelsError}:{}),
+    status:quota?'authenticated':status,
     credential: loomyCredentialView(secret),
-    checkin: {supported: true, kind: 'pet_work', known: pet !== null, claimed: pet?.claimed ?? null, businessDate: pet?.businessDate ?? null, ...(petError ? {error: petError} : {})},
+    checkin: {supported: true, kind: 'pet_work', known: pet !== null, claimable: petWorkClaimable(pet), claimed: pet?.claimed ?? null, businessDate: pet?.businessDate ?? null, ...(petError ? {error: petError} : {})},
     services: {identity: identity ? 'ok' : identityError?.code ?? null, petWork: pet ? 'ok' : petError?.code ?? null},
     errors: rejected.length ? {identity: identityError, petWork: petError} : null,
-    note: expired ? '本地 auth-session 会话已被服务端拒绝（100002 登录已失效）；请在 Loomy 客户端重新登录' : undefined,
+    note: expired&&!quota ? '本地 auth-session 会话已被服务端拒绝（100002 登录已失效）；请在 Loomy 客户端重新登录' : undefined,
   };
 }
 
 // ------------------------------------------------------------------ models
 
-/** Catalog from official app-runtime model families. Capacity unverified → null, callable:false. */
-export function loomyModels() { return []; } // No verified model IDs: branding families are not API model IDs.
+/** Read official production catalog; missing credentials never invent model IDs. */
+export function loomyModels(secret,options={}) {if(!secret?.accessToken)return [];return loomyServerModels(secret,options);}
+export async function loomyServerModels(secret,options={}){
+ const payload=await loomyRequest(secret,{path:'/api/v1/models',...options});const rows=Array.isArray(payload?.data)?payload.data:[];
+ return rows.filter(m=>typeof m.id==='string').map(m=>({id:m.id,name:m.name??m.id,category:m.type??'chat',protocol:m.protocol??null,contextWindow:Number.isSafeInteger(m.context_length)?m.context_length:null,maxTokens:Number.isSafeInteger(m.max_output_tokens)?m.max_output_tokens:null,officialMaxTokens:Number.isSafeInteger(m.max_output_tokens)?m.max_output_tokens:null,maxTokensSource:'official_catalog',tools:typeof m.capabilities?.function_calling==='boolean'?m.capabilities.function_calling:null,multimodal:typeof m.capabilities?.vision==='boolean'?m.capabilities.vision:null,reasoning:{supportedEfforts:Array.isArray(m.reasoning_efforts)?m.reasoning_efforts:[],defaultEffort:m.default_reasoning_effort??null},source:'official_model_catalog',callable:(m.type??'chat')==='chat',publishable:(m.type??'chat')==='chat'}));
+}
+export async function loomyPointBalance(secret,options={}){
+ const result=await loomyPointsRecords(secret,{query:{record_type:'all',page_no:1,page_size:1},...options});const d=result.data??{};
+ return {value:Number.isFinite(d.availableBalance)?d.availableBalance:null,unit:'积分',parts:[{name:'长期积分',value:Number.isFinite(d.balance)?d.balance:null,unit:'积分'},{name:'每日积分',value:Number.isFinite(d.dailyBalance)?d.dailyBalance:null,unit:'积分'}],note:'官方个人积分账户；可用总额来自 availableBalance，每日积分与宠物奖励分开。'};
+}
 
 // ------------------------------------------------------------------ chat
 
-/**
- * App-runtime chat path (openai-compatible via voicecloud integration proxy with the session token).
- * NOT live-verified (the local session is stale): implemented conservatively; a JSON envelope error
- * becomes an AppError, an SSE body is passed through with bounds, and the live status is documented
- * as unverified_live. Only servers whose response is OpenAI-shaped are accepted.
- */
+/** Production session-auth chat. Validate official model metadata, preserve tools,
+ * normalize true SSE and fail closed on upstream business errors. */
 export async function loomyChat(upstream, secret, input, signal, options = {}) {
   if(!secret?.accessToken) throw new AppError('登录凭据未就绪',401,'loomy_credential_missing');
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') throw new AppError('Loomy 网络请求需要显式注入 fetchImpl', 400, 'loomy_fetch_not_injected');
   const model = typeof input?.model === 'string' && input.model ? input.model : null;
   if (!model) throw new AppError('Loomy 聊天请求缺少 model', 400, 'loomy_chat_invalid');
-  const body = {...input, model, stream: input?.stream !== false ? true : false};
-  const response = await loomyFetch(fetchImpl, '/loomy/integration/api/v1/chat/completions', {method: 'POST', token: secret?.accessToken, body, timeoutMs: options.timeoutMs ?? 300000, signal});
+  const catalog=await loomyModels(secret,{...options,signal});const metadata=catalog.find(m=>m.id===model&&m.category==='chat');if(!metadata)throw new AppError('模型不在 Loomy 官方聊天目录',400,'loomy_model_unknown');
+  const body={};for(const key of ['messages','tools','tool_choice','parallel_tool_calls','temperature','top_p','stop','response_format','reasoning_effort'])if(input[key]!==undefined&&input[key]!==null)body[key]=input[key];body.model=model;body.max_tokens=desktopCompletionLimit(input,metadata.maxTokens??4096);body.stream=true;
+  const response = await loomyFetch(fetchImpl, '/api/v1/chat/completions', {method: 'POST', token: secret?.accessToken, body, timeoutMs: options.timeoutMs ?? 300000, signal});
   if (!response.ok) {
     await response.body?.cancel().catch(() => {});
     throw new AppError(`Loomy 聊天接口 HTTP ${response.status}`, response.status, response.status === 401 || response.status === 403 ? 'loomy_auth_failed' : 'loomy_chat_rejected');
   }
   const ctype = response.headers?.get?.('content-type') ?? '';
-  if (ctype.includes('text/event-stream')) return {response: await desktopSseResponse(response,{stream:input.stream===true,model,signal,prefix:'loomy'}), model, verified:'unverified_live'};
+  if (ctype.includes('text/event-stream')) return {response: await desktopSseResponse(transformLoomySse(response.body,signal),{stream:input.stream===true,model,signal,prefix:'loomy'}), model, verified:'official_production_protocol'};
   // Non-SSE: the JSON envelope must be checked for business errors before it is returned.
   const data = await boundedJson(response);
   unwrap(data);
-  return {response: new Response(JSON.stringify(data), {status: 200, headers: {'content-type': 'application/json'}}), model, verified: 'unverified_live'};
+  if(!Array.isArray(data?.choices))throw new AppError('Loomy 聊天响应缺少 choices',502,'loomy_chat_schema');
+  return {response: new Response(JSON.stringify(data), {status: 200, headers: {'content-type': 'application/json'}}), model, verified: 'official_production_protocol'};
 }
 
 export function transformLoomySse(body, signal, limits = {}) {

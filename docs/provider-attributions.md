@@ -14,3 +14,11 @@
 - CodeArts官方签名规范 https://support.huaweicloud.com/devg-apisign/api-sign-algorithm-002.html 。
 
 以上commit为本轮锁定的公开HEAD；最终发布前保留完整许可证，不将私有账号数据与凭据包含在vendor或文档中。
+
+## Loomy 与小浣熊生产接口校正
+
+- https://github.com/xxhhlk/raccoon2api/tree/ec98df33de9decae3b2e1ea683df1a67196f4fbe — MIT，完整许可证保留 `vendor/raccoon2api/LICENSE`。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
+- https://github.com/Patrick130306/loomy2api/tree/cf8608d9765b417374dce282c7e53d7932c02d39 — MIT，完整许可证保留 `vendor/loomy2api/LICENSE`。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
+- https://github.com/rockswang/wild-work/tree/fc62c2c947c1382482973089f05e6c7c1554f6d9 — README 声明 MIT，但该提交没有独立 LICENSE 文件；仅作为协议交叉参考，未复制其代码。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
+
+Loomy 旧测试环境的登录失效结论已纠正；小浣熊 Electron Cookie 为空不代表原生 Bearer 会话缺失。公开产物不含本机登录、设备标识或账户具体积分。

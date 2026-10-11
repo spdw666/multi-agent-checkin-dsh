@@ -1,0 +1,14 @@
+// Product-level DSH request defaults; never rewrite caller messages or tools.
+export function gatewayRequestPolicy(runtime={},models=[]){
+  const max=runtime.maxOutputTokens;
+  if(max!==undefined&&(!Number.isSafeInteger(max)||max<1))throw new TypeError('runtime.maxOutputTokens must be a positive safe integer');
+  const configuredMaxTokens=new Map();let streamIdleTimeoutMs=180000;
+  for(const m of models){
+    if(max!==undefined&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0)configuredMaxTokens.set(m.id,Math.min(max,m.maxTokens));
+    const declared=m.requestTimeoutMs;
+    const knownKimi=m.id==='moonshotai/kimi-k3'||/^nvidia[^/]*\/(?:moonshotai\/)?kimi-k3$/.test(m.id);
+    const requested=Number.isSafeInteger(declared)&&declared>0?declared:knownKimi?600000:180000;
+    streamIdleTimeoutMs=Math.max(streamIdleTimeoutMs,Math.min(requested,600000));
+  }
+  return {configuredMaxTokens,streamIdleTimeoutMs};
+}

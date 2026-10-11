@@ -1,3 +1,4 @@
+import {nvidiaRequestTimeout} from './nvidia.mjs';
 import {AppError} from './util.mjs';
 import {normalizeChat,validateChat} from './openai.mjs';
 import {WorkBuddyPool} from './workbuddy-pool.mjs';
@@ -16,7 +17,7 @@ export class Router {
     const kind=this.config.value.upstreams.find(u=>u.id===targets[selected].upstreamId)?.kind;
     if(kind==='nvidia'&&(primary.importable===false||!Number.isInteger(primary.contextWindow)||primary.contextWindow<1||!Number.isInteger(primary.maxTokens)||primary.maxTokens<1))return undefined;
     const efforts=kind==='trae'?primary.reasoningEfforts:['workbuddy','codebuddy','workbuddyai','nvidia'].includes(kind)?Object.fromEntries((primary.reasoning?.supportedEfforts??[]).map(k=>[k,k])):null;
-    return {id:route.id,object:'model',created:0,owned_by:'ai-credit-gateway',name:route.name??primary.name??route.id,upstream:targets[selected].upstreamId,capabilities:{streaming:true,tools:primary.tools===true,multimodal:primary.multimodal===true},contextWindow:primary.contextWindow??32768,maxTokens:primary.maxTokens??4096,reasoning:primary.reasoning??null,reasoningEfforts:efforts??null,...(primary.reasoningEffortMapping?{reasoningEffortMapping:primary.reasoningEffortMapping,reasoningMappingSource:primary.reasoningMappingSource}:{})};
+    return {id:route.id,object:'model',created:0,owned_by:'ai-credit-gateway',name:route.name??primary.name??route.id,upstream:targets[selected].upstreamId,...(kind==='nvidia'?{requestTimeoutMs:nvidiaRequestTimeout(primary.id)}:{}),capabilities:{streaming:true,tools:primary.tools===true,multimodal:primary.multimodal===true},contextWindow:primary.contextWindow??32768,maxTokens:primary.maxTokens??4096,reasoning:primary.reasoning??null,reasoningEfforts:efforts??null,...(primary.reasoningEffortMapping?{reasoningEffortMapping:primary.reasoningEffortMapping,reasoningMappingSource:primary.reasoningMappingSource}:{})};
   }
   async models(){const rows=await Promise.all(this.config.value.routes.filter(r=>r.enabled!==false).map(r=>this.routeInfo(r)));return {object:'list',data:rows.filter(Boolean)};}
   async * chat(raw,signal,{onTarget,source='api'}={}) {

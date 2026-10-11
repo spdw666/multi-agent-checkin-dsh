@@ -75,9 +75,11 @@ AI网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后�
 | Qoder / Qoder CN | 分区桌面登录态及真实设备上下文 | 官方活动领取、套餐及加购额度；按活动窗口幂等，10:00 CST 换期再检查 | COSY 签名与 SSE 协议；实时目录、普通 / 流式 / 工具及结果回传 |
 | CodeBuddy CN / 国际版 | 分区桌面 SQLite 登录态 | 官方活动与余额独立查询；与 WorkBuddy 共享身份时避免重复领取 | 独立官方域名；国际连接失败单独显示，不当作未登录 |
 | WorkBuddy AI 国际版 | 独立国际版桌面登录态 | 显示资源包；活动未开启时显示无每日签到 | 不混用国内版域名、凭据与额度 |
-| CodeArts Agent | 桌面当前临时访问凭据 | SDK-HMAC 请求、官方积分与每日活动回执 | 聊天可用与工具链可用分开；未通过的能力不声明为通过 |
+| CodeArts Agent | 桌面临时凭据；官方 PKCE / DPoP 续期写独立私有缓存 | SDK-HMAC 请求、官方积分与每日活动回执 | 原生工具调用、回传会话关联；强制工具选择不静默降级；续期失败不重复消费轮换令牌 |
 | LobsterAI | 本机 SQLite 登录态 | 官方额度和每日登录奖励，领取后重新查询确认 | 官方模型目录与聊天协议；能力以当前目录和体检为准 |
-| Cline / 小浣熊 / Loomy | 各自本机登录或独立私有文件引用 | 各自余额及活动探测；没有签到接口不制造领取任务 | 登录过期、协议待核验、目录候选分别显示，不将候选模型冒充可调用模型 |
+| Cline | 官方桌面登录态 | 官方用户余额，按 SDK 单位换算为 credits，不标美元 | 认证与余额查询分别报告；免费模型目录与工具链独立核验 |
+| 商汤小浣熊 | 原生 auth.json 登录态优先，独立只读轮换缓存 | 每日 / 奖励等积分分项；daily-quota 只观察服务端自动额度 | 官方模型目录与结构化工具协议；非实测能力不补真值 |
+| Loomy | 原生 auth-session 登录态 | 生产环境积分接口，个人余额与每日余额分项 | 生产模型接口；宠物奖励仅按服务端可领标记处理，不按余额猜测签到 |
 
 TraeCode CN 与 TraeWork CN 若对应同一身份与权益池，保留一个账号启用即可。
 
@@ -188,7 +190,7 @@ $body = @{ scope = 'selected'; routeIds = @('qoder-cn/qwen3.8-flash') } | Conver
 Invoke-RestMethod "$base/admin/model-tests" -Method Post -Headers $admin -ContentType 'application/json' -Body $body
 ```
 
-空列表、未知或停用路由返回 400，已有任务运行时返回 409。同一上游模型去重，不覆盖未选模型的既有结果。NVIDIA 同账号的体检串行，每阶段从真正开始请求时计时，默认 120 秒；其他上游默认 45 秒。输出上限同时受目录配置约束。超时仍显示待复测并保留阶段原因，不等同于额度耗尽。
+空列表、未知或停用路由返回 400，已有任务运行时返回 409。同一上游模型去重，不覆盖未选模型的既有结果。NVIDIA 同账号的体检串行，每阶段从真正开始请求时计时，一般为 120 秒，Kimi K3 与 DeepSeek V4.1 Flash 为有界 600 秒；其他上游默认 45 秒。输出上限同时受目录配置约束。仅支持自动选工具的上游在审计记录中标明 auditToolChoice=auto，并仍要求实际结构化工具及回传成功；不把聊天文本算作工具成功。超时仍显示待复测并保留阶段原因，不等同于额度耗尽。
 
 ## 接入 DSH
 
@@ -296,6 +298,10 @@ Invoke-RestMethod "$base/admin/doctor" -Method Post -Headers $admin -ContentType
 
 反馈问题时给出平台、客户端版本、路由 ID、错误码、普通或流式、工具调用阶段与去密日志；**不要提交 token、Cookie、运行密钥、账号快照或个人数据库**。
 
+### 慢模型的三层请求截止时间
+
+调用端、网关 HTTP 请求和上游适配器各有独立截止时间。对于 NVIDIA Kimi K3 / DeepSeek V4.1 Flash，可在 `server.modelRequestTimeouts` 按实际路由 ID 配置 `600000`，未匹配路由仍用 `server.requestTimeoutMs`；仅增加模型元数据的超时不会改变 HTTP 层。600 秒是有界等待，不是上游成功保证；保留官方 429 / 503 / 504 和取消结果，详见 [NVIDIA 接入说明](docs/nvidia-source-notes.md)。
+
 ## 测试与贡献
 
 ```bash
@@ -322,6 +328,7 @@ node --test tests/sqlite-concurrency.test.mjs   # 账本并发与冷启动竞争
 | [docs/api.md](docs/api.md) | 管理契约：鉴权、模型与管理端点、请求体上限、前端注意事项 |
 | [docs/usage.md](docs/usage.md) | 用量 API 字段、分页、计费与余额变化语义 |
 | [docs/dsh.md](docs/dsh.md) | DSH 挂载、profile 与插件配置 |
+| [docs/dsh-request-policy.md](docs/dsh-request-policy.md) | 模型首包等待与显式输出预算；保留目录上限、取消和用户默认 |
 | [docs/hermes.md](docs/hermes.md) | Hermes Provider、`key_cmd`、推理档位、分层验证与回滚 |
 | [docs/model-retry.md](docs/model-retry.md) | 定向复测未通过模型 |
 | [docs/bigmodel.md](docs/bigmodel.md) | 智谱官方模型与资源包查询 |

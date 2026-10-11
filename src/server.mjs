@@ -11,6 +11,7 @@ import {once} from 'node:events';
 import {projectRoot} from './config.mjs';
 import {AppError,errorView} from './util.mjs';
 import {collectChat,validateChat} from './openai.mjs';
+export function gatewayRequestTimeout(policy={},routeId){return policy.modelRequestTimeouts&&Object.hasOwn(policy.modelRequestTimeouts,routeId)?policy.modelRequestTimeouts[routeId]:(policy.requestTimeoutMs??180000);}
 function equal(a,b){const x=Buffer.from(a??''),y=Buffer.from(b??'');return x.length===y.length&&timingSafeEqual(x,y);}
 function authorized(req,token){const h=req.headers.authorization;return typeof h==='string'&&h.startsWith('Bearer ')&&equal(h.slice(7),token);}
 function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
@@ -23,6 +24,7 @@ async function readBody(req,limit=4194304,{allowEmpty=false}={}){
   try{return JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'))}catch{throw new AppError('Invalid JSON body',400,'invalid_request_error');}
 }
 export async function startServer(service,{host,port,key,adminKey,admin=true,onShutdown}={}) {
+  const version=JSON.parse(await readFile(join(projectRoot,'package.json'),'utf8')).version;
   const cfg=service.config.value.server;host??=cfg.host;port??=cfg.port;key??=service.keys.apiKey;adminKey??=service.keys.adminKey;
   const controllers=new Set();let baseUrl;
   const server=http.createServer(async(req,res)=>{
@@ -34,7 +36,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
       // Browsers from another origin cannot use the admin/gateway endpoint, even with a leaked ambient header.
       if(origin&&origin!==local)throw new AppError('Origin rejected',403,'origin_rejected');
       if(req.headers.host!==new URL(baseUrl).host&&req.headers.host!==`localhost:${server.address().port}`)throw new AppError('Host rejected',403,'host_rejected');
-      if(req.method==='GET'&&url.pathname==='/health'){return json(res,200,{status:'ok',service:'ai-credit-gateway',version:'0.1.0'});}
+      if(req.method==='GET'&&url.pathname==='/health'){return json(res,200,{status:'ok',service:'ai-credit-gateway',version});}
       if(admin&&req.method==='GET'&&['/','/app.js','/styles.css'].includes(url.pathname)){
         const name=url.pathname==='/'?'index.html':url.pathname.slice(1);const content=await readFile(join(projectRoot,'web',name));
         res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"});res.end(content);return;
@@ -81,7 +83,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         // Read live policy on every request, including the private DSH worker after config reload.
         const policy=service.config.value.server;
         const body=validateChat(await readBody(req,policy.bodyLimitBytes??67108864));const controller=new AbortController();controllers.add(controller);
-        const timeout=setTimeout(()=>controller.abort(),policy.requestTimeoutMs??180000);
+        const timeout=setTimeout(()=>controller.abort(new DOMException('Gateway request deadline exceeded','TimeoutError')),gatewayRequestTimeout(policy,body.model));
         const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnect);
         try {
           const stream=service.router.chat(body,controller.signal,{source:admin?'api':'dsh'});
@@ -94,7 +96,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         }finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
       }
       throw new AppError('Endpoint not found',404,'not_found');
-    }catch(e){const error=errorView(e);if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code}})}\n\n`);}else {if(error.status===429&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0)res.setHeader('Retry-After',String(Math.ceil(e.retryAfterSeconds)));json(res,error.status,{error:{message:error.message,type:error.code,code:error.code}});}}
+    }catch(e){const error=errorView(e);if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}})}\n\n`);}else {if(error.status===429&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0)res.setHeader('Retry-After',String(Math.ceil(e.retryAfterSeconds)));json(res,error.status,{error:{message:error.message,type:error.code,code:error.code,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}});}}
   });
   server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.off('error',reject);resolve()})});

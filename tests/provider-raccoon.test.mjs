@@ -11,7 +11,7 @@ import {
   descriptor, raccoonProvider, parseRaccoonLlmConfig, raccoonLlmConfig, parseRaccoonSessionBinding,
   raccoonModels, raccoonCookiePresence, raccoonCredentialPresence, raccoonFetch, raccoonHealth,
   raccoonStatus, raccoonClaim, raccoonChat, raccoonResolve, raccoonCredentialView, decryptElectronCookie,
-  readElectronCookieKey, RACCOON_ORIGIN,
+  readElectronCookieKey, RACCOON_ORIGIN, readRaccoonNativeAuth, raccoonServerModels, raccoonBearerHealth,
 } from '../src/provider-raccoon.mjs';
 
 const llmFixture = {
@@ -53,7 +53,7 @@ async function makeCookieDb(rows) {
 
 test('raccoon descriptor: no check-in surface, cookie auth kind', () => {
   assert.equal(descriptor.id, 'raccoon');
-  assert.equal(descriptor.authKind, 'electron_session_cookie');
+  assert.equal(descriptor.authKind, 'native_bearer_token');
   assert.equal(descriptor.checkinSupported, false);
   assert.ok(descriptor.underlyingProvider.includes('xiaohuanxiong.com'));
 });
@@ -176,7 +176,7 @@ test('raccoon availability: explicit unsupported capability claims', async () =>
   assert.equal(r.supported, false);
   assert.equal(r.code, 'no_checkin_confirmed');
   assert.ok(Array.isArray(r.evidence) && r.evidence.length >= 1);
-  await assert.rejects(() => raccoonChat(), e => e.status === 501 && e.code === 'raccoon_chat_unverified');
+  await assert.rejects(() => raccoonChat(), e => e.status === 401 && e.code === 'raccoon_credential_missing');
   const s = await raccoonStatus(undefined, 'daily-checkin');
   assert.equal(s.supported, false);
   assert.equal(s.claimable, false);
@@ -213,3 +213,20 @@ test('raccoon health: session cookies present -> session_present, structure surf
 test('provider export: full unified surface', () => {
   for (const fn of ['resolve', 'models', 'health', 'status', 'claim', 'chat']) assert.equal(typeof raccoonProvider[fn], 'function', fn);
 });
+
+const nativeToken='fixture.'+Buffer.from(JSON.stringify({name:'fixture-user',exp:2000000000})).toString('base64url')+'.signature';
+const nativeSecret={accessToken:nativeToken,authKind:'bearer',principal:'fixture'};
+const catalog={code:0,data:{categories:[{type:'chat',models:[{model_name:'official-chat',description:'官方模型',params:{context_window:1000000,max_tokens:100000},tags:['vision']}]}]}};
+test('native auth reads Bearer source independently of zero cookies and hides token in view',async()=>{
+ const s=await readRaccoonNativeAuth('fixture',{readFileImpl:async()=>JSON.stringify({access_token:nativeToken,refresh_token:'fixture-refresh'})});assert.equal(s.authKind,'bearer');assert.ok(s.principal.startsWith('raccoon:'));assert.ok(!JSON.stringify(raccoonCredentialView(s)).includes(nativeToken));
+});
+test('native resolve prefers explicit native auth file even with empty cookie database',async()=>{const {writeFile}=await import('node:fs/promises');const file=join(await scratch(),'native.json');await writeFile(file,JSON.stringify({access_token:nativeToken}));const value=await raccoonResolve({}, {authFilePath:file,cookieDbPath:await makeCookieDb([])});assert.equal(value.authKind,'bearer');});
+test('catalog uses real metadata and does not invent tool support',async()=>{const models=await raccoonServerModels(nativeSecret,{fetchImpl:async(url,opts)=>{assert.equal(opts.headers.authorization,'Bearer '+nativeToken);return jsonResponse(catalog);}});assert.equal(models[0].contextWindow,1000000);assert.equal(models[0].tools,null);assert.equal(models[0].source,'official_model_catalog');});
+test('balance preserves unknown and real zero, with automatic daily grant not checkin',async()=>{const health=await raccoonBearerHealth(nativeSecret,{fetchImpl:async(url)=>url.includes('model_catalog')?jsonResponse(catalog):jsonResponse({code:0,data:{available_points:0,daily_points:0,reward_points:6000}})});assert.equal(health.balance.value,0);assert.equal(health.balance.parts[0].value,0);assert.equal(health.capabilities.checkin,false);assert.equal(health.status,'authenticated');});
+test('chat rejects unknown model before upstream fallback',async()=>{let calls=0;await assert.rejects(raccoonChat({},nativeSecret,{model:'bad'},undefined,{fetchImpl:async()=>{calls++;return jsonResponse(catalog);}}),{code:'raccoon_model_unknown'});assert.equal(calls,1);});
+test('chat normalizes SSE, preserves tools, and strips unsupported reasoning field',async()=>{const result=await raccoonChat({},nativeSecret,{model:'official-chat',messages:[{role:'user',content:'hi'}],reasoning_effort:'max',max_completion_tokens:512,tools:[{type:'function',function:{name:'lookup',parameters:{type:'object'}}}]},undefined,{fetchImpl:async(url,opts)=>{if(url.includes('model_catalog'))return jsonResponse(catalog);const body=JSON.parse(opts.body);assert.equal(body.reasoning_effort,undefined);assert.equal(body.max_tokens,512);assert.equal(body.tools.length,1);return new Response('data: '+JSON.stringify({choices:[{index:0,delta:{content:'OK'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});}});assert.equal((await result.response.json()).choices[0].message.content,'OK');});
+test('native expired authentication maps session error without claiming success',async()=>{await assert.rejects(raccoonBearerHealth(nativeSecret,{fetchImpl:async()=>jsonResponse({},401)}),{code:'raccoon_session_expired'});});
+
+test('daily quota status is observed balance, not a fake checkin claim',async()=>{let calls=0;const result=await raccoonStatus(nativeSecret,'daily-quota',{fetchImpl:async(url,options)=>{calls++;assert.equal(options.method,'GET');return jsonResponse({code:0,data:{daily_points:297,available_points:6297}});}});assert.equal(result.observed,true);assert.equal(result.claimable,false);assert.equal(result.details.dailyRemaining,297);assert.equal(result.details.availablePoints,6297);assert.equal(calls,1);const claim=await raccoonClaim(nativeSecret,'daily-quota');assert.equal(claim.claimed,false);assert.equal(claim.reason,'server_auto_daily_quota');assert.equal(calls,1);});
+
+test('business auth error is not mistaken for authenticated HTTP200',async()=>{await assert.rejects(raccoonBearerHealth(nativeSecret,{fetchImpl:async()=>jsonResponse({code:200003,message:'authorization_verify_error'})}),{status:401,code:'raccoon_session_expired'});});

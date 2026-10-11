@@ -1,12 +1,79 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {CLINE_API_ORIGIN,CLINE_CHAT_PATH,clineDescriptor,clineBalance,clineCheckin,clineCredentialView,clineFetch,clineHealth,clineModels,clineChat,clineStatus,clineClaim,clineProvider,resolveClineCredential,readClineLocalCredential,defaultClineCredentialFile} from '../src/provider-cline.mjs';
 
 // Synthetic fixture only: three base64url-shaped segments, no real issuer or signature.
 const TOKEN=['SAFE','FIXTURE','TOKEN'].map(s=>Buffer.from(s).toString('base64url')).join('.');
+
+test('Cline official refresh is fixed-origin, preserves WorkOS binding and rejects changed identity',async()=>{
+ const {refreshClineAuth,CLINE_REFRESH_URL}=await import('../src/provider-cline.mjs');const now=Date.now();
+ const jwt=sub=>Buffer.from('{}').toString('base64url')+'.'+Buffer.from(JSON.stringify({sub,exp:Math.floor(now/1000)+3600})).toString('base64url')+'.fixture';
+ const auth={accessToken:'workos:'+jwt('same'),refreshToken:'refresh-fixture'};let calls=0;
+ const renewed=await refreshClineAuth(auth,{now,fetchImpl:async(url,o)=>{
+  calls++;assert.equal(url,CLINE_REFRESH_URL);assert.equal(url,'https://api.cline.bot/api/v1/auth/refresh');assert.equal(o.redirect,'error');
+  assert.deepEqual(JSON.parse(o.body),{refreshToken:'refresh-fixture',grantType:'refresh_token'});
+  return Response.json({success:true,data:{accessToken:jwt('same'),refreshToken:'refresh-next',expiresAt:new Date(now+3600000).toISOString()}});
+ }});
+ assert.equal(calls,1);assert.equal(renewed.accessToken.startsWith('workos:'),true);assert.equal(renewed.refreshToken,'refresh-next');assert.equal(auth.refreshToken,'refresh-fixture');
+ await assert.rejects(refreshClineAuth(auth,{fetchImpl:async()=>Response.json({success:true,data:{accessToken:jwt('other'),expiresAt:now+3600000}})}),{code:'cline_refresh_identity_mismatch'});
+ calls=0;const failure=await refreshClineAuth(auth,{fetchImpl:async()=>{calls++;return Response.json({error:'refresh-fixture'},{status:401})}}).catch(e=>e);
+ assert.equal(calls,1);assert.equal(failure.code,'cline_refresh_failed');assert.equal(failure.message.includes('refresh-fixture'),false);
+});
+
+test('Cline renewal cache is source-bound, single-flight, preserves original file and never replays a failed rotation',async()=>{
+ const f=await fixture();const now=Date.now(),account={credentials:{file:f.file}},cacheFile=f.file+'.cache';
+ const old={accessToken:TOKEN,refreshToken:'refresh-original',expiresAt:now-1000};
+ try{
+  await writeFile(f.file,JSON.stringify(old));const original=await readFile(f.file,'utf8');let calls=0;
+  const options={now,cacheFile,fetchImpl:async()=>{calls++;return Response.json({success:true,data:{accessToken:TOKEN,refreshToken:'refresh-rotated',expiresAt:now+120000}})}};
+  const [a,b]=await Promise.all([resolveClineCredential(account,{},options),resolveClineCredential(account,{},options)]);
+  assert.equal(calls,1);assert.equal(a.token,b.token);assert.equal(await readFile(f.file,'utf8'),original);
+  const cache=JSON.parse(await readFile(cacheFile,'utf8'));assert.equal(cache.refreshToken,'refresh-rotated');assert.equal(typeof cache.sourceHash,'string');
+  await resolveClineCredential(account,{},options);assert.equal(calls,1);
+  const failed={...options,now:now+180000,fetchImpl:async(url,o)=>{calls++;assert.equal(JSON.parse(o.body).refreshToken,'refresh-rotated');return Response.json({error:'invalid_grant'},{status:400})}};
+  await assert.rejects(resolveClineCredential(account,{},failed),{code:'cline_refresh_failed'});
+  await assert.rejects(resolveClineCredential(account,{},failed),{code:'cline_refresh_needs_login'});assert.equal(calls,2);
+  await writeFile(f.file,JSON.stringify({...old,accessToken:'new-source-token',expiresAt:now+3600000}));
+  const changed=await resolveClineCredential(account,{},options);assert.equal(changed.token,'new-source-token');assert.equal(calls,2);
+ }finally{await f.cleanup();}
+});
+
+test('Cline account balance follows the full official display scale and preserves true zero',()=>{
+  assert.equal(clineBalance({success:true,data:{userId:'usr',balance:500000}},'usr').value,0.5);
+  const zero=clineBalance({success:true,data:{userId:'usr',balance:0}},'usr');
+  assert.equal(zero.value,0);assert.equal(zero.status,'known');assert.equal(zero.unit,'credits');
+  for(const balance of [null,'500000',NaN,Infinity,undefined])
+    assert.throws(()=>clineBalance({success:true,data:{userId:'usr',balance}},'usr'),{code:'cline_balance_schema'});
+  assert.throws(()=>clineBalance({success:true,data:{userId:'other',balance:1}},'usr'),{code:'cline_balance_schema'});
+  assert.throws(()=>clineBalance({success:false,data:{userId:'usr',balance:1}},'usr'),{code:'cline_balance_schema'});
+});
+
+test('Cline health derives balance identity from authenticated me and separates partial balance failure',async()=>{
+  const credential={token:TOKEN,principal:'fixture',expiresAt:null};
+  const calls=[];
+  const result=await clineHealth(credential,{fetchImpl:async(url)=>{
+    calls.push(url);return Response.json(url.endsWith('/me')?{success:true,data:{id:'usr-fixture'}}:{success:true,data:{userId:'usr-fixture',balance:500000}});
+  }});
+  assert.equal(result.status,'authenticated');assert.equal(result.balance.value,0.5);assert.equal(result.capabilities.balance,true);
+  assert.equal(JSON.stringify(result).includes('usr-fixture'),false);
+  assert.deepEqual(calls,['https://api.cline.bot/api/v1/users/me','https://api.cline.bot/api/v1/users/usr-fixture/balance']);
+  for(const status of [401,403,500]){
+    const partial=await clineHealth(credential,{fetchImpl:async(url)=>url.endsWith('/me')?Response.json({success:true,data:{id:'usr'}}):new Response('secret diagnostic',{status})});
+    assert.equal(partial.status,'authenticated');assert.equal(partial.balance.value,null);assert.equal(partial.balance.httpStatus,status);
+    assert.equal(JSON.stringify(partial).includes('secret diagnostic'),false);
+  }
+  const invalid=await clineHealth(credential,{fetchImpl:async()=>Response.json({success:true,data:{id:'../other'}})});
+  assert.equal(invalid.balance.reason,'cline_balance_schema');assert.equal(invalid.balance.value,null);
+});
+
+test('Cline balance endpoint rejects encoded separators and unverified billing paths',async()=>{
+  for(const path of ['/api/v1/users/u%2Fv/balance','/api/v1/users/u/balance/extra','/api/v1/users/u/billing','/api/v1/users/u/balance?token=x']){
+    await assert.rejects(clineFetch(CLINE_API_ORIGIN+path,{token:TOKEN,fetchImpl:async()=>{throw new Error('must not fetch')}}),{code:'cline_endpoint_invalid'});
+  }
+});
 
 async function fixture(auth={}) {
   const dir=await mkdtemp(join(tmpdir(),'dsh-cline-'));
@@ -31,7 +98,7 @@ test('Cline descriptor is a chat-capable hosted-billing adapter with no checkin'
   assert.equal(clineDescriptor.byok,true);assert.equal(clineDescriptor.origin,CLINE_API_ORIGIN);
   assert.equal(clineDescriptor.chatSupported,true);assert.equal(clineDescriptor.chatPath,CLINE_CHAT_PATH);
   assert.equal(clineCheckin().status,'unsupported');assert.equal(clineCheckin().reason,'no_checkin_concept');
-  assert.equal(clineBalance().status,'unknown');assert.equal(clineBalance().reason,'identity_response_has_no_credits');
+  assert.equal(clineBalance().status,'unknown');assert.equal(clineBalance().reason,'balance_not_fetched');
 });
 
 test('Cline credential view exposes presence, expiry and issuer but never the token',async()=>{
@@ -64,7 +131,7 @@ test('Cline health reports authentication from /users/me without leaking credent
   try{
     const calls=[];
     const health=await clineHealth({credentialFile:f.file,now:Date.parse('2026-10-11T04:57:37.000Z'),fetchImpl:async(url)=>{calls.push(url);return Response.json({data:{id:'usr-fixture',email:'fixture-placeholder-not-an-address'},success:true})}});
-    assert.deepEqual(calls,['https://api.cline.bot/api/v1/users/me']);
+    assert.deepEqual(calls,['https://api.cline.bot/api/v1/users/me','https://api.cline.bot/api/v1/users/usr-fixture/balance']);
     assert.equal(health.status,'authenticated');assert.equal(health.accountPresent,true);assert.equal(health.checkinSupported,false);
     assert.equal(health.balance.status,'unknown');assert.equal(health.credential.present,true);
     assert.equal(JSON.stringify(health).includes(TOKEN),false);
@@ -76,7 +143,7 @@ test('Cline health reports authentication from /users/me without leaking credent
     assert.equal(expired.credential.expired,true);assert.equal(expired.capabilities.inference,true);
     assert.equal(JSON.stringify(expired).includes(TOKEN),false);
     assert.deepEqual(expiredCalls,[]);
-    const direct=await clineHealth(await resolveClineCredential({credentials:{file:f.file}},{path:p=>p}),{now:Date.parse('2026-10-11T04:57:37.000Z'),fetchImpl:async()=>Response.json({data:{id:'x'},success:true})});
+    const direct=await clineHealth(await resolveClineCredential({credentials:{file:f.file}},{path:p=>p},{refresh:false}),{now:Date.parse('2026-10-11T04:57:37.000Z'),fetchImpl:async()=>Response.json({data:{id:'x'},success:true})});
     assert.equal(direct.status,'authenticated');assert.equal(JSON.stringify(direct).includes(TOKEN),false);
     await assert.rejects(clineHealth({credentialFile:f.file,now:Date.parse('2026-10-11T04:57:37.000Z'),fetchImpl:async()=>Response.json({error:'unauthorized'},{status:401})}),{code:'cline_auth_failed'});
   }finally{await f.cleanup();}
@@ -108,11 +175,11 @@ test('Cline provider object satisfies the integration contract',async()=>{
   const f=await fixture();
   try{
     assert.deepEqual(Object.keys(clineProvider).sort(),['chat','claim','descriptor','health','models','resolve','status','supportsCheckin']);
-    const credential=await clineProvider.resolve({credentials:{file:f.file}},{}); // account/config shape
+    const credential=await clineProvider.resolve({credentials:{file:f.file}},{},{refresh:false}); // account/config shape
     assert.equal(typeof credential.token,'string');assert.equal(credential.token,TOKEN);
     assert.equal(credential.accessToken,TOKEN);assert.equal(typeof credential.principal,'string');
     assert.equal(credential.principal.includes(TOKEN),false);
-    const viaConfig=await clineProvider.resolve({credentials:{file:'nested/providers.json'}},{path:p=>{assert.equal(p,'nested/providers.json');return f.file;}});
+    const viaConfig=await clineProvider.resolve({credentials:{file:'nested/providers.json'}},{path:p=>{assert.equal(p,'nested/providers.json');return f.file;}},{refresh:false});
     assert.equal(viaConfig.token,TOKEN); // config.path() resolves explicit credential paths
     // resolve() must return the private credential that health/models/chat actually use.
     const health=await clineProvider.health(credential,{now:Date.parse('2026-10-11T04:57:37.000Z'),fetchImpl:async()=>Response.json({data:{id:'usr'},success:true})});
@@ -185,7 +252,7 @@ test('Cline chat fails closed on bad endpoints, bad requests and rejected auth w
 test('Cline status and claim stay honest about having no check-in concept',async()=>{
   const f=await fixture();
   try{
-    const credential=await resolveClineCredential({credentials:{file:f.file}},{});
+    const credential=await resolveClineCredential({credentials:{file:f.file}},{},{refresh:false});
     const status=clineStatus(credential);
     assert.equal(status.known,true);assert.equal(status.supportsCheckin,false);assert.equal(status.claimable,false);assert.equal(status.claimed,false);
     assert.equal(status.reason,'no_checkin_concept');assert.match(status.day,/^\d{4}-\d{2}-\d{2}$/);
@@ -228,4 +295,20 @@ test('Cline reads no credential text into any error message',async()=>{
     await clineModels({credentialFile:f.file,fetchImpl:async()=>{throw new Error('socket hang up')}}).catch(e=>{message=e.message;});
     assert.equal(message.includes(TOKEN),false);assert.equal(message,'Cline 官方接口连接失败');
   }finally{await f.cleanup();}
+});
+
+test('Cline rechecks successful, failed and expired newer rotation under the process lock',async()=>{
+ const fs=await import('node:fs/promises');const {syncBuiltinESMExports}=await import('node:module');const {hash}=await import('../src/util.mjs');
+ for(const mode of ['fresh','failed','expired']){
+  const f=await fixture(),now=Date.now(),cacheFile=f.file+'.race-cache';let calls=0,injected=0;
+  const auth={accessToken:TOKEN,refreshToken:'old-refresh',expiresAt:now-1000};await writeFile(f.file,JSON.stringify(auth));const original=await readFile(f.file,'utf8');
+  const latest={...auth,sourceHash:hash(original),refreshToken:'latest-refresh',expiresAt:mode==='fresh'?now+3600000:now-1,...(mode==='failed'?{refreshFailure:'already-attempted'}:{})};
+  const originalOpen=fs.default.open;
+  fs.default.open=async(path,...args)=>{const lock=await originalOpen(path,...args);if(path===cacheFile+'.lock'){injected++;await writeFile(cacheFile,JSON.stringify(latest));}return lock;};syncBuiltinESMExports();
+  try{
+   const request=resolveClineCredential({credentials:{file:f.file}},{},{now,cacheFile,fetchImpl:async(_url,options)=>{calls++;assert.equal(JSON.parse(options.body).refreshToken,'latest-refresh');return Response.json({success:true,data:{accessToken:TOKEN,refreshToken:'next-refresh',expiresAt:now+3600000}})}});
+   if(mode==='failed')await assert.rejects(request,{code:'cline_refresh_needs_login'});else assert.equal((await request).token,TOKEN);
+   assert.equal(injected,1);assert.equal(calls,mode==='expired'?1:0);assert.equal(await readFile(f.file,'utf8'),original);
+  }finally{fs.default.open=originalOpen;syncBuiltinESMExports();await f.cleanup();}
+ }
 });

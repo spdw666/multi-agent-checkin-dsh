@@ -1,18 +1,14 @@
-// provider-raccoon.mjs — 商汤小浣熊 (SenseTime Raccoon / office-raccoon) provider adapter, unified-contract edition.
-// Evidence (read-only; local install D:/raccoon-ai + %APPDATA%/office-raccoon + live checks 2026-10-11):
-//  - D:/raccoon-ai/resources/default-llm-config.json: apiBase https://xiaohuanxiong.com/api/web/llm/v2,
-//    provider=openai, model=raccoon-chat-ml-5-5, image endpoint /api/web/llm/v2/images/gen.
-//  - %APPDATA%/office-raccoon/default-session-model-binding.json: raccoon-8c4485, contextWindow 1000000,
-//    maxTokens 100000, routing auto (REAL values — the binding is the only capacity source; live-verified today).
-//  - Auth = Electron web session cookie. The cookie store `Network/Cookies` opens read-only; on this machine
-//    it currently holds ZERO cookies (verified: SELECT COUNT(*) FROM cookies → 0) while `Local State`
-//    exposes os_crypt.encrypted_key whose DPAPI unwrap succeeds (32-byte key; mechanism proven, key never printed).
-//    So the session is genuinely absent — this module says so instead of inventing one.
-//  - No check-in / sign-in endpoint was found in app resources; /api/user/... style paths are unproven.
-//    Health without evidence returns explicit unknowns; nothing fake is published as a model.
-import {AppError, redact, hash, rememberSecret} from './util.mjs';
-import {stat, readFile} from 'node:fs/promises';
-import {createDecipheriv} from 'node:crypto';
+import {desktopSseResponse, desktopCompletionLimit} from './provider-sse.mjs';
+import {homedir} from 'node:os';
+import {join, dirname, resolve} from 'node:path';
+// SenseTime Raccoon native adapter. Official live endpoints verified 2026-10-11:
+// current-user ~/.box-agent/config/auth.json supplies Bearer access_token independently
+// of Electron Cookies. GET model_catalog / points balance and chat/tool roundtrip passed.
+// Gateway refresh uses a private cache; each resolve re-reads the untouched native source.
+// Protocol references: github.com/xxhhlk/raccoon2api and rockswang/wild-work (MIT).
+import {AppError, redact, hash, rememberSecret, dayIn} from './util.mjs';
+import {stat, readFile, mkdir, open, writeFile, rename, unlink} from 'node:fs/promises';
+import {createDecipheriv, randomBytes} from 'node:crypto';
 import {dpapiUnprotect as defaultDpapi} from './windows-crypto.mjs';
 
 export const RACCOON_ORIGIN = 'https://xiaohuanxiong.com';
@@ -22,7 +18,7 @@ const JSON_LIMIT = 1024 * 1024;
 export const descriptor = Object.freeze({
   id: 'raccoon',
   name: '商汤小浣熊 (SenseTime Raccoon)',
-  authKind: 'electron_session_cookie',
+  authKind: 'native_bearer_token',
   checkinSupported: false, // no official check-in/sign-in surface found in the shipped app
   claimSupported: false,
   underlyingProvider: 'xiaohuanxiong.com LLM gateway (v2, OpenAI-shaped) on SenseTime stack',
@@ -176,14 +172,11 @@ export async function raccoonCredentialPresence({cookieDbPath = defaultRaccoonPa
 const AUTH_COOKIE_DENY = /^(csrf|xsrf|_ga|_gid|_gat|hm_|hm\.|Hm_|sensorsdata|_clck|_clsk|abtest|lang|locale|theme)/i;
 const SESSION_COOKIE_HINT = /(session|sid|token|auth|login|ticket|jwt|passport|sso)/i;
 
-/**
- * Contract `resolve(account, config) -> private credential`.
- * The cookie store currently holds no cookies, so this throws 401 raccoon_credential_missing — the
- * honest state. When a session cookie exists, the private credential carries its value (cookie header
- * material) and a stable principal hash; public views expose presence + cookie NAMES only.
- */
-export async function raccoonResolve(account, config = {}) {
+/** Resolve current-user native auth first; cookie presence alone never proves authentication. */
+export async function raccoonResolve(account, config = {}, options = {}) {
   const ref = account?.credentials?.file ?? account?.credentials?.path ?? null;
+  const nativeFile=ref&&ref!=='auto'?(typeof config.path==='function'?config.path(ref):ref):(config.authFilePath??((config.cookieDbPath)?null:defaultRaccoonAuthPath()));
+  if(nativeFile){try{return await resolveRaccoonNativeAuth(nativeFile, options);}catch(error){if(ref&&ref!=='auto'||error.code!=='raccoon_credential_missing')throw error;}}
   if(ref && ref !== 'auto') {
    const file=typeof config.path==='function'?config.path(ref):ref;
    let data;try{data=JSON.parse(await readFile(file,'utf8'));}catch{throw new AppError('小浣熊私有配置未就绪',401,'raccoon_credential_missing');}
@@ -225,7 +218,7 @@ export function raccoonCredentialView(secret) {
   if (!secret) return {present: false, status: 'credential_missing', cookieNames: []};
   return {
     present: true,
-    authKind: 'electron_session_cookie',
+    authKind: secret.authKind==='bearer'?'native_bearer_token':'electron_session_cookie',
     principal: secret.principal,
     cookieNames: secret.cookieNames ?? [],
     sessionCookieCount: secret.cookieNames?.length ?? 0,
@@ -288,6 +281,7 @@ export async function raccoonModels(options = {}) {
  * and no model is published as callable.
  */
 export async function raccoonHealth({credential, cookieDbPath, localStatePath, fetchImpl, llmConfigPath, sessionBindingPath, timeoutMs = 8000} = {}) {
+  if(credential?.authKind==='bearer')return raccoonBearerHealth(credential,{fetchImpl:fetchImpl??globalThis.fetch,timeoutMs});
   let presence;
   try {
     presence = await raccoonCookiePresence({cookieDbPath, localStatePath});
@@ -320,13 +314,15 @@ export async function raccoonHealth({credential, cookieDbPath, localStatePath, f
 }
 
 /** Contract `status`: no check-in surface exists — explicit unsupported, never a fake state. */
-export async function raccoonStatus(secret, task = 'daily-checkin') {
+export async function raccoonStatus(secret, task = 'daily-checkin', options={}) {
+  if(task==='daily-quota'){const data=await raccoonJson(secret,'/api/web/points/v1/balance',options);return {known:true,observed:true,task,claimed:null,claimable:false,reason:'server_auto_daily_quota',day:dayIn(new Date(),'Asia/Shanghai'),details:{dailyRemaining:Number.isFinite(data.daily_points)?data.daily_points:null,availablePoints:Number.isFinite(data.available_points)?data.available_points:null,unit:'积分',source:'/api/web/points/v1/balance',note:'官方每日自动额度；这里是实时剩余，不是新领取数量。'}};}
   if (task !== 'daily-checkin') throw new AppError('小浣熊任务未登记', 400, 'raccoon_task_unknown');
   return {known: false, task, claimable: false, claimed: null, supported: false, reason: 'no_checkin_surface_found', evidence: descriptor.sourceUrls};
 }
 
 /** Contract `claim`: honest unsupported description (no fake success). */
-export async function raccoonClaim() {
+export async function raccoonClaim(secret,task='daily-checkin') {
+  if(task==='daily-quota')return {supported:false,observed:true,claimed:false,reason:'server_auto_daily_quota',note:'每日额度由服务端自动发放；本次没有发起领取请求。'};
   return {
     supported: false,
     code: 'no_checkin_confirmed',
@@ -336,8 +332,17 @@ export async function raccoonClaim() {
 }
 
 /** Chat is not verified live for third-party use: refuse rather than guess a protocol. */
-export async function raccoonChat() {
-  throw new AppError('小浣熊模型调用协议尚未核验（应用网关仅绑定自身 web 会话）', 501, 'raccoon_chat_unverified');
+export async function raccoonChat(upstream,secret,input,signal,options={}) {
+ if(!secret?.accessToken||secret.authKind!=='bearer')throw new AppError('小浣熊需要原生 Bearer 登录凭据',401,'raccoon_credential_missing');
+ const model=input?.model;if(typeof model!=='string'||!model)throw new AppError('小浣熊缺少模型',400,'raccoon_model_invalid');
+ const models=await raccoonServerModels(secret,{...options,signal});
+ const metadata=models.find(m=>m.id===model&&m.category==='chat');
+ if(!metadata)throw new AppError('模型不在小浣熊官方聊天目录中',400,'raccoon_model_unknown');
+ const body={};for(const key of ['messages','tools','tool_choice','parallel_tool_calls','temperature','top_p','stop','response_format'])if(input[key]!==undefined)body[key]=input[key];
+ body.model=model;body.max_tokens=desktopCompletionLimit(input,metadata.maxTokens??4096);body.stream=true;
+ const response=await raccoonFetch(options.fetchImpl??globalThis.fetch,RACCOON_ORIGIN+'/api/web/llm/v2/chat/completions',{method:'POST',headers:raccoonBearerHeaders(secret),body:JSON.stringify(body),signal,timeoutMs:options.timeoutMs??300000});
+ if(!response.ok){await response.body?.cancel().catch(()=>{});throw new AppError('小浣熊聊天接口 HTTP '+response.status,response.status,response.status===401?'raccoon_session_expired':'raccoon_chat_rejected');}
+ return {response:await desktopSseResponse(response,{stream:input.stream===true,model,signal,prefix:'raccoon'}),model};
 }
 
 // ------------------------------------------------------------------ provider export
@@ -345,7 +350,7 @@ export async function raccoonChat() {
 export const raccoonProvider = {
   descriptor,
   resolve: raccoonResolve,
-  models: (credential, options={}) => raccoonModels(options),
+  models: (credential, options={}) => credential?.authKind==='bearer'?raccoonServerModels(credential,options):raccoonModels(options),
   health: (credential, options={}) => raccoonHealth({...options,credential}),
   status: raccoonStatus,
   claim: raccoonClaim,
@@ -354,3 +359,96 @@ export const raccoonProvider = {
   credentialView: raccoonCredentialView,
   cookiePresence: raccoonCookiePresence,
 };
+
+// Official native client auth is ~/.box-agent/config/auth.json, independent of Electron cookies.
+// Native files stay unchanged; rotated credentials are saved only in gateway private-cache.
+export function defaultRaccoonAuthPath(){return join(process.env.BOX_AGENT_CONFIG_DIR||join(homedir(),'.box-agent','config'),'auth.json');}
+export async function readRaccoonNativeAuth(file=defaultRaccoonAuthPath(),{readFileImpl=readFile}={}){
+ let raw;try{raw=JSON.parse(String(await readFileImpl(file,'utf8')).replace(/^\uFEFF/,''));}catch{throw new AppError('小浣熊原生登录文件未就绪',401,'raccoon_credential_missing');}
+ const token=raw.access_token??raw.accessToken;if(typeof token!=='string'||!token.trim()||/[\r\n]/.test(token))throw new AppError('小浣熊原生登录令牌为空',401,'raccoon_credential_missing');
+ let claims={};try{claims=JSON.parse(Buffer.from(token.split('.')[1],'base64url').toString('utf8'));}catch{}
+ const identity=claims.name??claims.sub??raw.principal;
+ if(typeof identity!=='string'||!identity)throw new AppError('小浣熊登录缺少稳定身份',401,'raccoon_identity_missing');
+ rememberSecret(token);if(raw.refresh_token)rememberSecret(raw.refresh_token);
+ return {accessToken:token,authKind:'bearer',principal:'raccoon:'+hash(identity).slice(0,24),source:'native_auth_file',filePath:file,cookieNames:[],expiresAt:Number.isFinite(claims.exp)?new Date(claims.exp*1000).toISOString():null};
+}
+function raccoonBearerHeaders(secret){rememberSecret(secret.accessToken);return {'authorization':'Bearer '+secret.accessToken,'content-type':'application/json','accept':'application/json'};}
+async function raccoonJson(secret,path,options={}){
+ const response=await raccoonFetch(options.fetchImpl??globalThis.fetch,RACCOON_ORIGIN+path,{headers:raccoonBearerHeaders(secret),signal:options.signal,timeoutMs:options.timeoutMs??30000});
+ if(!response.ok){await response.body?.cancel().catch(()=>{});throw new AppError('小浣熊官方接口 HTTP '+response.status,response.status,response.status===401?'raccoon_session_expired':'raccoon_upstream_error');}
+ const reader=response.body?.getReader();if(!reader)throw new AppError('小浣熊空响应',502,'raccoon_empty_response');let bytes=0;const chunks=[];
+ try{for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>JSON_LIMIT)throw new AppError('小浣熊响应过大',502,'raccoon_response_too_large');chunks.push(value);}}finally{await reader.cancel().catch(()=>{});}
+ let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new AppError('小浣熊响应格式错误',502,'raccoon_invalid_json');}
+ if(data.code!==undefined&&data.code!==0&&data.code!=='0'){const auth=[200001,200003].includes(Number(data.code));throw new AppError('小浣熊业务接口拒绝',auth?401:502,auth?'raccoon_session_expired':'raccoon_business_error');}return data.data??data;
+}
+export async function raccoonServerModels(secret,options={}){
+ const data=await raccoonJson(secret,'/api/web/llm/v2/model_catalog',options);if(!Array.isArray(data.categories))throw new AppError('小浣熊模型目录结构改变',502,'raccoon_catalog_schema');
+ return data.categories.flatMap(c=>(c.models??[]).map(m=>({id:m.model_name??m.name,name:m.description??m.name,category:c.type,contextWindow:Number.isSafeInteger(m.params?.context_window)?m.params.context_window:null,maxTokens:Number.isSafeInteger(m.params?.max_tokens)?m.params.max_tokens:null,officialMaxTokens:Number.isSafeInteger(m.params?.max_tokens)?m.params.max_tokens:null,maxTokensSource:'official_catalog',tools:(m.model_name??m.name)==='sn-sensenova-6-8-flash'?true:null,toolSupportSource:(m.model_name??m.name)==='sn-sensenova-6-8-flash'?'gateway_live_tool_roundtrip_2026-10-11':null,multimodal:(m.tags??[]).includes('vision'),tags:m.tags??[],visible:m.visible!==false,source:'official_model_catalog',callable:c.type==='chat',publishable:c.type==='chat',billingStatus:m.billing_status??null,billingMultiplier:m.billing_effective_multiplier??m.billing_multiplier??null}))).filter(m=>typeof m.id==='string'&&m.id);
+}
+export async function raccoonBearerHealth(secret,options={}){
+ const data=await raccoonJson(secret,'/api/web/points/v1/balance',options);
+ const balance={value:Number.isFinite(data.available_points)?data.available_points:null,unit:'积分',parts:[],checkedIn:null,note:'官方可用积分；每日自动额度不等于每日签到。'};
+ for(const [key,name]of [['daily_points','每日额度'],['monthly_points','月度额度'],['reward_points','奖励积分'],['topup_points','充值积分']])if(Number.isFinite(data[key]))balance.parts.push({name,value:data[key],unit:'积分'});
+ if(data.topup_frozen===true)balance.note+='充值积分已冻结。';
+ let models=[],modelError=null;try{models=await raccoonServerModels(secret,options);}catch(error){modelError={code:error.code??'raccoon_catalog_error',message:redact(error.message)};}
+ return {status:'authenticated',credential:raccoonCredentialView(secret),balance,checkin:{supported:false,reason:'daily_grant_not_checkin'},capabilities:{checkin:false,inference:models.some(m=>m.category==='chat')},models,modelCount:models.length,...(modelError?{modelError}:{})};
+}
+
+export const RACCOON_REFRESH_URL = RACCOON_ORIGIN + '/api/web/auth/v1/refresh';
+const raccoonRefreshFlights = new Map();
+function tokenClaims(token) {try{return JSON.parse(Buffer.from(String(token).split('.')[1],'base64url').toString('utf8'));}catch{return {};}}
+function tokenIdentity(raw){const c=tokenClaims(raw.access_token??raw.accessToken);return c.name??c.sub??raw.principal;}
+function tokenExpiry(raw){const exp=tokenClaims(raw.access_token??raw.accessToken).exp;return Number.isFinite(exp)?exp*1000:NaN;}
+async function refreshJson(response){const reader=response.body?.getReader();if(!reader)throw new AppError('小浣熊续期响应为空',502,'raccoon_refresh_invalid');let bytes=0;const parts=[];try{for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>JSON_LIMIT)throw new AppError('小浣熊续期响应过大',502,'raccoon_refresh_invalid');parts.push(value);}}finally{await reader.cancel().catch(()=>{});}try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw new AppError('小浣熊续期响应格式错误',502,'raccoon_refresh_invalid');}}
+export async function refreshRaccoonAuth(auth,{fetchImpl=fetch,now=Date.now(),signal}={}) {
+ const rt=auth.refresh_token??auth.refreshToken,at=auth.access_token??auth.accessToken;
+ if(typeof rt!=='string'||!rt||/[\r\n]/.test(rt))throw new AppError('小浣熊续期凭据缺失',401,'raccoon_refresh_missing');
+ rememberSecret(rt);rememberSecret(at);let response;
+ try{response=await fetchImpl(RACCOON_REFRESH_URL,{method:'POST',redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000),headers:{'content-type':'application/json',accept:'application/json',authorization:'Bearer '+at},body:JSON.stringify({refresh_token:rt})});}
+ catch{throw new AppError('小浣熊续期请求未确认；等待登录态更新',503,'raccoon_refresh_unconfirmed');}
+ const data=await refreshJson(response);
+ if(!response.ok||![0,'0'].includes(data.code))throw new AppError('小浣熊官方续期失败 (HTTP '+response.status+')',response.ok?401:response.status,'raccoon_refresh_failed');
+ const token=data.data?.access_token,refresh=data.data?.refresh_token;
+ if(typeof token!=='string'||!token||/[\r\n]/.test(token)||typeof refresh!=='string'||!refresh||/[\r\n]/.test(refresh))throw new AppError('小浣熊续期缺少轮换凭据',502,'raccoon_refresh_invalid');
+ rememberSecret(token);rememberSecret(refresh);
+ const next={access_token:token,refresh_token:refresh};
+ const oldIdentity=tokenIdentity(auth),newIdentity=tokenIdentity(next);
+ if(typeof oldIdentity!=='string'||!oldIdentity||newIdentity!==oldIdentity)throw new AppError('小浣熊续期身份不一致',401,'raccoon_refresh_identity_mismatch');
+ const oldClaims=tokenClaims(at),newClaims=tokenClaims(token);
+ if(oldClaims.sub&&newClaims.sub&&oldClaims.sub!==newClaims.sub)throw new AppError('小浣熊续期身份不一致',401,'raccoon_refresh_identity_mismatch');
+ if(!(tokenExpiry(next)>now+60000))throw new AppError('小浣熊续期有效期异常',502,'raccoon_refresh_invalid');
+ return next;
+}
+async function publishRaccoonCache(file,data){const temp=file+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify(data),{mode:0o600});await rename(temp,file);}
+async function loadRaccoonRefreshed(file,options){
+ let source,original;try{source=await readFile(file,'utf8');original=JSON.parse(source.replace(/^\uFEFF/,''));}catch{throw new AppError('小浣熊原生登录文件未就绪',401,'raccoon_credential_missing');}
+ // Parse identity before any credential-bearing network operation.
+ await readRaccoonNativeAuth(file,{readFileImpl:async()=>source});
+ const sourceHash=hash(source),cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??homedir(),'AI Credit Gateway','private-cache','raccoon-'+hash(resolve(file)).slice(0,16)+'.json');
+ const now=options.now??Date.now();let cached;
+ try{cached=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw new AppError('小浣熊私有续期缓存需核验',409,'raccoon_refresh_cache_invalid');}
+ const matches=cached?.sourceHash===sourceHash;
+ let auth=matches&&cached?.auth?cached.auth:original;
+ const token=auth.refresh_token??auth.refreshToken;
+ const attemptedHash=typeof token==='string'?hash(token):null;
+ if(cached?.refreshFailure&&(matches||attemptedHash&&cached.attemptedTokenHash===attemptedHash))throw new AppError('小浣熊上次续期未确认；等待本机登录态更新',401,'raccoon_refresh_needs_login');
+ const credential=async(raw,fromCache)=>{const value=await readRaccoonNativeAuth(file,{readFileImpl:async()=>JSON.stringify(raw)});return {...value,source:fromCache?'gateway_private_refresh_cache':'native_auth_file',refreshTokenPresent:!!(raw.refresh_token??raw.refreshToken)};};
+ if(tokenExpiry(auth)>now+60000||!token||options.refresh===false)return credential(auth,matches&&!!cached?.auth);
+ await mkdir(dirname(cacheFile),{recursive:true});let lock;
+ try{lock=await open(cacheFile+'.lock','wx',0o600);}catch{throw new AppError('小浣熊续期正在处理或需核对上次结果',409,'raccoon_refresh_pending');}
+ try{
+  // Recheck after lock acquisition: another process may have published while we awaited open.
+  let latest;try{latest=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+  if(latest?.sourceHash===sourceHash&&latest?.auth&&tokenExpiry(latest.auth)>now+60000&&!latest.refreshFailure)return credential(latest.auth,true);
+  if(latest?.refreshFailure&&(latest.sourceHash===sourceHash||latest.attemptedTokenHash===attemptedHash))throw new AppError('小浣熊上次续期未确认；等待本机登录态更新',401,'raccoon_refresh_needs_login');
+  // Durable intent prevents replay of a possibly rotated token after timeout, parse failure, or crash.
+  await publishRaccoonCache(cacheFile,{sourceHash,attemptedTokenHash:attemptedHash,refreshFailure:'raccoon_refresh_pending'});
+  let next;try{next=await refreshRaccoonAuth(auth,options);}catch(error){await publishRaccoonCache(cacheFile,{sourceHash,attemptedTokenHash:attemptedHash,refreshFailure:error.code??'raccoon_refresh_unconfirmed'});throw error;}
+  await publishRaccoonCache(cacheFile,{sourceHash,auth:next});
+  return credential(next,true);
+ }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
+}
+export async function resolveRaccoonNativeAuth(file=defaultRaccoonAuthPath(),options={}){
+ const key=resolve(file)+'|'+(options.cacheFile??'default');if(raccoonRefreshFlights.has(key))return raccoonRefreshFlights.get(key);
+ const pending=loadRaccoonRefreshed(file,options);raccoonRefreshFlights.set(key,pending);try{return await pending;}finally{raccoonRefreshFlights.delete(key);}
+}

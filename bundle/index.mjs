@@ -13,6 +13,7 @@ import {projectRoot} from '../src/config.mjs';
 import {rememberSecret,errorView} from '../src/util.mjs';
 import {thinkingMetadata} from '../src/reasoning.mjs';
 import {createModelRefresh} from './model-refresh.mjs';
+import {gatewayRequestPolicy} from './request-policy.mjs';
 export const name='dsh-ai-credit-gateway';
 export const inject=['llm'];
 export const Config=z.object({configFile:z.string().default(process.env.AI_CREDIT_CONFIG??join(projectRoot,'config.local.json'))});
@@ -23,12 +24,12 @@ async function diagnostic(message){try{const dir=join(process.env.LOCALAPPDATA??
 export function createGatewayAdapter({runtime,models,resolveAttachments}) {
   let current=models,modelFingerprint=JSON.stringify(models);
   const buildModels=()=>current.map(m=>({id:m.id,name:m.name,api:'openai-completions',provider:providerId,baseUrl:runtime.baseUrl+'/v1',input:m.capabilities.multimodal?['text','image']:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:m.contextWindow,maxTokens:m.maxTokens,...thinkingMetadata(m)}));
-  const base=createProvider({id:providerId,name:'星桥 AI 网关',auth:{apiKey:{name:'Private gateway shim',async resolve({credential}){return credential?.key?{auth:{apiKey:credential.key},source:'loopback'}:undefined}}},models:buildModels(),api:openAICompletionsApi()});
+  const base=createProvider({id:providerId,name:'AI网关',auth:{apiKey:{name:'Private gateway shim',async resolve({credential}){return credential?.key?{auth:{apiKey:credential.key},source:'loopback'}:undefined}}},models:buildModels(),api:openAICompletionsApi()});
   const provider={...base,getModels:buildModels};
-  const profile={provider:providerId,displayName:'星桥 AI 网关',streamIdleTimeoutMs:180000,retryPolicy:resolveRetryPolicy(undefined,'ai-credit retry policy'),configuredMaxTokens:new Map(),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
+  const profile={provider:providerId,displayName:'AI网关',...gatewayRequestPolicy(runtime,current),retryPolicy:resolveRetryPolicy(undefined,'ai-credit retry policy'),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
   let profiles=new Map([[providerId,profile]]);
   const adapter=new PiAiAdapter({profiles:()=>profiles,auth:inertAuth,resolveApiKey:async()=>runtime.key,...(resolveAttachments?{resolveAttachments}:{})});
-  return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;current=models;modelFingerprint=next;profiles=new Map([[providerId,profile]]);return true}};
+  return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;current=models;modelFingerprint=next;Object.assign(profile,gatewayRequestPolicy(runtime,current));profiles=new Map([[providerId,profile]]);return true}};
 }
 export async function createBundleRuntime(configFile,_options={}) {
   // ELECTRON_RUN_AS_NODE can hide process.versions.electron. Never fork execPath
@@ -59,7 +60,7 @@ export function apply(ctx,config) {
     const initial=(await stack.service.router.models()).data;
     const gateway=createGatewayAdapter({runtime:stack.runtime,models:initial,resolveAttachments:()=>ctx.get('attachments')});
     adapterHandle=ctx.llm.registerAdapter([providerId],gateway.adapter);
-    directoryHandle=ctx.llm.registerConfigurableProviders([{provider:providerId,displayName:'星桥 AI 网关',settingsNs,settingsPath:[],declared:false}]);
+    directoryHandle=ctx.llm.registerConfigurableProviders([{provider:providerId,displayName:'AI网关',settingsNs,settingsPath:[],declared:false}]);
     discoveryHandle=ctx.llm.registerModelDiscovery(settingsNs,async()=> (await stack.service.router.models()).data.map(m=>({id:m.id,name:m.name,contextWindow:m.contextWindow,maxTokens:m.maxTokens,inputModalities:m.capabilities.multimodal?['text','image']:['text']})));
     modelRefresh=createModelRefresh({initialModels:initial,
       load:async signal=>(await stack.service.router.models({signal})).data,

@@ -1,7 +1,8 @@
 import {desktopSseResponse} from './provider-sse.mjs';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rename,open,unlink} from 'node:fs/promises';
 import {homedir} from 'node:os';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
+import {randomBytes} from 'node:crypto';
 import {AppError,dayIn,hash,redact,rememberSecret} from './util.mjs';
 
 // Cline account API adapter (read + faithful OpenAI-compatible chat passthrough).
@@ -35,18 +36,60 @@ export const clineDescriptor = Object.freeze({
 });
 
 export const defaultClineCredentialFile = () => join(homedir(), '.cline', 'data', 'settings', 'providers.json');
+export const CLINE_REFRESH_URL=CLINE_API_ORIGIN+'/api/v1/auth/refresh';
+const clineRefreshFlights=new Map();
+const clineExpiry=value=>typeof value==='number'&&Number.isFinite(value)?(value<1e12?value*1000:value):typeof value==='string'?Date.parse(value):NaN;
+function clineClaims(token){try{return JSON.parse(Buffer.from(String(token).replace(/^workos:/i,'').split('.')[1],'base64url').toString('utf8'));}catch{return {};}}
 
-async function loadClineSecret(file) {
-  let data;
-  try { data = JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, '')); }
+export async function refreshClineAuth(auth,{fetchImpl=fetch,signal,now=Date.now()}={}) {
+ if(typeof auth?.refreshToken!=='string'||!auth.refreshToken)throw new AppError('Cline 续期凭据缺失',401,'cline_refresh_missing');
+ rememberSecret(auth.refreshToken);const active=signal??AbortSignal.timeout(30000);let response;
+ try{response=await fetchImpl(CLINE_REFRESH_URL,{method:'POST',redirect:'error',signal:active,headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:auth.refreshToken,grantType:'refresh_token'})});}
+ catch{throw new AppError('Cline 续期请求未确认；未自动重试',503,'cline_refresh_unconfirmed');}
+ const data=await readBoundedJson(response,active);
+ if(!response.ok)throw new AppError(`Cline 官方续期失败 (HTTP ${response.status})`,response.status,'cline_refresh_failed');
+ const d=data?.data;let token=d?.accessToken;
+ if(data?.success!==true||typeof token!=='string'||!token||/[\r\n]/.test(token))throw new AppError('Cline 续期响应格式错误',502,'cline_refresh_invalid');
+ if(String(auth.accessToken).startsWith('workos:')&&!token.startsWith('workos:'))token='workos:'+token;
+ const oldSub=clineClaims(auth.accessToken).sub,newSub=clineClaims(token).sub;
+ if(oldSub&&newSub&&oldSub!==newSub)throw new AppError('Cline 续期身份不一致',401,'cline_refresh_identity_mismatch');
+ let expiresAt=clineExpiry(d.expiresAt);if(!Number.isFinite(expiresAt)){const exp=clineClaims(token).exp;if(typeof exp==='number'&&Number.isFinite(exp))expiresAt=exp*1000;}
+ const refreshToken=d.refreshToken??auth.refreshToken;
+ if(!(expiresAt>now)||typeof refreshToken!=='string'||!refreshToken)throw new AppError('Cline 续期响应缺少有效期限',502,'cline_refresh_invalid');
+ rememberSecret(token);rememberSecret(refreshToken);
+ return {...auth,accessToken:token,refreshToken,expiresAt};
+}
+
+async function cachedClineAuth(file,original,sourceHash,options={}) {
+ const cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??homedir(),'AI Credit Gateway','private-cache',file===defaultClineCredentialFile()?'cline-oauth.json':'cline-'+hash(file).slice(0,16)+'.json');
+ let cache;
+ try{cache=JSON.parse(await readFile(cacheFile,'utf8'));if(cache.sourceHash!==sourceHash)cache=null;}catch(error){if(error.code==='ENOENT')cache=null;else throw new AppError('Cline 私有续期缓存需核验',409,'cline_refresh_cache_invalid');}
+ const now=options.now??Date.now();let auth=cache?.accessToken?{...original,...cache}:original;
+ if(!options.allowRefresh)return clineExpiry(auth?.expiresAt)>now?auth:original;
+ if(cache?.refreshFailure)throw new AppError('Cline 上次续期未确认；等待本机登录态更新',401,'cline_refresh_needs_login');
+ if(clineExpiry(auth?.expiresAt)>now+60000||!auth?.refreshToken)return auth;
+ await mkdir(dirname(cacheFile),{recursive:true});let lock;
+ try{lock=await open(cacheFile+'.lock','wx',0o600);}catch{throw new AppError('Cline 续期正在处理或需核对上次结果',409,'cline_refresh_pending');}
+ try{
+  // A different process can publish between the initial cache read and lock acquisition.
+  let latest;try{latest=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw new AppError('Cline 私有续期缓存需核验',409,'cline_refresh_cache_invalid');}
+  if(latest?.sourceHash===sourceHash){
+   if(latest.refreshFailure)throw new AppError('Cline 上次续期未确认；等待本机登录态更新',401,'cline_refresh_needs_login');
+   if(latest.accessToken)auth={...original,...latest};
+   if(clineExpiry(auth?.expiresAt)>now+60000)return auth;
+  }
+  let refreshed;try{refreshed=await refreshClineAuth(auth,options);}catch(error){await writeFile(cacheFile,JSON.stringify({...auth,sourceHash,refreshFailure:error.code??'cline_refresh_unconfirmed'}),{mode:0o600});throw error;}
+  // Identity/expiry validation precedes publication. Original application credentials remain untouched.
+  const temp=cacheFile+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify({...refreshed,sourceHash}),{mode:0o600});await rename(temp,cacheFile);return refreshed;
+ }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
+}
+
+async function loadClineSecret(file,options={}) {
+  let data,source;
+  try { source=await readFile(file,'utf8');data = JSON.parse(source.replace(/^\uFEFF/, '')); }
   catch (error) { throw new AppError(error.code === 'ENOENT' ? '未找到本机 Cline 登录配置' : 'Cline 本机配置无法解析', 401, 'cline_credential_unavailable'); }
   let auth = data?.providers?.cline?.settings?.auth ?? (data?.accessToken ? data : null);
-  if(file === defaultClineCredentialFile()) {
-   try { const cache=JSON.parse(await readFile(join(process.env.LOCALAPPDATA??homedir(),'AI Credit Gateway','private-cache','cline-oauth.json'),'utf8'));
-    const sourceHash=hash(await readFile(file,'utf8'));
-    if(cache.sourceHash===sourceHash && cache.expiresAt>Date.now() && cache.accessToken)auth={...auth,...cache};
-   } catch { /* no matching gateway-owned cache: preserve source credential */ }
-  }
+  auth=await cachedClineAuth(file,auth,hash(source),options);
   const token = typeof auth?.accessToken === 'string' ? auth.accessToken.trim() : '';
   if (!token || /[\r\n]/.test(token)) throw new AppError('本机 Cline 未登录或凭据不可用', 401, 'cline_credential_missing');
   rememberSecret(token);
@@ -54,7 +97,8 @@ async function loadClineSecret(file) {
   const segmentCount = jwtToken.split('.').length;
   let issuer = null; let subject = null;
   if (segmentCount === 3) { try { const claims = JSON.parse(Buffer.from(jwtToken.split('.')[1], 'base64url').toString('utf8')); issuer = claims.iss ?? null; subject = typeof claims.sub === 'string' ? claims.sub : null; } catch { issuer = null; } }
-  const expiresAt = Number.isFinite(auth?.expiresAt) ? new Date(auth.expiresAt).toISOString() : null;
+  const expiry=clineExpiry(auth?.expiresAt);
+  const expiresAt = Number.isFinite(expiry) ? new Date(expiry).toISOString() : null;
   // Private credential: carries the token plus non-secret metadata. principal is a one-way digest of the
   // stable subject, so a re-issued token keeps the same binding and no account id ever leaves memory.
   return {
@@ -82,10 +126,12 @@ export async function readClineLocalCredential({file = defaultClineCredentialFil
 }
 
 // Contract entry point: the private credential stays in memory and is handed to health/models/chat.
-export async function resolveClineCredential(account = {}, config = {}) {
+export async function resolveClineCredential(account = {}, config = {}, options={}) {
   const explicit = account?.credentials?.file;
   const file = explicit && explicit !== 'auto' ? (typeof config?.path === 'function' ? config.path(explicit) : explicit) : defaultClineCredentialFile();
-  return loadClineSecret(file);
+  if(clineRefreshFlights.has(file))return clineRefreshFlights.get(file);
+  const pending=loadClineSecret(file,{...options,allowRefresh:options.refresh!==false});clineRefreshFlights.set(file,pending);
+  try{return await pending}finally{clineRefreshFlights.delete(file);}
 }
 
 // Both call styles work: contract style models(credential, options) and the legacy options bag {credentialFile}.
@@ -97,7 +143,8 @@ async function credentialOf(first, options) {
 
 function clineEndpoint(url) {
   const target = new URL(url);
-  if (target.origin !== CLINE_API_ORIGIN || target.username || target.password || target.search || target.hash || !CLINE_PATHS.has(target.pathname))
+  const balancePath = /^\/api\/v1\/users\/[A-Za-z0-9_-]{1,160}\/balance$/.test(target.pathname);
+  if (target.origin !== CLINE_API_ORIGIN || target.username || target.password || target.search || target.hash || (!CLINE_PATHS.has(target.pathname) && !balancePath))
     throw new AppError('Cline 适配器仅连接官方固定端点', 400, 'cline_endpoint_invalid');
   return target;
 }
@@ -137,9 +184,19 @@ async function readBoundedJson(response, signal) {
   } finally { signal?.removeEventListener('abort', cancel); await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
-// Balance/credits are rendered by app.cline.bot; no callable endpoint was confirmed, so nothing is invented.
-export function clineBalance() {
-  return {value:null,unit:'credits',parts:[],note:'已认证 users/me 未返回额度字段；未估算余额',status:'unknown',reason:'identity_response_has_no_credits',source:'https://api.cline.bot/api/v1/users/me'};
+// Official VSCode display pipeline: getUserCredits divides raw balance by 100;
+// StyledCreditDisplay -> formatCreditsBalance divides that result by 10,000.
+// This is account credits, not USD, daily rewards, or subscription usage remaining.
+export function clineBalance(data, userId) {
+  const base = {value:null,unit:'credits',parts:[],status:'unknown',reason:'balance_not_fetched',
+    note:'账号余额待获取；未估算剩余',source:'https://api.cline.bot/api/v1/users/{authenticated-user-id}/balance'};
+  if (data === undefined) return base;
+  const row = data?.data;
+  if (data?.success !== true || !row || row.userId !== userId || typeof row.balance !== 'number' || !Number.isFinite(row.balance))
+    throw new AppError('Cline 余额响应格式或账号关联不符',502,'cline_balance_schema');
+  return {...base,value:row.balance / 1000000,status:'known',reason:null,
+    rawValue:row.balance,rawUnit:'api_balance',displayDivisor:1000000,
+    note:'官方账号 credits；按官方客户端完整显示链换算，不是每日签到奖励或订阅剩余量'};
 }
 
 // Cline has no sign-in reward concept in the official docs or the shipped client.
@@ -156,20 +213,33 @@ export async function clineHealth(first, options = {}) {
     accountPresent: false,
     checkinSupported: false,
     supportsCheckin: false,
-    capabilities: {checkin: false, inference: true, balance: false},
+    capabilities: {checkin: false, inference: true, balance: true},
     checkin: clineCheckin(),
     balance: clineBalance(),
     billingIdentity: 'cline:' + secret.principal,
   };
-  // An already-expired local token is reported as such instead of being dressed up as 'authenticated'.
-  // Live evidence: this account's WorkOS access token expired 2026-10-11T05:08:01Z and every authenticated
-  // call then answered HTTP 401 (see docs/provider-cline.md); no doomed round trip is attempted here.
+  // Report an already-expired local token explicitly; never infer authentication from the public catalog.
   if (view.expired === true) return {...base, status: 'credential_expired', reason: 'credential_expired'};
   const data = await clineFetch(`${CLINE_API_ORIGIN}/api/v1/users/me`, {token: secret.token, ...rest});
+  const authenticated = data?.success === true && typeof data?.data?.id === 'string' && Boolean(data.data.id);
+  let balance = base.balance;
+  if (authenticated) {
+    try {
+      const id = data.data.id;
+      if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new AppError('Cline 账号关联格式错误',502,'cline_balance_schema');
+      const payload = await clineFetch(`${CLINE_API_ORIGIN}/api/v1/users/${encodeURIComponent(id)}/balance`, {token:secret.token,...rest});
+      balance = clineBalance(payload,id);
+    } catch (error) {
+      if (error?.code === 'request_cancelled') throw error;
+      balance = {...base.balance,reason:error?.code ?? 'cline_balance_unavailable',
+        note:'账号已认证；余额接口本次未返回可验证结果',httpStatus:Number.isInteger(error?.status)?error.status:null};
+    }
+  }
   return {
     ...base,
-    status: data?.success === true ? 'authenticated' : 'unknown',
-    accountPresent: Boolean(data?.data?.id),
+    balance,
+    status: authenticated ? 'authenticated' : 'unknown',
+    accountPresent: authenticated,
   };
 }
 
@@ -184,9 +254,7 @@ function catalogRow(row) {
     maxTokens,
     tools: Array.isArray(row?.supported_parameters) && row.supported_parameters.includes('tools'),
     multimodal: inputModalities.some(modality => modality !== 'text'),
-    // Verified capacity only: an unconfirmed window/max keeps null and stays uncallable. No generation has
-    // been completed from this module yet (live attempt answered 401, expired local token), so callable means
-    // "capacity is officially declared and the transport is implemented" - not "observed working".
+    // Unknown capacity stays null/unpublished. Catalog declaration and observed generation remain separate.
     callable: contextWindow !== null && maxTokens !== null,
     verification: 'official_catalog',
     generationVerified: row?.id === 'liquid/lfm-2.5-2.6b:free',

@@ -65,3 +65,11 @@ linguo2625469/workbuddy2api-panel，MIT，commit d66384d9e3d69655f799d7d8f2e5fba
 - [jsongo/buddy-proxy](https://github.com/jsongo/buddy-proxy)，MIT，提交 `cab81ff4fc5eaf4d64dffe1ea560a6e23972af3f`：Qoder COSY 签名/信封与 Buddy 端点协议移植为 Node 实现；固定域名、本机身份读取、错误分类、余额与活动隔离、取消及测试由本工程集成。完整许可证见 `vendor/provider-buddy-proxy.LICENSE`。
 - CodeArts 与 Lobster 的参考及代码移植归属、固定提交、许可证位置见 [provider-attributions.md](docs/provider-attributions.md)。官方桌面客户端本身不随公共仓库分发。
 - NVIDIA 官方 API 文档和目录用于能力与策略核验，独立实现，未打包模型权重或平台客户端。
+
+## Loomy 与小浣熊生产接口校正
+
+- https://github.com/xxhhlk/raccoon2api/tree/ec98df33de9decae3b2e1ea683df1a67196f4fbe — MIT，完整许可证保留 `vendor/raccoon2api/LICENSE`。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
+- https://github.com/Patrick130306/loomy2api/tree/cf8608d9765b417374dce282c7e53d7932c02d39 — MIT，完整许可证保留 `vendor/loomy2api/LICENSE`。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
+- https://github.com/rockswang/wild-work/tree/fc62c2c947c1382482973089f05e6c7c1554f6d9 — README 声明 MIT，但该提交没有独立 LICENSE 文件；仅作为协议交叉参考，未复制其代码。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
+
+Loomy 旧测试环境的登录失效结论已纠正；小浣熊 Electron Cookie 为空不代表原生 Bearer 会话缺失。公开产物不含本机登录、设备标识或账户具体积分。

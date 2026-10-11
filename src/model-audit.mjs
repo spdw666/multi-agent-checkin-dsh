@@ -12,9 +12,10 @@ export async function saveAudit(service,report){
  const esc=s=>String(s??'').replaceAll('|','/').replaceAll('\n',' ');
  await writeFile(join(dir,'模型全量体检.md'),'# 模型全量体检\n\n更新：'+report.updatedAt+'；进度 '+report.completed+'/'+report.total+'；状态 '+report.status+'。\n\n四项：普通回复、流式、工具调用、工具结果回传。超时/断连标记待复测，不当成永久不可用；未提供调用通道的条目单列。\n\n|平台|模型|普通|流式|工具|回传|结果|原因|\n|---|---|---|---|---|---|---|---|\n'+report.results.map(r=>'|'+[r.upstreamId,r.model,...['ordinary','stream','tools','roundtrip'].map(k=>{const t=r.tests?.find(t=>t.stage===k);return t?t.ok?'通过':t.status==='unsupported'?'未声明':'失败':'—'}),auditLabel(r),r.reason].map(esc).join('|')+'|').join('\n')+'\n','utf8');
 }
-export function auditStageTimeout(upstream){return upstream.kind==='nvidia'?120000:45000;}
-export async function testModel(service,u,m,{timeoutMs=auditStageTimeout(u)}={}){
- const result={upstreamId:u.id,platform:u.kind,model:m.id,name:m.name,timeoutMs,...(m.auditReasoningEffort?{auditReasoningEffort:m.auditReasoningEffort}:{}),startedAt:new Date().toISOString(),tests:[]};
+export function auditStageTimeout(upstream,model){return upstream.kind==='nvidia'?(['moonshotai/kimi-k3','deepseek-ai/deepseek-v4.1-flash'].includes(model?.id)?600000:120000):45000;}
+export function auditRoundtripMatches(text){const value=String(text??'').trim();return /^(?:5|`5`|\*\*5\*\*|\*5\*|__5__|_5_)$/.test(value)||/^```(?:text|plaintext|json)?[ \t]*\r?\n[ \t]*5[ \t]*\r?\n```$/i.test(value);}
+export async function testModel(service,u,m,{timeoutMs=auditStageTimeout(u,m)}={}){
+ const result={upstreamId:u.id,platform:u.kind,model:m.id,name:m.name,timeoutMs,...(m.auditReasoningEffort?{auditReasoningEffort:m.auditReasoningEffort}:{}),...(m.auditToolChoice?{auditToolChoice:m.auditToolChoice}:{}),startedAt:new Date().toISOString(),tests:[]};
  if(m.callable===false)return {...result,status:'unavailable',reason:m.unavailableReason};
  const routeId='audit/model',config={value:{...service.config.value,routes:[{id:routeId,targets:[{upstreamId:u.id,model:m.id}]}]}},router=new Router(config,service.platforms,{ledger:service.ledger});
  const user={role:'user',content:'Reply with only AUDIT_OK.'},tool={type:'function',function:{name:'audit_add',description:'Adds two numbers locally',parameters:{type:'object',properties:{a:{type:'number'},b:{type:'number'}},required:['a','b']}}};
@@ -24,18 +25,18 @@ export async function testModel(service,u,m,{timeoutMs=auditStageTimeout(u)}={})
   if(stage==='roundtrip'&&!toolMessage){result.tests.push({stage,ok:false,status:'skipped',reason:'前一步未产生有效工具调用'});continue;}
   const request={model:routeId,messages:[user],max_tokens:Math.min(4096,m.maxTokens??4096)};
   if(m.auditReasoningEffort)request.reasoning_effort=m.auditReasoningEffort;
-  if(stage==='tools'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3. You must call the tool, not calculate it yourself.'}];request.tools=[tool];request.tool_choice={type:'function',function:{name:'audit_add'}};}
+  if(stage==='tools'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3. You must call the tool, not calculate it yourself.'}];request.tools=[tool];request.tool_choice=m.auditToolChoice==='auto'?'auto':{type:'function',function:{name:'audit_add'}};}
   if(stage==='roundtrip'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3.'},toolMessage,{role:'tool',tool_call_id:toolMessage.tool_calls[0].id,content:'5'},{role:'user',content:'The local tool returned 5. Reply with only 5; do not call another tool.'}];request.tools=[tool];request.tool_choice='none';}
   const start=Date.now();try{
    let message;if(stage==='stream'){let text='',finished=false,chunks=0;for await(const c of router.chat({...request,stream:true},AbortSignal.timeout(timeoutMs),{source:"audit"})){text+=c.choices?.map(c=>c.delta?.content??'').join('')??'';finished||=c.choices?.some(c=>c.finish_reason!=null);chunks++;}if(!text.trim()||!finished)throw Error('流式没有完整文本或结束事件');message={content:text};result.tests.push({stage,ok:true,elapsedMs:Date.now()-start,chunks,text:text.slice(0,160)});continue;}
    const response=await collectChat(router.chat(request,AbortSignal.timeout(timeoutMs),{source:"audit"}));message=response.choices?.[0]?.message;
    if(stage==='tools'){const call=message?.tool_calls?.[0];if(call?.function?.name!=='audit_add')throw Error('模型未返回约定的结构化工具调用');const args=JSON.parse(call.function.arguments);if(args.a!==2||args.b!==3)throw Error('工具参数与输入不一致');toolMessage=message;}
    else if(!message?.content?.trim())throw Error('模型返回空文本');
-   if(stage==='roundtrip'&&!/5/.test(message.content))throw Error('回传结果未得到确认');
+   if(stage==='roundtrip'&&!auditRoundtripMatches(message.content))throw Error('回传结果未得到确认');
    result.tests.push({stage,ok:true,elapsedMs:Date.now()-start,...(stage==='tools'?{tool:'audit_add',args:{a:2,b:3}}:{text:message.content.slice(0,160)})});
   }catch(e){const v=errorView(e);result.tests.push({stage,ok:false,elapsedMs:Date.now()-start,error:v});}
  }
- const unsupported=result.tests.filter(t=>t.status==='unsupported'),bad=result.tests.filter(t=>!t.ok&&t.status!=='unsupported'),hard=bad.find(t=>t.error?.status>=400&&t.error.status<500&&![408,429,499].includes(t.error.status));
+ const unsupported=result.tests.filter(t=>t.status==='unsupported'),bad=result.tests.filter(t=>!t.ok&&t.status!=='unsupported'),hard=bad.find(t=>t.error?.status>=400&&t.error.status<500&&![408,429,499].includes(t.error.status)&&!(t.error.status===400&&t.error.code==='codearts_chat_transient'));
  result.capabilityStatus=unsupported.length?(result.tests.slice(0,2).every(t=>t.ok)?'chat_only':'tools_undeclared'):'full';result.status=!bad.length?(unsupported.length?'partial':'passed'):hard?'failed':result.tests.slice(0,2).every(t=>t.ok)?'partial':'uncertain';result.reason=[...bad,...unsupported].map(t=>t.stage+': '+(t.reason??t.error?.message??'未通过')).join('; ');result.finishedAt=new Date().toISOString();return result;
 }
 const jobKey=r=>r.upstreamId+'\0'+r.model;

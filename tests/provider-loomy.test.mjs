@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   descriptor, loomyProvider, loomyResolve, loomyCredentialView, readLoomySession, loomyEnvPresence,
   loomyFetch, loomyRequest, loomyIdentity, loomyPetWork, loomyStatus, loomyClaim, loomyHealth,
-  loomyModels, loomyChat, transformLoomySse, LOOMY_POINTS_ORIGIN, LOOMY_MODEL_FAMILIES, LOOMY_SUCCESS_CODES,
+  loomyModels, loomyPointBalance, loomyChat, transformLoomySse, LOOMY_POINTS_ORIGIN, LOOMY_MODEL_FAMILIES, LOOMY_SUCCESS_CODES,
 } from '../src/provider-loomy.mjs';
 
 const SESSION_TOKEN = 'fixture-session-token-0123456789abcdef';
@@ -26,7 +26,7 @@ test('loomy descriptor: real daily mechanic (pet-work) is declared, session auth
   assert.equal(descriptor.authKind, 'session_token');
   assert.equal(descriptor.checkinSupported, true);
   assert.deepEqual(descriptor.checkinTasks, ['pet-work', 'daily-checkin']);
-  assert.ok(descriptor.underlyingProvider.includes('voicecloud'));
+  assert.ok(descriptor.underlyingProvider.includes('production'));
 });
 
 test('readLoomySession: parses auth-session.json; principal stable; no raw id/phone leaves', async () => {
@@ -79,12 +79,12 @@ test('provider export: full unified surface', () => {
 test('loomy fetch: fixed origin/prefix guard + injection requirement', async () => {
   const spy = async () => jsonResponse({});
   await assert.rejects(() => loomyFetch(spy, '/etc/passwd', {}), e => e.code === 'loomy_endpoint_invalid');
-  await assert.rejects(() => loomyFetch(spy, 'https://evil.example/loomy/integration/api/v1/user/identity', {}), e => e.code === 'loomy_endpoint_invalid');
-  await assert.rejects(() => loomyFetch(undefined, '/loomy/integration/api/v1/user/identity', {}), e => e.code === 'loomy_fetch_not_injected');
+  await assert.rejects(() => loomyFetch(spy, 'https://evil.example/api/v1/user/identity', {}), e => e.code === 'loomy_endpoint_invalid');
+  await assert.rejects(() => loomyFetch(undefined, '/api/v1/user/identity', {}), e => e.code === 'loomy_fetch_not_injected');
   let seen = null;
   const fetchImpl = async (url, init) => { seen = {url: String(url), headers: init.headers}; return ok({}); };
-  await loomyFetch(fetchImpl, '/loomy/integration/api/v1/user/identity', {token: 't'});
-  assert.ok(seen.url.startsWith(LOOMY_POINTS_ORIGIN + '/loomy/integration/'));
+  await loomyFetch(fetchImpl, '/api/v1/user/identity', {token: 't'});
+  assert.ok(seen.url.startsWith(LOOMY_POINTS_ORIGIN + '/api/'));
   assert.equal(seen.headers.token, 't'); // official points-service token header convention
 });
 
@@ -152,7 +152,7 @@ test('claim: submits exactly the three official fields; re-reads snapshot; succe
   };
   const r = await loomyClaim(SECRET, 'pet-work', {fetchImpl});
   assert.equal(posts.length, 1);
-  assert.ok(posts[0].url.endsWith('/loomy/integration/api/v1/pet-work/rewards'));
+  assert.ok(posts[0].url.endsWith('/api/v1/pet-work/rewards'));
   assert.deepEqual(Object.keys(posts[0].body).sort(), ['businessDate', 'configVersion', 'reachedTierId']);
   assert.equal(posts[0].body.businessDate, '2026-10-11');
   assert.equal(r.submitted, true);
@@ -224,9 +224,9 @@ test('chat: JSON envelope error inside 200 becomes AppError; SSE passes through 
   const bizErr = async () => jsonResponse({code: '100002', desc: '登录已失效'});
   await assert.rejects(() => loomyChat(null, SECRET, {model: 'm', messages: [], stream: false}, undefined, {fetchImpl: bizErr}), e => e.code === 'loomy_session_expired');
   const chunks = ['data: {"choices":[{"delta":{"content":"\u4f60\u597d"}}]}\n\ndata: [DONE]\n\n'];
-  const sse = async () => new Response(new ReadableStream({start(c){const enc = new TextEncoder(); for (const chunk of chunks) c.enqueue(enc.encode(chunk)); c.close();}}), {status: 200, headers: {'content-type': 'text/event-stream'}});
+  const sse = async (url) => String(url).endsWith('/models')?jsonResponse({data:[{id:'m',type:'chat',context_length:1000000,max_output_tokens:4096}]}):new Response(new ReadableStream({start(c){const enc = new TextEncoder(); for (const chunk of chunks) c.enqueue(enc.encode(chunk)); c.close();}}), {status: 200, headers: {'content-type': 'text/event-stream'}});
   const {response, verified} = await loomyChat(null, SECRET, {model: 'm', messages: [], stream:true}, undefined, {fetchImpl: sse});
-  assert.equal(verified, 'unverified_live');
+  assert.equal(verified, 'official_production_protocol');
   const text = await response.text();
   assert.ok(text.includes('"content":"\u4f60\u597d"'));
   assert.ok(text.includes('data: [DONE]'));
@@ -247,3 +247,12 @@ test('env presence: legacy encrypted envelope detected without decrypt', async (
   const missing = await loomyEnvPresence({envFilePath: 'x', readFileImpl: async () => { throw new Error('ENOENT'); }});
   assert.equal(missing.present, false);
 });
+
+const productionCatalog={object:'list',data:[{id:'official',type:'chat',context_length:1048576,max_output_tokens:384000,capabilities:{function_calling:true,vision:true},reasoning_efforts:['low','high'],default_reasoning_effort:'low'}]};
+test('production origin and session headers match official runtime, not test environment',async()=>{await loomyFetch(async(url,init)=>{assert.equal(url,'https://loomyad.xunfei.cn/api/v1/models');assert.equal(init.headers.authorization,'Bearer fixture');assert.equal(init.headers.token,'fixture');assert.match(init.headers.traceparent,/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);assert.ok(init.headers['loomy-version']);assert.equal(init.redirect,'error');return jsonResponse(productionCatalog);},'/api/v1/models',{token:'fixture'});});
+test('production catalog retains precise capability metadata',async()=>{const rows=await loomyModels(SECRET,{fetchImpl:async()=>jsonResponse(productionCatalog)});assert.equal(rows[0].contextWindow,1048576);assert.equal(rows[0].maxTokens,384000);assert.equal(rows[0].tools,true);assert.deepEqual(rows[0].reasoning.supportedEfforts,['low','high']);});
+test('personal balance uses availableBalance field not a calculated sum or team balance',async()=>{const b=await loomyPointBalance(SECRET,{fetchImpl:async()=>ok({balance:5000,dailyBalance:4000,availableBalance:8999})});assert.equal(b.value,8999);assert.equal(b.parts[1].value,4000);const unknown=await loomyPointBalance(SECRET,{fetchImpl:async()=>ok({balance:0})});assert.equal(unknown.value,null);assert.equal(unknown.parts[0].value,0);});
+test('daily quota observes official data without any claim POST',async()=>{let n=0;const s=await loomyStatus(SECRET,'daily-quota',{fetchImpl:async(url,init)=>{n++;assert.equal(init.method,'GET');return ok({availableBalance:5000,dailyBalance:3000});}});assert.equal(s.observed,true);assert.equal(s.details.value,5000);const r=await loomyClaim(SECRET,'daily-quota');assert.equal(r.submitted,false);assert.equal(n,1);});
+test('real nested pet snapshot is observable but not a fabricated reward eligibility',async()=>{const fetchImpl=async()=>ok({enabled:true,businessDate:'2026-10-11',config:{version:'pet-work-v1',tiers:[{tierId:'tier_1'}]},status:{earnedPointsToday:0,rewardedTierIds:[],dailyRewardCapped:false}});const s=await loomyStatus(SECRET,'pet-work',{fetchImpl});assert.equal(s.observed,true);assert.equal(s.claimable,false);assert.equal(s.configVersion,'pet-work-v1');assert.equal(s.details.earnedPointsToday,0);assert.equal((await loomyClaim(SECRET,'pet-work',{fetchImpl})).submitted,false);});
+test('chat rejects models outside the live catalog',async()=>{await assert.rejects(loomyChat({},SECRET,{model:'unknown'},undefined,{fetchImpl:async()=>jsonResponse(productionCatalog)}),{code:'loomy_model_unknown'});});
+test('chat stream business errors remain errors after normalizer integration',async()=>{await assert.rejects(loomyChat({},SECRET,{model:'official'},undefined,{fetchImpl:async(url)=>url.endsWith('/models')?jsonResponse(productionCatalog):new Response('data: {"code":"100002","desc":"expired"}\n\n',{headers:{'content-type':'text/event-stream'}})}),{code:'loomy_session_expired'});});

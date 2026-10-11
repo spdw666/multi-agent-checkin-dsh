@@ -4,6 +4,10 @@ import {Readable} from 'node:stream';
 import {nvidiaFreeCatalog,mergeNvidiaCatalog,nvidiaModelMetadata} from './nvidia-catalog.mjs';
 
 export const NVIDIA_API_BASE='https://integrate.api.nvidia.com/v1';
+// Hosted Kimi took 235s to headers; actual DeepSeek agent payloads exhausted 180s.
+// Both slow endpoints get a bounded startup allowance, without altering their payload.
+// A larger bounded startup budget is model-specific; idle streams still time out.
+export function nvidiaRequestTimeout(model){return ['moonshotai/kimi-k3','deepseek-ai/deepseek-v4.1-flash'].includes(model)?600000:180000;}
 const quotaCache=new Map(),authHistory=new Map(),proxyAgents=new Map(),cooldowns=new Map(),TTL=300000;
 function key(c){
   const value=(typeof c?.accessToken==='string'?c.accessToken:typeof c?.apiKey==='string'?c.apiKey:'').trim();
@@ -81,16 +85,22 @@ export function nvidiaFetch(url,{method='GET',headers={},body,signal,nvidiaProxy
   if(target.origin!=='https://integrate.api.nvidia.com'||target.username||target.password||!['/v1/models','/v1/chat/completions'].includes(target.pathname)||target.search||target.hash)
     throw new AppError('NVIDIA 适配器仅连接官方固定端点',400,'nvidia_endpoint_invalid');
   const agent=agentFor(nvidiaProxyUrl);
+  let model;try{model=body===undefined?undefined:JSON.parse(body).model}catch{}
   return new Promise((resolve,reject)=>{
+    let settled=false,timer;
+    const cleanup=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort)};
+    const fail=e=>{if(settled)return;settled=true;cleanup();reject(e)};
+    const abort=()=>{const e=signal?.reason??new DOMException('Aborted','AbortError');request.destroy(e);fail(e)};
     const request=https.request(target,{method,headers,signal,agent},response=>{
-      clearTimeout(timer);response.setTimeout(180000,()=>response.destroy(new AppError('NVIDIA 响应流等待超时',504,'nvidia_timeout')));
+      if(settled){response.destroy();return}cleanup();response.setTimeout(180000,()=>response.destroy(new AppError('NVIDIA 响应流等待超时',504,'nvidia_timeout')));
       try{
         const noBody=[204,205,304].includes(response.statusCode);if(noBody)response.resume();
-        resolve(new Response(noBody?null:Readable.toWeb(response),{status:response.statusCode,headers:response.headers}));
-      }catch{response.destroy();reject(new AppError('NVIDIA 官方接口响应格式错误',502,'nvidia_invalid_response'));}
+        const result=new Response(noBody?null:Readable.toWeb(response),{status:response.statusCode,headers:response.headers});settled=true;resolve(result);
+      }catch{response.destroy();fail(new AppError('NVIDIA 官方接口响应格式错误',502,'nvidia_invalid_response'));}
     });
-    const timer=setTimeout(()=>request.destroy(new AppError('NVIDIA 响应首包等待超时',504,'nvidia_timeout')),body===undefined?30000:180000);timer.unref();
-    request.once('error',e=>{clearTimeout(timer);reject(e)});request.end(body);
+    timer=setTimeout(()=>{const e=new AppError('NVIDIA 响应首包等待超时',504,'nvidia_timeout');request.destroy(e);fail(e)},body===undefined?30000:nvidiaRequestTimeout(model));timer.unref();
+    request.once('error',fail);signal?.addEventListener('abort',abort,{once:true});
+    if(signal?.aborted){abort();return}request.end(body);
   });
 }
 function failure(status,retryAfterSeconds=null){
@@ -100,11 +110,12 @@ function failure(status,retryAfterSeconds=null){
 }
 function normalizeError(error,signal){
   if(error instanceof AppError)return error;
-  if(signal?.aborted||error?.name==='AbortError')return new AppError('NVIDIA 请求已取消或超时',499,'request_cancelled');
+  if(signal?.reason?.name==='TimeoutError'||error?.name==='TimeoutError')return new AppError('NVIDIA 请求等待超过截止时间',504,'nvidia_timeout');
+  if(signal?.aborted||error?.name==='AbortError')return new AppError('NVIDIA 请求已取消',499,'request_cancelled');
   return new AppError('NVIDIA 官方接口连接失败',503,'nvidia_network_error');
 }
 async function request(c,path,{body,signal,fetchImpl=nvidiaFetch,now=Date.now()}={}){
-  const token=key(c),activeSignal=signal??AbortSignal.timeout(body===undefined?30000:180000);
+  const token=key(c),activeSignal=signal??AbortSignal.timeout(body===undefined?30000:nvidiaRequestTimeout(body?.model));
   if(activeSignal.aborted)throw normalizeError(null,activeSignal);
   const cooldown=cooldowns.get(hash(token));if(body&&cooldown>now)throw failure(429,Math.ceil((cooldown-now)/1000));
   let response;
