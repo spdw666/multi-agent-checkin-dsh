@@ -24,8 +24,9 @@ export class Scheduler {
       target??=dailyPlan(now,s,jitter);plan={day,signature,at:target,jitterSeconds:jitter};this.ledger.set('schedule-plan',plan);
     }
     const last=this.ledger.get('schedule-last');
-    if(Date.now()<plan.at||last?.day===day&&last.signature===signature&&(last.complete||Date.now()-last.at<(s.retryMinutes??60)*60000))return;
-    this.running=true;try{const results=await this.claims.all();this.ledger.set('schedule-last',{day,signature,at:Date.now(),complete:results.every(r=>!['error','uncertain','busy','action_required'].includes(r.status)),results:results.map(r=>({accountId:r.accountId,task:r.task,status:r.status}))});}finally{this.running=false;}
+    const windowDue=Number.isFinite(last?.nextClaimAt)&&Date.now()>=last.nextClaimAt;
+    if(Date.now()<plan.at||last?.day===day&&last.signature===signature&&!windowDue&&(last.complete||Date.now()-last.at<(s.retryMinutes??60)*60000))return;
+    this.running=true;try{const results=await this.claims.all();const windows=results.map(r=>Date.parse(r.nextClaimAt)).filter(t=>Number.isFinite(t)&&t>Date.now());this.ledger.set('schedule-last',{day,signature,at:Date.now(),nextClaimAt:windows.length?Math.min(...windows):null,complete:results.every(r=>!['error','uncertain','busy','action_required'].includes(r.status)),results:results.map(r=>({accountId:r.accountId,task:r.task,status:r.status,nextClaimAt:r.nextClaimAt}))});}finally{this.running=false;}
   }
   start(){if(!this.stopped)return;this.stopped=false;const tick=()=>this.track(this.tick()).catch(()=>{});this.timer=setInterval(tick,30000);this.timer.unref();void this.track((async()=>{if(this.config.value.scheduler.startup){this.running=true;try{await this.claims.all();}finally{this.running=false;}}await this.tick()})()).catch(()=>{});}
   stop(){this.stopped=true;clearInterval(this.timer);return Promise.allSettled([...this.jobs]);}

@@ -59,3 +59,9 @@ linguo2625469/workbuddy2api-panel，MIT，commit d66384d9e3d69655f799d7d8f2e5fba
 - [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)：作为独立调用端进行互操作接入，参考其自定义 Provider、模型发现、凭据 helper 与工具调用契约。本仓库提供配置说明及独立的本机密钥读取 helper，不复制或打包 Hermes Agent 实现。配置说明见 [docs/hermes.md](docs/hermes.md)。
 
 以上“独立组件 / 协议参考”与本文件所列 vendor 代码复用分开记录；仅做可行性调研、尚未接入的服务不列为已集成组件。
+
+## 桌面平台协议扩展
+
+- [jsongo/buddy-proxy](https://github.com/jsongo/buddy-proxy)，MIT，提交 `cab81ff4fc5eaf4d64dffe1ea560a6e23972af3f`：Qoder COSY 签名/信封与 Buddy 端点协议移植为 Node 实现；固定域名、本机身份读取、错误分类、余额与活动隔离、取消及测试由本工程集成。完整许可证见 `vendor/provider-buddy-proxy.LICENSE`。
+- CodeArts 与 Lobster 的参考及代码移植归属、固定提交、许可证位置见 [provider-attributions.md](docs/provider-attributions.md)。官方桌面客户端本身不随公共仓库分发。
+- NVIDIA 官方 API 文档和目录用于能力与策略核验，独立实现，未打包模型权重或平台客户端。

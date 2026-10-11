@@ -5,6 +5,43 @@ import {spawn} from 'node:child_process';
 import {dirname} from 'node:path';
 import {AppError,hash} from './util.mjs';
 
+// CLIProxyAPI's OpenAI /models projection may omit its registry's token limits.
+// Exact-ID snapshot from the installed bridge's v8.0.23 source (2026-10-11):
+// https://github.com/router-for-me/CLIProxyAPI/blob/d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5/internal/registry/models/models.json
+// These are Antigravity provider limits, not similarly named direct-API limits.
+// No prefix/suffix guessing: new IDs need complete bridge metadata or review.
+const limitsSnapshotSource='CLIProxyAPI@d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5/antigravity';
+const limitsSnapshot=new Map([
+  ['claude-opus-4-6-thinking',[200000,64000]],
+  ['claude-sonnet-4-6',[200000,64000]],
+  ['gemini-3.6-flash-high',[1048576,65536]],
+  ['gemini-3.7-flash-high',[1048576,65536]],
+  ['gemini-3.8-flash-high',[1048576,65536]],
+  ['gemini-3-flash',[1048576,65536]],
+  ['gemini-pro-agent',[1048576,65535]],
+  ['gemini-3.1-pro-low',[1048576,65535]],
+  ['gpt-oss-120b-medium',[114000,32768]],
+  ['gemini-3.1-flash-lite',[1048576,65535]],
+  ['gemini-3.5-flash-lite',[1048576,65535]],
+]);
+function modelLimits(model) {
+  const known=limitsSnapshot.get(model.id);
+  const resolve=(fields,fallback)=>{
+    const field=fields.find(key=>Number.isSafeInteger(model[key])&&model[key]>0);
+    return field?{value:model[field],source:`bridge.${field}`}:{value:fallback,source:limitsSnapshotSource};
+  };
+  const context=resolve(['context_length','contextWindow','inputTokenLimit'],known?.[0]);
+  const output=resolve(['max_completion_tokens','max_output_tokens','maxTokens','outputTokenLimit'],known?.[1]);
+  // Do not publish a guessed 32K window or 4K output limit for new models. A
+  // contradictory live limit also needs review instead of overriding it silently.
+  if(!context.value||!output.value||output.value>context.value)return {
+    callable:false,metadataStatus:'limits_unknown',
+    unavailableReason:'模型容量元数据缺失或冲突；核验上下文与最大输出容量后再发布',
+  };
+  return {contextWindow:context.value,maxTokens:output.value,metadataStatus:'limits_known',
+    limitsSource:{contextWindow:context.source,maxTokens:output.source}};
+}
+
 // This adapter talks only to an account-isolated local Antigravity bridge.
 // It is not a configurable third-party API relay. OAuth stays in the bridge.
 export function antigravityBase(upstream) {
@@ -92,10 +129,10 @@ export async function antigravityModels(upstream,credential,options={}) {
   const seen=new Set();
   return data.data.filter(m=>typeof m?.id==='string'&&m.id.length>0&&m.id.length<=128&&!seen.has(m.id)&&seen.add(m.id)).map(m=>({
     id:m.id,name:m.name??m.id,tools:true,multimodal:false,
+    ...modelLimits(m),
     ...(/(?:^|[-_])image(?:[-_]|$)/i.test(m.id)?{callable:false,unavailableReason:'当前专用适配器只发布聊天模型；图片生成接口尚未接入'}:{}),
     // A catalog entry is discovery, not a successful generation or an image-input test.
     source:'antigravity-local-bridge',verification:'unverified',
-    ...(Number.isInteger(m.context_length)&&m.context_length>0?{contextWindow:m.context_length}:{}),
   }));
 }
 export async function antigravityChat(upstream,credential,input,signal,config) {

@@ -1,0 +1,1241 @@
+{
+  "schemaVersion": 1,
+  "source": "https://build.nvidia.com/models?pageSize=96&filters=nimType%3Anim_type_preview",
+  "observedAt": "2026-10-11T04:03:24.515Z",
+  "freeEndpointCount": 38,
+  "models": [
+    {
+      "id": "nvidia/kumo-tabular",
+      "name": "Kumo Tabular",
+      "buildSlug": "nvidia/kumo-tabular",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "A tabular in-context learning model for classification and regression over structured tables.",
+      "buildUrl": "https://build.nvidia.com/nvidia/kumo-tabular/build",
+      "freeEndpoint": true,
+      "category": "other",
+      "metadataSource": "https://build.nvidia.com/nvidia/kumo-tabular/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/kumo-tabular/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/body-pose",
+      "name": "3D Body Pose",
+      "buildSlug": "nvidia/body-pose",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Estimate 3D human body pose and skeleton from video input.",
+      "buildUrl": "https://build.nvidia.com/nvidia/body-pose/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/body-pose/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/body-pose/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4.1-flash",
+      "name": "deepseek-v4.1-flash",
+      "buildSlug": "deepseek-ai/deepseek-v4.1-flash",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 1048576,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "552B MoE, 8B active params with native multimodal support and lower API cost using smaller KV cache",
+      "buildUrl": "https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash/build",
+      "limitsSource": "https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 1048576,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/kumo-relational",
+      "name": "Kumo Relational",
+      "buildSlug": "nvidia/kumo-relational",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "A relational foundation model for prediction over structured, multi-table data.",
+      "buildUrl": "https://build.nvidia.com/nvidia/kumo-relational/build",
+      "freeEndpoint": true,
+      "category": "other",
+      "metadataSource": "https://build.nvidia.com/nvidia/kumo-relational/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/kumo-relational/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "z-ai/glm-5.3",
+      "name": "glm-5-3",
+      "buildSlug": "z-ai/glm-5-3",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 1024,
+      "tools": true,
+      "multimodal": false,
+      "inputModalities": [
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "753B-parameter text MoE with DeepSeek-style sparse attention, native FP8 weights, reasoning and tool calling.",
+      "buildUrl": "https://build.nvidia.com/z-ai/glm-5-3/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/z-ai/glm-5-3/build",
+      "limitsSource": "https://build.nvidia.com/z-ai/glm-5-3/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": false,
+        "inputModalities": [
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": "configured_default",
+      "outputConfigurationNote": "官方 schema 默认值 1024 作为本地保守输出配置，不代表官方最大输出",
+      "metadataStatus": "documented_context_configured_output"
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "name": "glm-5-3-flash",
+      "buildSlug": "z-ai/glm-5-3-flash",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 1024,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Multimodal 320B-total / 18B-active MoE with hybrid KDA and sparse MLA attention, native FP8 weights, reasoning and tool calling.",
+      "buildUrl": "https://build.nvidia.com/z-ai/glm-5-3-flash/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/z-ai/glm-5-3-flash/build",
+      "limitsSource": "https://build.nvidia.com/z-ai/glm-5-3-flash/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": "configured_default",
+      "outputConfigurationNote": "官方 schema 默认值 1024 作为本地保守输出配置，不代表官方最大输出",
+      "metadataStatus": "documented_context_configured_output"
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "name": "kimi-k3",
+      "buildSlug": "moonshotai/kimi-k3",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 65536,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "~2.8T hybrid KDA+MLA multimodal MoE for long-horizon coding, agentic tool use, and image understanding.",
+      "buildUrl": "https://build.nvidia.com/moonshotai/kimi-k3/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/moonshotai/kimi-k3/build",
+      "limitsSource": "https://build.nvidia.com/moonshotai/kimi-k3/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 65536,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented",
+      "reasoning": {
+        "supportedEfforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "max",
+        "alwaysEnabled": true,
+        "source": "https://docs.api.nvidia.com/nim/reference/moonshotai-kimi-k3-infer"
+      },
+      "auditReasoningEffort": "low"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "name": "nemotron-3.5-lightning-30b-a3b",
+      "buildSlug": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "tools": true,
+      "multimodal": false,
+      "inputModalities": [
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Fastest 30B A3B MoE model with leading domain accuracy for specialized agentic tasks",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": false,
+        "inputModalities": [
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 32768,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "meta/muse-glimmer-30b",
+      "name": "muse-glimmer-30b",
+      "buildSlug": "meta/muse-glimmer-30b",
+      "chat": true,
+      "contextWindow": 131072,
+      "maxTokens": 16384,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Muse Glimmer 30B is a multimodal reasoning model accepting text and images, with native tool-calling and separate reasoning output.",
+      "buildUrl": "https://build.nvidia.com/meta/muse-glimmer-30b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/meta/muse-glimmer-30b/build",
+      "limitsSource": "https://build.nvidia.com/meta/muse-glimmer-30b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 16384,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/riva-translate-4b-instruct-v2",
+      "name": "riva-translate-4b-instruct-v2",
+      "buildSlug": "nvidia/riva-translate-4b-instruct-v2",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Translation model in 37 languages with few-shots example prompts capability.",
+      "buildUrl": "https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2/build",
+      "freeEndpoint": true,
+      "category": "other",
+      "metadataSource": "https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/ising-calibration-1.5-31b",
+      "name": "ising-calibration-1.5-31b",
+      "buildSlug": "nvidia/ising-calibration-1.5-31b",
+      "chat": true,
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "tools": false,
+      "multimodal": true,
+      "inputModalities": [
+        "Image",
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "NVIDIA-Ising-Calibration-1.5 is a dense multimodal vision-language model built on Gemma 4 31B. It analyzes quantum computing calibration experiment plots and generates structured technical text.",
+      "buildUrl": "https://build.nvidia.com/nvidia/ising-calibration-1.5-31b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/nvidia/ising-calibration-1.5-31b/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/ising-calibration-1.5-31b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": true,
+        "inputModalities": [
+          "Image",
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 32768,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/nemotron-3-embed-1b",
+      "name": "nemotron-3-embed-1b",
+      "buildSlug": "nvidia/nemotron-3-embed-1b",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "1B embedding model for semantic search, retrieval, and RAG applications.",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-3-embed-1b/build",
+      "freeEndpoint": true,
+      "category": "embedding",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-3-embed-1b/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/nemotron-3-embed-1b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "poolside/laguna-xs-2.1",
+      "name": "laguna-xs-2.1",
+      "buildSlug": "poolside/laguna-xs-2.1",
+      "chat": true,
+      "contextWindow": 262144,
+      "maxTokens": 16384,
+      "tools": true,
+      "multimodal": false,
+      "inputModalities": [
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Efficient 33B MoE for local, long-horizon agentic coding and terminal tasks",
+      "buildUrl": "https://build.nvidia.com/poolside/laguna-xs-2.1/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/poolside/laguna-xs-2.1/build",
+      "limitsSource": "https://build.nvidia.com/poolside/laguna-xs-2.1/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": false,
+        "inputModalities": [
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 16384,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "google/diffusiongemma-26b-a4b-it",
+      "name": "diffusiongemma-26b-a4b-it",
+      "buildSlug": "google/diffusiongemma-26b-a4b-it",
+      "chat": true,
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image",
+        "Video"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Diffusion-based 26B parameter LLM enabling parallel token generation for real-time text apps",
+      "buildUrl": "https://build.nvidia.com/google/diffusiongemma-26b-a4b-it/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/google/diffusiongemma-26b-a4b-it/build",
+      "limitsSource": "https://build.nvidia.com/google/diffusiongemma-26b-a4b-it/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image",
+          "Video"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 32768,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "name": "nemotron-3-ultra-550b-a55b",
+      "buildSlug": "nvidia/nemotron-3-ultra-550b-a55b",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "tools": true,
+      "multimodal": false,
+      "inputModalities": [
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Open, efficient hybrid Mamba-Transformer MoE with 1M context, excelling in agentic reasoning, coding, planning, tool calling, and more",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": false,
+        "inputModalities": [
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 32768,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-content-safety",
+      "name": "nemotron-3.5-content-safety",
+      "buildSlug": "nvidia/nemotron-3.5-content-safety",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Multilingual, multimodal model for detecting unsafe and toxic content.",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-3.5-content-safety/build",
+      "freeEndpoint": true,
+      "category": "other",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-3.5-content-safety/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/nemotron-3.5-content-safety/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.514Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/cosmos3-nano",
+      "name": "cosmos3-nano",
+      "buildSlug": "nvidia/cosmos3-nano",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Generates images, videos and action predictions from text, visual inputs and spatial controls, with mandatory input screening and visual SynthID watermarking.",
+      "buildUrl": "https://build.nvidia.com/nvidia/cosmos3-nano/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/cosmos3-nano/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/cosmos3-nano/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/cosmos3-nano-reasoner",
+      "name": "cosmos3-nano-reasoner",
+      "buildSlug": "nvidia/cosmos3-nano-reasoner",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Vision language model that excels in understanding the physical world using structured reasoning on videos or images.",
+      "buildUrl": "https://build.nvidia.com/nvidia/cosmos3-nano-reasoner/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/cosmos3-nano-reasoner/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/cosmos3-nano-reasoner/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "name": "nemotron-3-nano-omni-30b-a3b-reasoning",
+      "buildSlug": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "chat": true,
+      "contextWindow": 262144,
+      "maxTokens": 65536,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Video",
+        "Audio",
+        "Image",
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Nemotron 3 Nano Omni is an omni-modal reasoning model that understands images, video, speech, text.",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Video",
+          "Audio",
+          "Image",
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 65536,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/synthetic-video-detector",
+      "name": "synthetic-video-detector",
+      "buildSlug": "nvidia/synthetic-video-detector",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "NVIDIA Synthetic Video Detector is an AI-powered micro-service for detecting AI‑generated (synthetic) videos.",
+      "buildUrl": "https://build.nvidia.com/nvidia/synthetic-video-detector/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/synthetic-video-detector/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/synthetic-video-detector/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/active-speaker-detection",
+      "name": "Active Speaker Detection",
+      "buildSlug": "nvidia/active-speaker-detection",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Detect and track speaker identities across video frames.",
+      "buildUrl": "https://build.nvidia.com/nvidia/active-speaker-detection/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/active-speaker-detection/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/active-speaker-detection/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/ising-calibration-1-35b-a3b",
+      "name": "ising-calibration-1-35b-a3b",
+      "buildSlug": "nvidia/ising-calibration-1-35b-a3b",
+      "chat": true,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Open VLM for quantum computer calibration chart understanding across a range of qubit modalities.",
+      "buildUrl": "https://build.nvidia.com/nvidia/ising-calibration-1-35b-a3b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/nvidia/ising-calibration-1-35b-a3b/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/ising-calibration-1-35b-a3b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "google/gemma-4-31b-it",
+      "name": "gemma-4-31b-it",
+      "buildSlug": "google/gemma-4-31b-it",
+      "chat": true,
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "tools": true,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image",
+        "Video"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Dense 31B model delivering frontier reasoning for coding, agentic workflows, and fine-tuning.",
+      "buildUrl": "https://build.nvidia.com/google/gemma-4-31b-it/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/google/gemma-4-31b-it/build",
+      "limitsSource": "https://docs.api.nvidia.com/nim/reference/google-gemma-4-31b-it-infer",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image",
+          "Video"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 32768,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/nemotron-voicechat",
+      "name": "nemotron-voicechat",
+      "buildSlug": "nvidia/nemotron-voicechat",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Nemotron 3 Voicechat",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-voicechat/build",
+      "freeEndpoint": true,
+      "category": "audio",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-voicechat/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/nemotron-voicechat/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "name": "nemotron-3-super-120b-a12b",
+      "buildSlug": "nvidia/nemotron-3-super-120b-a12b",
+      "chat": true,
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "tools": true,
+      "multimodal": false,
+      "inputModalities": [
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Open, efficient hybrid Mamba-Transformer MoE with 1M context, excelling in agentic reasoning, coding, planning, tool calling, and more",
+      "buildUrl": "https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/build",
+      "limitsSource": "https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-super-120b-a12b-infer",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": false,
+        "inputModalities": [
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 32768,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "nvidia/cosmos-transfer2_5-2b",
+      "name": "cosmos-transfer2.5-2b",
+      "buildSlug": "nvidia/cosmos-transfer2_5-2b",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Generates physics-aware video world states for physical AI development using text prompts and multiple spatial control inputs derived from real-world data or simulation.",
+      "buildUrl": "https://build.nvidia.com/nvidia/cosmos-transfer2_5-2b/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/cosmos-transfer2_5-2b/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/cosmos-transfer2_5-2b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/streampetr",
+      "name": "streampetr",
+      "buildSlug": "nvidia/streampetr",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "StreamPETR offers efficient 3D object detection for autonomous driving by propagating sparse object queries temporally.",
+      "buildUrl": "https://build.nvidia.com/nvidia/streampetr/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/streampetr/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/streampetr/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/llama-3_1-nemotron-safety-guard-8b-v3",
+      "name": "llama-3.1-nemotron-safety-guard-8b-v3",
+      "buildSlug": "nvidia/llama-3_1-nemotron-safety-guard-8b-v3",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Leading multilingual content safety model for enhancing the safety and moderation capabilities of LLMs",
+      "buildUrl": "https://build.nvidia.com/nvidia/llama-3_1-nemotron-safety-guard-8b-v3/build",
+      "freeEndpoint": true,
+      "category": "other",
+      "metadataSource": "https://build.nvidia.com/nvidia/llama-3_1-nemotron-safety-guard-8b-v3/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/llama-3_1-nemotron-safety-guard-8b-v3/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "name": "gpt-oss-20b",
+      "buildSlug": "openai/gpt-oss-20b",
+      "chat": true,
+      "contextWindow": 131072,
+      "maxTokens": 4096,
+      "tools": true,
+      "multimodal": false,
+      "inputModalities": [
+        "Text"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Smaller Mixture of Experts (MoE) text-only LLM for efficient AI reasoning and math",
+      "buildUrl": "https://build.nvidia.com/openai/gpt-oss-20b/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/openai/gpt-oss-20b/build",
+      "limitsSource": "https://build.nvidia.com/openai/gpt-oss-20b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": true,
+        "multimodal": false,
+        "inputModalities": [
+          "Text"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 4096,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "meta/llama-guard-4-12b",
+      "name": "llama-guard-4-12b",
+      "buildSlug": "meta/llama-guard-4-12b",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Multi-modal model to classify safety for input prompts as well output responses.",
+      "buildUrl": "https://build.nvidia.com/meta/llama-guard-4-12b/build",
+      "freeEndpoint": true,
+      "category": "other",
+      "metadataSource": "https://build.nvidia.com/meta/llama-guard-4-12b/build",
+      "limitsSource": "https://build.nvidia.com/meta/llama-guard-4-12b/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/bnr",
+      "name": "Background Noise Removal",
+      "buildSlug": "nvidia/bnr",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Removes unwanted noises from audio improving speech intelligibility.",
+      "buildUrl": "https://build.nvidia.com/nvidia/bnr/build",
+      "freeEndpoint": true,
+      "category": "audio",
+      "metadataSource": "https://build.nvidia.com/nvidia/bnr/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/bnr/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/magpie-tts-zeroshot",
+      "name": "magpie-tts-zeroshot",
+      "buildSlug": "nvidia/magpie-tts-zeroshot",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Expressive and engaging text-to-speech, generated from a short audio sample.",
+      "buildUrl": "https://build.nvidia.com/nvidia/magpie-tts-zeroshot/build",
+      "freeEndpoint": true,
+      "category": "audio",
+      "metadataSource": "https://build.nvidia.com/nvidia/magpie-tts-zeroshot/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/magpie-tts-zeroshot/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/sparsedrive",
+      "name": "sparsedrive",
+      "buildSlug": "nvidia/sparsedrive",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "End-to-end autonomous driving stack integrating perception, prediction, and planning with sparse scene representations for efficiency and safety.",
+      "buildUrl": "https://build.nvidia.com/nvidia/sparsedrive/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/sparsedrive/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/sparsedrive/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/bevformer",
+      "name": "bevformer",
+      "buildSlug": "nvidia/bevformer",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Advanced transformer for multi-frame bird's-eye-view 3D perception in autonomous driving.",
+      "buildUrl": "https://build.nvidia.com/nvidia/bevformer/build",
+      "freeEndpoint": true,
+      "category": "video",
+      "metadataSource": "https://build.nvidia.com/nvidia/bevformer/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/bevformer/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "nvidia/studiovoice",
+      "name": "Studio Voice",
+      "buildSlug": "nvidia/studiovoice",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Enhance input speech recorded with low-quality microphones in noisy or reverberant environments, producing studio-quality speech.",
+      "buildUrl": "https://build.nvidia.com/nvidia/studiovoice/build",
+      "freeEndpoint": true,
+      "category": "audio",
+      "metadataSource": "https://build.nvidia.com/nvidia/studiovoice/build",
+      "limitsSource": "https://build.nvidia.com/nvidia/studiovoice/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    },
+    {
+      "id": "meta/llama-3.2-11b-vision-instruct",
+      "name": "llama-3.2-11b-vision-instruct",
+      "buildSlug": "meta/llama-3.2-11b-vision-instruct",
+      "chat": true,
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "tools": false,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Cutting-edge vision-language model exceling in high-quality reasoning from images.",
+      "buildUrl": "https://build.nvidia.com/meta/llama-3.2-11b-vision-instruct/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/meta/llama-3.2-11b-vision-instruct/build",
+      "limitsSource": "https://build.nvidia.com/meta/llama-3.2-11b-vision-instruct/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 8192,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "meta/llama-3.2-90b-vision-instruct",
+      "name": "llama-3.2-90b-vision-instruct",
+      "buildSlug": "meta/llama-3.2-90b-vision-instruct",
+      "chat": true,
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "tools": false,
+      "multimodal": true,
+      "inputModalities": [
+        "Text",
+        "Image"
+      ],
+      "outputModalities": [
+        "Text"
+      ],
+      "description": "Cutting-edge vision-Language model exceling in high-quality reasoning from images.",
+      "buildUrl": "https://build.nvidia.com/meta/llama-3.2-90b-vision-instruct/build",
+      "freeEndpoint": true,
+      "category": "chat",
+      "metadataSource": "https://build.nvidia.com/meta/llama-3.2-90b-vision-instruct/build",
+      "limitsSource": "https://build.nvidia.com/meta/llama-3.2-90b-vision-instruct/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": true,
+        "inputModalities": [
+          "Text",
+          "Image"
+        ],
+        "outputModalities": [
+          "Text"
+        ]
+      },
+      "officialMaxTokens": 8192,
+      "maxTokensSource": "official_schema",
+      "metadataStatus": "documented"
+    },
+    {
+      "id": "google/google-paligemma",
+      "name": "paligemma",
+      "buildSlug": "google/google-paligemma",
+      "chat": false,
+      "contextWindow": null,
+      "maxTokens": null,
+      "tools": false,
+      "multimodal": false,
+      "inputModalities": [],
+      "outputModalities": [],
+      "description": "Vision language model adept at comprehending text and visual inputs to produce informative responses",
+      "buildUrl": "https://build.nvidia.com/google/google-paligemma/build",
+      "freeEndpoint": true,
+      "category": "image",
+      "metadataSource": "https://build.nvidia.com/google/google-paligemma/build",
+      "limitsSource": "https://build.nvidia.com/google/google-paligemma/build",
+      "metadataObservedAt": "2026-10-11T04:03:24.515Z",
+      "capabilities": {
+        "tools": false,
+        "multimodal": false,
+        "inputModalities": [],
+        "outputModalities": []
+      },
+      "officialMaxTokens": null,
+      "maxTokensSource": null,
+      "metadataStatus": "limits_unknown"
+    }
+  ]
+}

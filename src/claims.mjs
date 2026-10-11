@@ -9,10 +9,19 @@ export class ClaimService {
       if(!account||account.enabled===false)return finish('skipped',{reason:'account_disabled'});
       const task=account.tasks?.find(t=>t.id===taskId);if(!task?.enabled)return finish('skipped',{reason:'task_disabled'});
       const c=await this.credentials.resolve(accountId);
-      key=this.ledger.claimKey(account.platform,c.principalHash,day,taskId,c.identity?.deviceId??'');
+      // Qoder's verified daily campaign changes at 10:00 CST, not midnight.
+      // Read its current window before reserving; retries in that window stay idempotent.
+      let before;
+      if(account.platform==='qoder'){
+        before=await this.platforms.status(accountId,taskId);
+        if(!before.known)return finish('error',{reason:'unknown_server_state'});
+        if(before.campaignWindowId)base.campaignWindowId=String(before.day??day)+':'+String(before.campaignWindowId);
+        if(Number.isFinite(Date.parse(before.nextClaimAt)))base.nextClaimAt=before.nextClaimAt;
+      }
+      key=this.ledger.claimKey(account.platform,c.principalHash,base.campaignWindowId?'campaign:'+base.campaignWindowId:day,taskId,c.identity?.deviceId??'');
       const reservation=this.ledger.reserve(key);reserved=reservation.acquired;
       if(!reserved)return finish(reservation.status==='observed'?'observed':reservation.status==='rejected'?'rejected':reservation.done?'already':'busy',{...(reservation.result??{}),originalReason:reservation.result?.reason,reason:reservation.done?'local_idempotency':'another_worker'});
-      const before=await this.platforms.status(accountId,taskId);
+      before??=await this.platforms.status(accountId,taskId);
       if(!before.known)return finish('error',{reason:'unknown_server_state'});
       if(before.observed)return finish('observed',{reason:before.reason,details:before.details});
       if(before.claimed)return finish('already',{reason:before.reason??'server_already_claimed',credits:before.credits,...(before.details?{details:before.details}:{})});

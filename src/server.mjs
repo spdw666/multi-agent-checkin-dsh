@@ -35,7 +35,10 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
       if(origin&&origin!==local)throw new AppError('Origin rejected',403,'origin_rejected');
       if(req.headers.host!==new URL(baseUrl).host&&req.headers.host!==`localhost:${server.address().port}`)throw new AppError('Host rejected',403,'host_rejected');
       if(req.method==='GET'&&url.pathname==='/health'){return json(res,200,{status:'ok',service:'ai-credit-gateway',version:'0.1.0'});}
-      if(admin&&req.method==='GET'&&url.pathname==='/')return json(res,200,{service:'ai-credit-gateway',frontendIncluded:false,docs:'docs/api.md'});
+      if(admin&&req.method==='GET'&&['/','/app.js','/styles.css'].includes(url.pathname)){
+        const name=url.pathname==='/'?'index.html':url.pathname.slice(1);const content=await readFile(join(projectRoot,'web',name));
+        res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"});res.end(content);return;
+      }
       if(url.pathname.startsWith('/admin/')){
         if(!admin)throw new AppError('Admin surface is not mounted in this shim',404,'not_found');
         if(!authorized(req,adminKey))throw new AppError('Admin Bearer key required',401,'authentication_error');
@@ -91,7 +94,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         }finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
       }
       throw new AppError('Endpoint not found',404,'not_found');
-    }catch(e){const error=errorView(e);if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code}})}\n\n`);}else json(res,error.status,{error:{message:error.message,type:error.code,code:error.code}});}
+    }catch(e){const error=errorView(e);if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code}})}\n\n`);}else {if(error.status===429&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0)res.setHeader('Retry-After',String(Math.ceil(e.retryAfterSeconds)));json(res,error.status,{error:{message:error.message,type:error.code,code:error.code}});}}
   });
   server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.off('error',reject);resolve()})});

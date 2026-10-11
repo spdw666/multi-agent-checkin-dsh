@@ -1,3 +1,4 @@
+import {desktopProvider,desktopProviderKinds} from './provider-registry.mjs';
 import {bigModelCredential} from './bigmodel.mjs';
 import {readFile, stat, access} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
@@ -18,6 +19,7 @@ function localData(){return process.env.LOCALAPPDATA??(process.platform==='darwi
 export async function resolveCredentialFile(account,config) {
   const explicit=account.credentials?.file;
   if(explicit&&explicit!=='auto')return config.path(explicit);
+  if(account.platform==='nvidia')return join(homedir(),'.ai-credit-gateway/nvidia/credential.json');
   if(account.platform==='workbuddy')return firstExisting([process.env.WORKBUDDY_AUTH_FILE,join(localData(),'CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info'),join(homedir(),'.local/share/CodeBuddyExtension/Data/Public/auth/Tencent-Cloud.coding-copilot.info')]);
   if(account.platform==='trae'){
     const names={cn:['Trae CN','trae-cn'],solo:['TRAE SOLO CN','trae-solo-cn'],sg:['Trae','trae'], 'solo-sg':['TRAE SOLO','trae-solo']}[account.edition??'cn'];
@@ -63,13 +65,26 @@ export class CredentialManager {
     const p=this.read(account).catch(e=>{if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>this.flights.delete(id));this.flights.set(id,p);return p;
   }
   async read(account) {
-    const file=await resolveCredentialFile(account,this.config);const info=await stat(file).catch(e=>{if(account.platform==='minimax')throw new AppError('MiniMax Code 登录态待导入本机凭据文件',401,'minimax_login_required');throw e});
+    if(desktopProviderKinds.has(account.platform)){
+      const p=await desktopProvider(account.platform),c=await p.resolve(account,this.config);
+      for(const value of [c?.accessToken,c?.apiKey,c?.token,c?.refreshToken,c?.accessKey,c?.secretKey,c?.securityToken])if(typeof value==='string'&&value)rememberSecret(value);
+      if(!c||typeof c.accessToken!=='string'||!c.accessToken||!c.principal)throw new AppError('桌面账号登录态待就绪',401,'credential_missing');
+      const binding=this.ledger.bind(account.id,account.platform,c.principal);if(!binding.ok)throw new AppError('桌面账号已切换，请重新绑定此账号',409,'principal_changed');
+      if(Number.isFinite(c.expiresAtMs)&&c.expiresAtMs<=Date.now())throw new AppError('桌面登录态已过期，请在原客户端续期',401,'credential_expired');
+      return {...c,principalHash:binding.fingerprint};
+    }
+    const file=await resolveCredentialFile(account,this.config);const info=await stat(file).catch(e=>{if(account.platform==='nvidia')throw new AppError('NVIDIA API Key 待填入本机凭据文件',401,'nvidia_credential_missing');if(account.platform==='minimax')throw new AppError('MiniMax Code 登录态待导入本机凭据文件',401,'minimax_login_required');throw e});
     const fingerprint=hash(JSON.stringify(account.credentials)+file+info.mtimeMs+info.size);
     let credential=account.platform==='minimax'&&account.credentials.kind==='desktop'?undefined:this.cache.get(account.id)?.fingerprint===fingerprint?this.cache.get(account.id).credential:undefined;
     if(!credential) {
       if(account.platform==='minimax') {
         const raw=await readJson(file).catch(()=>{throw new AppError('MiniMax Code 登录态待导入本机凭据文件',401,'minimax_login_required')});
         credential=account.credentials.kind==='desktop'?await readMiniMaxDesktop(file,account,this.config):{...parseMiniMaxCredential(raw),filePath:file};
+      }else if(account.platform==='nvidia'){
+        const raw=await readJson(file).catch(()=>{throw new AppError('NVIDIA 本机凭据应为有效 JSON',401,'nvidia_credential_missing')});
+        const key=raw.apiKey??raw.accessToken;rememberSecret(key);
+        if(typeof key!=='string'||!/^nvapi-[A-Za-z0-9_-]{20,}$/.test(key))throw new AppError('NVIDIA API Key 待填入本机凭据文件',401,'nvidia_credential_missing');
+        credential={accessToken:key,principal:typeof raw.principal==='string'&&raw.principal.trim()?raw.principal:hash(key),proxyUrl:raw.proxyUrl,source:'local-config',filePath:file};
       }else if(account.platform==='bigmodel'){credential={...bigModelCredential(await readJson(file),account.id),filePath:file};}else if(account.credentials.kind==='file') {
         const raw=await readJson(file);credential={...raw,accessToken:raw.accessToken??raw.token,principal:raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub,expiresAtMs:raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000,source:'local-config',filePath:file};
       }else if(account.platform==='workbuddy') {

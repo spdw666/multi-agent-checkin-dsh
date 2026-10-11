@@ -27,7 +27,7 @@ test('Antigravity config accepts explicit account and rejects remote bridge and 
   delete c.upstreams.at(-1).sidecarBaseUrl;c.upstreams.at(-1).accountId=c.accounts[0].id;assert.throws(()=>validateConfig(c));
 });
 test('Antigravity catalog deduplicates identifiers without claiming live verification',async()=>{
-  const rows=await antigravityModels({},credential,{fetchImpl:async()=>Response.json({data:[{id:'gemini-test',context_length:10000},{id:'gemini-test'},{id:''},{id:null},{name:'bad'}]})});
+  const rows=await antigravityModels({},credential,{fetchImpl:async()=>Response.json({data:[{id:'gemini-test',context_length:10000,max_output_tokens:4000},{id:'gemini-test'},{id:''},{id:null},{name:'bad'}]})});
   assert.equal(rows.length,1);assert.equal(rows[0].verification,'unverified');assert.equal(rows[0].contextWindow,10000);assert.equal(rows[0].multimodal,false);
 });
 test('Antigravity catalog handles malformed JSON and invalid list',async()=>{

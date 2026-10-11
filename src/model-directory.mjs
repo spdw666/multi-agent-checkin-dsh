@@ -1,4 +1,12 @@
-import {AppError,errorView} from './util.mjs';
+import {AppError,errorView,hash} from './util.mjs';
+export const platformNames={qoder:'Qoder',codebuddy:'CodeBuddy',workbuddyai:'WorkBuddy AI',cline:'Cline',codearts:'CodeArts Agent',lobster:'LobsterAI',raccoon:'商汤小浣熊',loomy:'Loomy'};
+export function importedRouteId(upstreamId,modelId){
+ const raw=upstreamId+'/'+modelId;
+ if(/^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,127}$/.test(raw)&&!raw.includes('..'))return raw;
+ // Public model IDs may contain ':free', Unicode or exceed the local identifier limit.
+ // Preserve the exact target; encode only the local route identifier with a stable suffix.
+ return raw.replace(/[^a-zA-Z0-9_./-]/g,'_').replace(/\.{2,}/g,'_').slice(0,115)+'-'+hash(raw).slice(0,12);
+}
 export async function modelDirectory(service,{refresh=false}={}) {
   const audit=service.ledger?.get?.('model-audit');
   const providers=await Promise.all(service.config.value.upstreams.filter(u=>u.enabled!==false).map(async u=>{
@@ -20,8 +28,8 @@ export async function importModels(service,items,{enabled=true}={}) {
     const found=value.routes.find(r=>r.targets.length===1&&r.targets[0].upstreamId===u.id&&r.targets[0].model===model.id);
     if(found){found.enabled=selected;continue;}
     if(!selected)continue;
-    const id=u.id+'/'+model.id;if(value.routes.some(r=>r.id===id))throw new AppError('Route ID collision',409,'route_collision');
-    value.routes.push({id,name:(u.kind==='trae'?'Trae CN':u.kind==='workbuddy'?'WorkBuddy':u.kind==='qwenwork'?'千问办公':u.kind==='zcode'?'ZCode':u.kind==='bigmodel'?'智谱 BigModel':u.kind==='antigravity'?'Antigravity':'MiniMax Code')+' · '+model.name,enabled:true,targets:[{upstreamId:u.id,model:model.id}]});
+    const id=importedRouteId(u.id,model.id);if(value.routes.some(r=>r.id===id))throw new AppError('Route ID collision',409,'route_collision');
+    value.routes.push({id,name:(platformNames[u.kind]??(u.kind==='trae'?'Trae CN':u.kind==='workbuddy'?'WorkBuddy':u.kind==='qwenwork'?'千问办公':u.kind==='zcode'?'ZCode':u.kind==='bigmodel'?'智谱 BigModel':u.kind==='antigravity'?'Antigravity':u.kind==='nvidia'?'NVIDIA 官方API':'MiniMax Code'))+' · '+model.name,enabled:true,targets:[{upstreamId:u.id,model:model.id}]});
   }
   await service.config.save(value);
   return {saved:true,selected:items.length,enabled};

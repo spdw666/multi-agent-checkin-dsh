@@ -1,3 +1,9 @@
+import {desktopProvider,desktopProviderKinds,providerCapabilities} from './provider-registry.mjs';
+import {nvidiaAuthState} from './nvidia-auth.mjs';
+import {nvidiaPolicy} from './nvidia-policy.mjs';
+import {controlledNvidiaChat} from './nvidia-controls.mjs';
+import {nvidiaModels,nvidiaHealth,nvidiaChat} from './nvidia.mjs';
+import {antigravityQuota,cachedAntigravityQuota} from './antigravity-quota.mjs';
 import {antigravityModels,antigravityChat} from './antigravity.mjs';
 import {bigModelModels,bigModelHealth,bigModelChat} from './bigmodel.mjs';
 import {zcodeModels,zcodeChat} from './zcode-models.mjs';
@@ -10,7 +16,7 @@ import {qwenWorkContext} from './qwenwork.mjs';
 import {zcodePreview,zcodeStatus,zcodeClaim} from './zcode.mjs';
 import {miniMaxStatus,miniMaxClaim,miniMaxMembership} from './minimax.mjs';
 export class Platforms {
-  constructor(config,credentials){this.config=config;this.credentials=credentials;this.wb=new WorkBuddyUpstreamClient();this.catalogs=new Map();this.catalogFlights=new Map();this.trae=new Map();}
+  constructor(config,credentials){this.config=config;this.credentials=credentials;this.wb=new WorkBuddyUpstreamClient();this.quotaCache=new Map();this.catalogs=new Map();this.catalogFlights=new Map();this.trae=new Map();}
   account(id){return this.credentials.account(id);}
   async qwenContext(id,c) {
     try{return await qwenWorkContext(c)}catch(e){if(e.status!==401)throw e;const newer=await this.credentials.refreshQwen(id);return qwenWorkContext(newer);}
@@ -36,6 +42,7 @@ export class Platforms {
   }
   async fetchModels(upstreamId,{refresh=false,signal}={}) {
     const u=this.upstream(upstreamId);const cached=this.catalogs.get(upstreamId);
+    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind),rows=await p.models(await this.credentials.resolve(u.accountId),{refresh,force:refresh,signal,upstream:u,account:this.account(u.accountId)});if(!Array.isArray(rows))throw new AppError('模型目录格式错误',502,'provider_catalog_schema');const normalized=rows.map(m=>({...m,callable:m.callable!==false&&typeof p.chat==='function'&&Number.isSafeInteger(m.contextWindow)&&m.contextWindow>0&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0}));this.catalogs.set(upstreamId,normalized);return normalized;}
     if(!refresh&&cached)return cached;
     let list;
     if(u.kind==='workbuddy'){list=(await this.wb.fetchModels(await this.credentials.resolve(u.accountId),signal)).map(m=>({...m,multimodal:m.supportsImages===true,tools:m.supportsToolCall===true}));}
@@ -46,19 +53,22 @@ export class Platforms {
       for(const m of list){if(m.callable)stack.wire.set(m.id,{configName:m.wireConfigName??m.id,function:m.wireFunction??wire.find(w=>w.id===m.id)?.function,reasoningEfforts:m.reasoningEfforts});}
       // Retain direct wire mapping even if the remote directory is temporarily absent.
       for(const m of wire){if(m.id&&!stack.wire.has(m.id))stack.wire.set(m.id,{configName:m.id,function:m.wireFunction??m.function});}
-    }else if(u.kind==='antigravity'){list=await antigravityModels(u,await this.credentials.resolve(u.accountId),{signal,config:this.config});}else if(u.kind==='bigmodel'){list=await bigModelModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='qwenwork'){list=await qwenWorkModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='zcode'){list=await zcodeModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='minimax'){list=await miniMaxModels(await this.credentials.resolve(u.accountId));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
+    }else if(u.kind==='nvidia'){list=await nvidiaModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='antigravity'){list=await antigravityModels(u,await this.credentials.resolve(u.accountId),{signal,config:this.config});}else if(u.kind==='bigmodel'){list=await bigModelModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='qwenwork'){list=await qwenWorkModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='zcode'){list=await zcodeModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='minimax'){list=await miniMaxModels(await this.credentials.resolve(u.accountId));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
     if(!Array.isArray(list)||!list.length)throw new AppError(`Upstream ${u.id} returned an empty catalog`,502,'empty_catalog');
     this.catalogs.set(upstreamId,list);return list;
   }
   async health(id) {
-    const a=this.account(id);const credential=await this.credentials.resolve(id,{force:true});
+    const a=this.account(id);
+    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform),h=await p.health(await this.credentials.resolve(id),{account:a});return {...h,capabilities:providerCapabilities(p,h)};}
+    if(a.platform==='nvidia'){let credential;try{credential=await this.credentials.resolve(id,{force:true});const [health,policy]=await Promise.all([nvidiaHealth(credential),nvidiaPolicy(credential)]);const authRecord=nvidiaAuthState(this.credentials.ledger,id,credential,health.quota?.credentialStatus==='rejected'?'rejected':undefined);return {...health,policy,authRecord};}catch(e){if(e.code==='nvidia_auth_failed'&&credential)nvidiaAuthState(this.credentials.ledger,id,credential,'rejected');if(e.code==='nvidia_credential_missing')return {status:'credential_missing',models:[],quota:{credentialStatus:'missing'}};throw e;}}
+    const credential=await this.credentials.resolve(id,{force:true});
     if(a.platform==='workbuddy'){const [checkin,credits]=await Promise.all([this.wb.fetchCheckinStatus(credential),this.wb.fetchCredits(credential)]);return {status:'authenticated',checkin,credits};}
     if(a.platform==='trae') {
       const usage=this.traeStack(id).usage;
       if(regionOfCredential(credential)!=='cn')return {status:'authenticated',subscription:await usage.payStatus(),checkin:{supported:false}};
       const [checkin,snapshot]=await Promise.all([usage.checkinStatus(),usage.snapshot()]);return {status:'authenticated',checkin,snapshot};
     }
-    if(a.platform==='antigravity'){const u=this.config.value.upstreams.find(u=>u.kind==='antigravity'&&u.accountId===id&&u.enabled!==false);if(!u)throw new AppError('Antigravity bridge disabled',503,'upstream_disabled');const models=await antigravityModels(u,credential,{config:this.config});return {status:'bridge_ready',models:models.length,quotaKnown:false};}
+    if(a.platform==='antigravity'){const u=this.config.value.upstreams.find(u=>u.kind==='antigravity'&&u.accountId===id&&u.enabled!==false);if(!u)throw new AppError('Antigravity bridge disabled',503,'upstream_disabled');const models=await antigravityModels(u,credential,{config:this.config});const quota=await cachedAntigravityQuota(this.quotaCache,id,()=>antigravityQuota(u,credential));return {status:'bridge_ready',models:models.length,...quota};}
     if(a.platform==='bigmodel')return bigModelHealth(credential);
     if(a.platform==='zcode')return {status:'authenticated',...await zcodePreview(credential)};
     if(a.platform==='qwenwork')return {status:'authenticated',...await this.qwenContext(id,credential)};
@@ -67,6 +77,7 @@ export class Platforms {
   }
   async status(accountId,taskId) {
     const a=this.account(accountId);const credential=await this.credentials.resolve(accountId);
+    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.status!=='function')throw new AppError('该应用未声明每日签到接口',400,'checkin_not_supported');return p.status(credential,taskId,{account:a});}
     if(a.platform==='workbuddy'&&taskId==='daily-checkin') {const s=await this.wb.fetchCheckinStatus(credential);return {known:true,active:s.active,claimed:s.todayCheckedIn,credits:s.todayCredit,details:s};}
     if(a.platform==='trae'&&taskId==='daily-checkin') {
       if(regionOfCredential(credential)!=='cn')return {known:true,active:false,reason:'international_subscription_no_checkin'};
@@ -88,6 +99,7 @@ export class Platforms {
   }
   async claim(accountId,taskId) {
     const a=this.account(accountId);const c=await this.credentials.resolve(accountId);
+    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.claim!=='function')throw new AppError('该应用未声明领取接口',400,'checkin_not_supported');return p.claim(c,taskId,{account:a});}
     if(a.platform==='workbuddy'&&taskId==='daily-checkin')return this.wb.claimDailyCheckin(c);
     if(a.platform==='minimax'&&taskId==='daily-checkin')return miniMaxClaim(c);
     if(a.platform==='zcode'&&taskId==='free-plan-claim')return zcodeClaim(c,{ledger:this.credentials.ledger,accountId,profileDir:this.config.path(`./data/accounts/${accountId}/captcha-browser`)});
@@ -98,6 +110,7 @@ export class Platforms {
   }
   async chat(target,request,signal) {
     const u=this.upstream(target.upstreamId);const input={...request,model:target.model,stream:true};
+    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');return p.chat(u,await this.credentials.resolve(u.accountId),input,signal);}
     if(u.kind==='workbuddy') {
       const body=prepareChatBody(JSON.stringify(input));const tools=declaredTools(body);
       let c=await this.credentials.resolve(u.accountId);let result=await this.wb.chatStream(c,body,signal);
@@ -116,6 +129,7 @@ export class Platforms {
       return {response:result.response};
     }
     if(u.kind==='antigravity')return antigravityChat(u,await this.credentials.resolve(u.accountId),input,signal,this.config);
+    if(u.kind==='nvidia'){const credential=await this.credentials.resolve(u.accountId);try{const result=await controlledNvidiaChat(u,credential,input,signal,nvidiaChat);nvidiaAuthState(this.credentials.ledger,u.accountId,credential,'authenticated');return result;}catch(e){if(e.code==='nvidia_auth_failed')nvidiaAuthState(this.credentials.ledger,u.accountId,credential,'rejected');throw e;}}
     if(u.kind==='bigmodel')return bigModelChat(await this.credentials.resolve(u.accountId),input,signal);
     if(u.kind==='zcode')return zcodeChat(await this.credentials.resolve(u.accountId),input,signal,this.credentials.ledger);
     if(u.kind==='qwenwork')return qwenWorkChat(await this.credentials.resolve(u.accountId),input,signal);

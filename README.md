@@ -3,7 +3,7 @@
 <p align="center">
   <b>多平台每日权益、账号余额与模型调用，收拢到一个本机网关</b><br>
   AI网关· 原生独立 Windows 桌面应用<br>
-  WorkBuddy · Trae · 千问办公 · MiniMax Code · ZCode · 智谱 BigModel · Antigravity 本机桥<br>
+  WorkBuddy · Trae · 千问办公 · MiniMax Code · ZCode · 智谱 · Antigravity · NVIDIA · Qoder · CodeBuddy 等桌面平台<br>
   多账号签到 · 积分耗尽切号 · OpenAI 兼容 API · SSE · 工具调用 · DSH bundle · Hermes
 </p>
 
@@ -42,7 +42,7 @@ AI网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后�
 - **不是第三方 API 中转站**：只对接本项目实现的上游类型，Antigravity 专用协议桥只接受本机地址（`127.0.0.1`），不恢复任意中转站 URL。
 - **不做跨平台统一积分**：各平台积分、Token、现金、资源包单位不同，分别展示，不相加成总余额。
 - **不做凭据托管**：平台凭据只留本机文件，管理配置只存引用，不进仓库、日志或聊天。
-- **未验收即不声称**：图片输入与跨平台统一余额未验收；Antigravity 上游余额只显示为未知模型配额，不虚构 `0`，也不参与签到。
+- **未验收即不声称**：图片输入与跨平台统一余额未验收；Antigravity 按模型组分别展示每周与 5 小时配额，未返回数据保持未知；NVIDIA 显示官方策略、限流观测和本机用量，不把本机计数伪装成账号全局剩余额度。
 
 本项目不是 WorkBuddy2API Panel 的 fork：账号池与文档组织参考了该项目，但后端为 Node.js，自有领取账本与统一输出层，代码复用范围见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。不把参考项目的 OAuth 面板、Redis、Docker、成长任务自动化说成本项目已有功能。
 
@@ -53,7 +53,7 @@ AI网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后�
 | 每日权益 | WorkBuddy / Trae CN / MiniMax Code 签到，千问办公个人版额度检查，ZCode 免费套餐领取；启动检查、每日排程、随机延迟与失败重试，后台存活时执行 |
 | 多账号隔离 | `accounts` 列表，每账号独立本机凭据文件与稳定身份绑定，不用全局 token 单例；幂等账本按身份、任务、日期去重并保留回执 |
 | WorkBuddy 账号池 | 同模型按配置顺序选备用账号，积分耗尽时切号，成功账号保持使用；管理 API 可指定下一请求账号，不轮询 |
-| 模型目录 / 体检 | 已启用上游的模型与能力；`scope=retry` 定向复测历史未通过项，不动路由与启用选择 |
+| 模型目录 / 体检 | 已启用上游的模型与能力；`scope=selected` 精确选测与 `scope=retry` 历史未通过项复测；保留未选历史，不动路由启用选择 |
 | OpenAI 兼容 | `GET /v1/models`、`POST /v1/chat/completions`，普通与 SSE 共用映射层，按 `targets` 顺序 fallback |
 | 工具调用 | 结构化 `tool_calls` 与结果回传；工具在 DSH / Hermes / 调用方本地执行；已输出 SSE 后不重放整段请求 |
 | 图片与推理选项 | 按上游声明映射，不统一虚构图片支持或推理档位 |
@@ -70,7 +70,18 @@ AI网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后�
 | ZCode | 桌面登录态及设备上下文 | 免费套餐领取 / 查询，人工验证返回 `action_required` | 已实现模型适配，遇验证先在官方窗口完成再重试 |
 | 智谱 BigModel | 官方 API Key；资源包查询另需控制台登录态 | 查现金余额、资源包可用量与到期日，不执行签到 | 官方聊天 API；Token / 次 / CNY 不合计 |
 
+| Antigravity | 本机专用桥 | 模型分组每周 / 5 小时限额，不执行签到 | 上游地区与模型可用性按实例实测 |
+| NVIDIA NIM | 本机官方 API Key | 免费开发访问；官方策略、响应头限流、本机调用统计分开展示 | 免费目录与 API 模型交集分类；只有聊天协议及容量可核验项可导入 |
+| Qoder / Qoder CN | 分区桌面登录态及真实设备上下文 | 官方活动领取、套餐及加购额度；按活动窗口幂等，10:00 CST 换期再检查 | COSY 签名与 SSE 协议；实时目录、普通 / 流式 / 工具及结果回传 |
+| CodeBuddy CN / 国际版 | 分区桌面 SQLite 登录态 | 官方活动与余额独立查询；与 WorkBuddy 共享身份时避免重复领取 | 独立官方域名；国际连接失败单独显示，不当作未登录 |
+| WorkBuddy AI 国际版 | 独立国际版桌面登录态 | 显示资源包；活动未开启时显示无每日签到 | 不混用国内版域名、凭据与额度 |
+| CodeArts Agent | 桌面当前临时访问凭据 | SDK-HMAC 请求、官方积分与每日活动回执 | 聊天可用与工具链可用分开；未通过的能力不声明为通过 |
+| LobsterAI | 本机 SQLite 登录态 | 官方额度和每日登录奖励，领取后重新查询确认 | 官方模型目录与聊天协议；能力以当前目录和体检为准 |
+| Cline / 小浣熊 / Loomy | 各自本机登录或独立私有文件引用 | 各自余额及活动探测；没有签到接口不制造领取任务 | 登录过期、协议待核验、目录候选分别显示，不将候选模型冒充可调用模型 |
+
 TraeCode CN 与 TraeWork CN 若对应同一身份与权益池，保留一个账号启用即可。
+
+新增平台的配置和证据语义见 [桌面平台接入](docs/desktop-platforms.md)。目录可以包含未导入模型；默认发布的路由与完整目录分开管理，新增账号不会重新启用用户此前停用的路由。
 
 ## 架构
 
@@ -161,12 +172,23 @@ Invoke-RestMethod "$base/admin/model-tests" -Method Post -Headers $admin `
 Invoke-RestMethod "$base/admin/model-tests" -Headers $admin
 ```
 
-`scope` 可为 `all`（默认）、`imported`（按已启用路由的实际目标，含备用目标与账号池成员去重）、`retry`（历史未通过项，保留有限次先前尝试）。体检**真实请求上游**，可能消耗额度，不修改导入选择与账号池偏好。
+`scope` 可为 `selected`（显式 `routeIds`，仅接受启用路由）、`all`（默认）、`imported`（按已启用路由的实际目标，含备用目标与账号池成员去重）、`retry`（历史未通过项，保留有限次先前尝试）。体检**真实请求上游**，可能消耗额度，不修改导入选择与账号池偏好。
 
 - `POST` 返回 `202` 只表示任务已开始，**不等于体检通过**，须轮询 `scope / status / completed / total / summary / results / jobKeys`。
 - `results` 可能含保留的历史条目，不要用其总长度算本轮进度；本轮目标以 `jobKeys` 为准。
 - 语义：`passed` 四项通过；`partial` 聊天通过但工具链未全通过；`uncertain` 超时待复测；`unavailable` 当前目录或通道不提供；`failed` 附原因。**聊天通过不等于 Agent 工具链通过**，短暂超时也不等于模型永久下线。
 - **目录发现不等于生成可用**：部分上游（如 Antigravity）条目带 `verification: unverified`，需按实例实测状态使用。
+
+### 只测试勾选模型
+
+原生模型路由页的复选框只决定本轮选测，不改变路由的启用开关。支持全选、清空和选中数量；检测中禁止重复提交。管理 API 示例：
+
+```powershell
+$body = @{ scope = 'selected'; routeIds = @('qoder-cn/qwen3.8-flash') } | ConvertTo-Json
+Invoke-RestMethod "$base/admin/model-tests" -Method Post -Headers $admin -ContentType 'application/json' -Body $body
+```
+
+空列表、未知或停用路由返回 400，已有任务运行时返回 409。同一上游模型去重，不覆盖未选模型的既有结果。NVIDIA 同账号的体检串行，每阶段从真正开始请求时计时，默认 120 秒；其他上游默认 45 秒。输出上限同时受目录配置约束。超时仍显示待复测并保留阶段原因，不等同于额度耗尽。
 
 ## 接入 DSH
 
@@ -243,7 +265,7 @@ Antigravity 上游走**本机专用协议桥**，不是可配置的第三方中�
 - **目录与实测**：桥返回的模型条目标记 `source: antigravity-local-bridge`、`verification: unverified`，**目录发现不代表生成可用**；按实例的模型体检与实际调用结果使用，本项目不声明该上游“全模型已通过”。
 - **地区限制**：上游按出口地区拒绝时返回 `antigravity_region_unsupported`，提示改用合适出口后重新测试。**不承诺用反代解除上游地区限制**；具体出口 / 地区复测记录留在部署者自己的验证记录中，不在本 README 维护日期进度。
 - **其他错误**：`antigravity_bridge_unavailable`（桥未运行）、`antigravity_auth_failed`（`401`）、`antigravity_rate_limited`（`429`）、`antigravity_timeout`（响应超时）、`antigravity_upstream_error`、`request_cancelled`；错误不反射上游响应正文、账号邮箱、URL 或 token。
-- **未验收项**：图片输入与统一积分余额不声称支持；该上游余额显示为未知模型配额，不虚构 `0`，也不参与签到。
+- **未验收项**：图片输入与统一积分余额不声称支持；该上游按模型组显示每周与 5 小时配额及重置时间；缺少响应时明确未知，不虚构 `0`，不参与签到。
 
 完整安装、独立凭据与出口配置见 [Antigravity 接入说明](docs/antigravity.md)。以下为上游字段示意，还需配置对应账号：
 
