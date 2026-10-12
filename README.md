@@ -28,7 +28,7 @@
 
 [产品定位](#产品定位) · [能力与平台支持](#能力与平台支持) · [架构](#架构) · [源码快速开始](#源码快速开始) · [账号、上游与路由](#账号上游与路由) · [模型真实体检](#模型真实体检)
 
-[接入 DSH](#接入-dsh) · [接入 Hermes](#接入-hermes) · [调用用量与额度明细](#调用用量与额度明细) · [Antigravity 本机协议桥](#antigravity-本机协议桥) · [诊断与常见问题](#诊断与常见问题) · [测试与贡献](#测试与贡献) · [文档导航](#文档导航) · [许可与致谢](#许可与致谢)
+[接入 DSH](#接入-dsh) · [接入 Hermes](#接入-hermes) · [接入其他客户端](#接入其他客户端) · [调用用量与额度明细](#调用用量与额度明细) · [Antigravity 本机协议桥](#antigravity-本机协议桥) · [诊断与常见问题](#诊断与常见问题) · [测试与贡献](#测试与贡献) · [文档导航](#文档导航) · [许可与致谢](#许可与致谢)
 
 ## 产品定位
 
@@ -58,7 +58,7 @@ AI网关是**原生独立 Windows 桌面应用**；本仓库公开其中的后�
 | 工具调用 | 结构化 `tool_calls` 与结果回传；工具在 DSH / Hermes / 调用方本地执行；已输出 SSE 后不重放整段请求 |
 | 图片与推理选项 | 按上游声明映射，不统一虚构图片支持或推理档位 |
 | 余额与用量 | 余额查询带截止时间，失败返回缓存与 `stale`，未知不当作零；SQLite 记录实际模型、路由、账号、起止与首字耗时、Token、上游计费值，保留失败 / 取消 / 回退尝试 |
-| 接入与前端 | DSH bundle（独立 Node worker + 随机端口 loopback shim）与 Hermes 命名 Provider；模型 API 与管理 API 分离，前端可用 React、Vue、原生桌面或其他方案 |
+| 接入与前端 | DSH bundle（独立 Node worker + 随机端口 loopback shim）与 Hermes 命名 Provider；任何 OpenAI 兼容客户端填本网关 Base URL 即可接入，不需要网关抓取或改写客户端；模型 API 与管理 API 分离，前端可用 React、Vue、原生桌面或其他方案 |
 
 | 平台 | 登录态来源 | 每日权益 | 模型适配与注意事项 |
 |---|---|---|---|
@@ -239,6 +239,28 @@ providers:
 
 完整 YAML、跨平台路径、分层验证与回滚见 [docs/hermes.md](docs/hermes.md)。网关需保持运行，工具执行仍由 Hermes 完成。
 
+## 接入其他客户端
+
+网关对外只有一条 OpenAI 兼容入口。**任何支持自定义 OpenAI 端点的客户端都可以经它调用已启用的路由，本仓库不需要为它写适配器**：
+
+```text
+第三方客户端 → http://127.0.0.1:19421/v1 → 已启用的平台路由
+```
+
+方向只有一个：**客户端填本网关的地址**。网关不反向代理、不抓取、不注入任何客户端进程，因此不需要改客户端的可执行文件或前端资源，也不恢复已移除的 relay / 第三方中转站配置类型。三要素：
+
+| 字段 | 取值 |
+|---|---|
+| Base URL | `http://127.0.0.1:19421/v1`（含 `/v1`） |
+| API Key | `data/api-keys.json` 的 `apiKey`（推理用；`adminKey` 只管管理 API） |
+| Model | `GET /v1/models` 返回的路由 ID，原样使用，**包含斜杠** |
+
+**`max_tokens` 要按上游分档。** 客户端默认值通常很大，直接使用会被部分上游拒绝并返回明确错误（如 `nvidia_max_tokens_invalid`）。本机实例观测：NVIDIA `z-ai/glm-5.3`、`z-ai/glm-5.3-flash`、`moonshotai/kimi-k3` 可用档位为 1024，其余的保守值 8192 可用；**这是实例实测，不是全平台保证**，配置时从保守值起步再按实测放宽。上游拒绝不静默截断。
+
+客户端界面缺少自定义选项时，也可以把同样的配置写入客户端自己的模型存储，但必须：先关闭该客户端（或确认其数据库为 WAL 且允许并发写）、先备份整库三件套并记录 SHA-256、只新增行与改默认模型字段、写完重启确认列表。验证顺序统一为：`/v1/models` → 客户端"测试连接" → 普通短请求 → 真实任务（长文 / 多轮 / 客户端自身流式路径）。
+
+网关需保持运行；客户端不会自动拉起网关。个别上游对"逐字回显极短 token"这类非常规任务的输出可能只给前缀（内容落在推理字段），属上游行为而非网关故障。完整说明、数据字段形状与实测案例见 [docs/openai-clients.md](docs/openai-clients.md)。
+
 ## 调用用量与额度明细
 
 模型调用与领取记录分开保存。启用记录后，经网关普通、SSE、工具调用入口发出的请求按实际上游尝试写入 SQLite，来源标记为 `audit`（体检）、`dsh`（worker）或 `api`（独立 HTTP）；同一请求回退到其他账号或模型时，各次尝试共享 `requestId`，但保留各自的实际模型、账号与结果。
@@ -330,6 +352,7 @@ node --test tests/sqlite-concurrency.test.mjs   # 账本并发与冷启动竞争
 | [docs/dsh.md](docs/dsh.md) | DSH 挂载、profile 与插件配置 |
 | [docs/dsh-request-policy.md](docs/dsh-request-policy.md) | 模型首包等待与显式输出预算；保留目录上限、取消和用户默认 |
 | [docs/hermes.md](docs/hermes.md) | Hermes Provider、`key_cmd`、推理档位、分层验证与回滚 |
+| [docs/openai-clients.md](docs/openai-clients.md) | 任意 OpenAI 兼容客户端接入：三要素、`max_tokens` 分档、数据库注入与验证顺序 |
 | [docs/model-retry.md](docs/model-retry.md) | 定向复测未通过模型 |
 | [docs/bigmodel.md](docs/bigmodel.md) | 智谱官方模型与资源包查询 |
 | [docs/client-updates.md](docs/client-updates.md) | 客户端自身自动升级调研（尚未实现） |
