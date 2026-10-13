@@ -12,7 +12,7 @@
 - GET `/api/web/points/v1/balance`：可用、每日、月度、奖励、充值积分分别展示，未知值不归零。
 - POST `/api/web/llm/v2/chat/completions`：真实增量 SSE，工具调用/回传保持原结构；未知模型在本地拒绝，防止上游静默回落。兼容 max_completion_tokens。模型特有 reasoning_effort 未声明，不将网关通用档位作为官方支持字段。
 
-每日额度为服务端自动额度。`daily-quota` 返回 known/observed 与真实余额快照；claim 此任务不发网络请求。capabilities.checkin=false，未称签到成功。
+每日额度为服务端日配额，不是假造签到。`daily-quota` 以当日官方账单与登录延期核验为准；尚未完成时复现已确认的官方桌面登录积分端点并复核。capabilities.checkin=false，日任务以 observed 记录，不称新增签到领取。
 
 ## 验证
 
@@ -25,3 +25,19 @@
 - https://github.com/rockswang/wild-work/tree/main/internal/raccoon （README声明MIT，轮换与协议对照；未复制源码）
 - 本机官方客户端资源及上述官方端点实测；公开代码不携带用户凭据。
 
+
+## 续期缓存与日额度回执
+
+来源对照固定为 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model/tree/ddb451c2f24bac0b0f8b03b2473efbb1f0aefb68/vendor/channel-pack/src) 的 `raccoon-oauth.ts`、`raccoon-credits.ts`，MIT；仅协议/行为对照，本轮未复制其程序实现。原生 app.asar 的登录 effect 与积分规则文案也单独只读核验；REA 曾报告一个 unpacked bufferutil.node 哈希不匹配，后续只解析 JavaScript，没有运行该二进制。
+
+续期成功允许仅返回 access_token；未返回 refresh_token 时保留原值，保留 office_identity 等原生附加字段。私有缓存按身份与原始 refresh token 的语义指纹绑定，JSON 格式和附加元数据变化不丢失已旋转链。跨日到期使用网关缓存的下一次令牌，不回写原客户端。明确 HTTP 429 进入十分钟冷却；未知网络结果、解析失败、真正失效不自动重放。新的原生有效登录可恢复同一身份。锁内 POST 前再次检查源字节，原生已更新则本次中止、下次重新读取。
+
+原生客户端与网关可能同时消费同一旋转令牌家族；网关锁只协调网关进程，不是原生客户端锁。上述修复和时间推进单测不等于跨日实机问题已全部治愈；本轮没有为了测试强制消费原生 refresh token。
+
+`daily-quota` 不再把正余额当作今日完成。它读取 `/api/web/points/v1/balance` 与 `/api/web/points/v1/bills?paging.limit=50&paging.offset=0`，只在 `biz_type=daily_grant`、`grant_at` 属于北京时间当日且 `expire_at` 已延长至次日零点之后时返回 observed=true。账单本身是官方持久回执，使用当前账号凭据实时读取，不保存跨账号本地猜测。前50条没找到只表示待核验。
+
+若未核验本日延长，日任务复现原生登录 effect：POST `/api/web/desktop/v1/login/points/grant`，空 body，`X-Client-Platform: desktop-windows`，再读账单和余额。只有账单复核成功才返回 observed=true；始终 claimed=false、credit=0。`data.granted` 与 `popup.points` 属桌面奖励另列，不冒充每日新领取。已由原客户端完成本日延期则零 POST。
+
+官方原生规则是每日 00:00 起算、默认当日24:00失效、当天登录延长7天。`created_at` 是账单记录时刻，不等于 `grant_at`。实机账单已区分每天 daily_grant 300 与一次 reward_grant 桌面登录奖励3000；一次已领探针 granted=false 且账单无变化，不用于声称下一天 POST 必然发放。
+
+余额输出 `dailyQuotaObserved`、`dailyCycleDate`、`dailyQuota`、`dailyQuotaObservedAt`、`dailyQuotaSource='/api/web/points/v1/bills:daily_grant'`。额度字段取账单 points，不取多日累积 dailyRemaining。读取失败、未知账单、未延期、非当日都不输出已到账。

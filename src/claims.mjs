@@ -19,18 +19,24 @@ export class ClaimService {
         if(Number.isFinite(Date.parse(before.nextClaimAt)))base.nextClaimAt=before.nextClaimAt;
       }
       key=this.ledger.claimKey(account.platform,c.principalHash,base.campaignWindowId?'campaign:'+base.campaignWindowId:day,taskId,c.identity?.deviceId??'');
-      const reservation=this.ledger.reserve(key);reserved=reservation.acquired;
+      const datedObservation=['loomy','raccoon'].includes(account.platform)&&['daily-quota','daily-checkin'].includes(taskId);
+      const reservation=this.ledger.reserve(key,Date.now(),datedObservation?{observationDay:day}:{});reserved=reservation.acquired;
+      const observed=result=>finish('observed',{...result,...(datedObservation?{observationSchema:1,observationVerifiedDay:day}:{})});
       if(!reserved)return finish(reservation.status==='observed'?'observed':reservation.status==='rejected'?'rejected':reservation.done?'already':'busy',{...(reservation.result??{}),originalReason:reservation.result?.reason,reason:reservation.done?'local_idempotency':'another_worker'});
       before??=await this.platforms.status(accountId,taskId);
       if(!before.known)return finish('error',{reason:'unknown_server_state'});
-      if(before.observed)return finish('observed',{reason:before.reason,details:before.details});
+      if(before.observed)return observed({reason:before.reason,details:before.details});
       if(before.claimed)return finish('already',{reason:before.reason??'server_already_claimed',credits:before.credits,...(before.details?{details:before.details}:{})});
       if(!before.active)return finish('not_available',{reason:before.reason??'activity_inactive'});
       if(before.deviceOccupied)return finish('device_occupied',{reason:'device_daily_limit'});
       // A crash/timeout after submission must not resubmit merely because the local row is stale.
-      if(reservation.uncertain)return finish('uncertain',{reason:'previous_submission_unconfirmed',serverState:'not_claimed'});
-      wrote=true;const claim=await this.platforms.claim(accountId,taskId);
+      const confirmOnly=reservation.uncertain&&account.platform==='codearts'&&taskId==='daily-checkin'&&before.known===true&&before.pendingConfirmation===true;
+      if(reservation.uncertain&&!confirmOnly)return finish('uncertain',{reason:'previous_submission_unconfirmed',serverState:'not_claimed'});
+      wrote=true;const claim=await this.platforms.claim(accountId,taskId,confirmOnly?{confirmOnly:true}:{});
       const after=await this.platforms.status(accountId,taskId);
+      // Official automatic-entitlement refresh is not a paid/active claim. Both
+      // the submission adapter and a fresh known server recheck must agree.
+      if(claim.observed===true&&claim.claimed!==true&&after.known===true&&after.observed===true&&after.claimed!==true)return observed({reason:after.reason??claim.reason??'server_auto_daily_quota',claimed:false,officialRefreshConfirmed:true,...(after.details??claim.details?{details:after.details??claim.details}:{})});
       if(!after.claimed)return finish('uncertain',{reason:'claim_response_not_confirmed'});
       if(account.platform==='workbuddy')this.ledger.set('wb-pool-cooldown:'+accountId,{until:0,reason:'checkin_confirmed'});
       return finish('success',{credits:claim.credit??after.credits,serverConfirmed:true,...(claim.unit?{unit:claim.unit}:{}),...(claim.planId?{planId:claim.planId,details:claim.details}: {})});

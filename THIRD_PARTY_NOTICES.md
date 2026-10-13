@@ -73,3 +73,9 @@ linguo2625469/workbuddy2api-panel，MIT，commit d66384d9e3d69655f799d7d8f2e5fba
 - https://github.com/rockswang/wild-work/tree/fc62c2c947c1382482973089f05e6c7c1554f6d9 — README 声明 MIT，但该提交没有独立 LICENSE 文件；仅作为协议交叉参考，未复制其代码。 本工程按官方客户端与服务端实测独立实现 Node 适配，不包含参考项目的账户池、登录密码服务或客户端。
 
 Loomy 旧测试环境的登录失效结论已纠正；小浣熊 Electron Cookie 为空不代表原生 Bearer 会话缺失。公开产物不含本机登录、设备标识或账户具体积分。
+
+## 跨日登录与原生界面改版参考
+
+- [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model/tree/ddb451c2f24bac0b0f8b03b2473efbb1f0aefb68)，MIT：核对 CodeArts 与小浣熊的官方续期和积分协议、恢复性错误与日额度语义；本网关保持自己的 Node provider/私有缓存与原生界面，不复制其匿名渠道或整包代码。逐项协议与本机回执见对应 provider 文档。
+- [BeUI](https://beui.dev/)、[shadcn/ui](https://ui.shadcn.com/)、[Rare UI](https://www.rareui.com/)、[Transitions](https://transitions.dev/)：卡片层级、简短入场/退出过渡、hover/focus与减少动效偏好的视觉和交互参考。本网关原生 WinForms 控件独立实现；本公开仓库未打包这些 React 组件。Beautiful UI 地址也已检索，未获取到可用源码，未列为代码复用。
+- 本机平台图标从用户已安装客户端与快捷方式提取，属于各平台商标资源，仅用于本机识别与桌面部署，不作为本公开后端包的原创素材分发。

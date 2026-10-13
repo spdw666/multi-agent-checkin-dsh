@@ -11,7 +11,8 @@ import {qwenWorkModels,qwenWorkChat} from './qwenwork-models.mjs';
 import {miniMaxModels,miniMaxChat} from './minimax-models.mjs';
 import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor/workbuddy-core.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
-import {AppError,jsonFetch} from './util.mjs';
+import {AppError,jsonFetch,dayIn} from './util.mjs';
+import {restoreLoomyDailyQuota} from './daily-quota-receipt.mjs';
 import {qwenWorkContext} from './qwenwork.mjs';
 import {zcodePreview,zcodeStatus,zcodeClaim} from './zcode.mjs';
 import {miniMaxStatus,miniMaxClaim,miniMaxMembership} from './minimax.mjs';
@@ -59,7 +60,17 @@ export class Platforms {
   }
   async health(id) {
     const a=this.account(id);
-    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform),h=await p.health(await this.credentials.resolve(id),{account:a});return {...h,capabilities:providerCapabilities(p,h)};}
+    if(desktopProviderKinds.has(a.platform)){
+      const p=await desktopProvider(a.platform),c=await this.credentials.resolve(id);let h=await p.health(c,{account:a});
+      if(a.platform==='loomy'&&c.principalHash&&this.credentials.ledger?.claimReceipt){
+        const ledger=this.credentials.ledger,day=dayIn(new Date(),'Asia/Shanghai');
+        for(const task of a.tasks??[])if(task.enabled&&['daily-quota','daily-checkin'].includes(task.id)){
+          const key=ledger.claimKey('loomy',c.principalHash,day,task.id,c.identity?.deviceId??'');
+          h=restoreLoomyDailyQuota(h,ledger.claimReceipt(key));
+        }
+      }
+      return {...h,capabilities:providerCapabilities(p,h)};
+    }
     if(a.platform==='nvidia'){let credential;try{credential=await this.credentials.resolve(id,{force:true});const [health,policy]=await Promise.all([nvidiaHealth(credential),nvidiaPolicy(credential)]);const authRecord=nvidiaAuthState(this.credentials.ledger,id,credential,health.quota?.credentialStatus==='rejected'?'rejected':undefined);return {...health,policy,authRecord};}catch(e){if(e.code==='nvidia_auth_failed'&&credential)nvidiaAuthState(this.credentials.ledger,id,credential,'rejected');if(e.code==='nvidia_credential_missing')return {status:'credential_missing',models:[],quota:{credentialStatus:'missing'}};throw e;}}
     const credential=await this.credentials.resolve(id,{force:true});
     if(a.platform==='workbuddy'){const [checkin,credits]=await Promise.all([this.wb.fetchCheckinStatus(credential),this.wb.fetchCredits(credential)]);return {status:'authenticated',checkin,credits};}
@@ -97,9 +108,9 @@ export class Platforms {
     }
     throw new AppError(`${a.platform}/${taskId}: task adapter awaits verified protocol`,501,'task_protocol_pending');
   }
-  async claim(accountId,taskId) {
+  async claim(accountId,taskId,options={}) {
     const a=this.account(accountId);const c=await this.credentials.resolve(accountId);
-    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.claim!=='function')throw new AppError('该应用未声明领取接口',400,'checkin_not_supported');return p.claim(c,taskId,{account:a});}
+    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.claim!=='function')throw new AppError('该应用未声明领取接口',400,'checkin_not_supported');return p.claim(c,taskId,{account:a,...(a.platform==='codearts'&&options?.confirmOnly===true?{confirmOnly:true}:{})});}
     if(a.platform==='workbuddy'&&taskId==='daily-checkin')return this.wb.claimDailyCheckin(c);
     if(a.platform==='minimax'&&taskId==='daily-checkin')return miniMaxClaim(c);
     if(a.platform==='zcode'&&taskId==='free-plan-claim')return zcodeClaim(c,{ledger:this.credentials.ledger,accountId,profileDir:this.config.path(`./data/accounts/${accountId}/captcha-browser`)});

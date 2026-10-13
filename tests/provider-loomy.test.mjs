@@ -25,7 +25,7 @@ test('loomy descriptor: real daily mechanic (pet-work) is declared, session auth
   assert.equal(descriptor.id, 'loomy');
   assert.equal(descriptor.authKind, 'session_token');
   assert.equal(descriptor.checkinSupported, true);
-  assert.deepEqual(descriptor.checkinTasks, ['pet-work', 'daily-checkin']);
+  assert.deepEqual(descriptor.checkinTasks, ['pet-work', 'daily-quota']);
   assert.ok(descriptor.underlyingProvider.includes('production'));
 });
 
@@ -118,7 +118,7 @@ test('status: claimed today -> not claimable; unclaimed with preconditions -> cl
   assert.equal(s1.claimed, true);
   assert.equal(s1.claimable, false);
   const openBusy = async () => petWorkFixture(false);
-  const s2 = await loomyStatus(SECRET, 'daily-checkin', {fetchImpl: openBusy});
+  const s2 = await loomyStatus(SECRET, 'pet-work', {fetchImpl: openBusy});
   assert.equal(s2.claimed, false);
   assert.equal(s2.claimable, true);
   await assert.rejects(() => loomyStatus(SECRET, 'weekly', {fetchImpl: openBusy}), e => e.status === 400 && e.code === 'loomy_task_unknown');
@@ -164,7 +164,7 @@ test('claim: POST ok but snapshot marker unreadable -> submitted, NOT confirmed 
   const fetchImpl = async (url, init = {}) => {
     if ((init.method ?? 'GET') === 'POST') return ok({awarded: true});
     reads += 1;
-    return ok({businessDate: '2026-10-11', configVersion: 'v7', reachedTierId: 'tier-3'}); // no claim marker either time
+    return ok({businessDate: '2026-10-11', configVersion: 'v7', reachedTierId: 'tier-3',...(reads===1?{claimedToday:false}:{})}); // recheck has no claim marker
   };
   const r = await loomyClaim(SECRET, 'pet-work', {fetchImpl});
   assert.equal(r.submitted, true);
@@ -192,13 +192,14 @@ test('health: no token -> credential_missing status, no network', async () => {
   assert.equal(called, 0);
 });
 
-test('health: pet-work ok with balance field -> balance surfaced; identity failure tolerated', async () => {
+test('health: pet-work cannot replace failed authoritative points balance', async () => {
   const fetchImpl = async (url) => String(url).includes('pet-work')
     ? ok({businessDate: '2026-10-11', configVersion: 'v7', reachedTierId: 't3', claimedToday: true, currentBalance: 120.5})
     : err('100004', 'identity 暂不可用');
   const health = await loomyHealth(SECRET, {fetchImpl});
-  assert.equal(health.balance.value, 120.5);
-  assert.equal(health.balance.checkedIn, true);
+  assert.equal(health.balance.value, null);
+  assert.equal(health.balanceError.code, 'loomy_business_error');
+  assert.equal(health.balance.checkedIn, null);
   assert.equal(health.services.petWork, 'ok');
   assert.ok(health.errors.identity);
 });
@@ -252,7 +253,33 @@ const productionCatalog={object:'list',data:[{id:'official',type:'chat',context_
 test('production origin and session headers match official runtime, not test environment',async()=>{await loomyFetch(async(url,init)=>{assert.equal(url,'https://loomyad.xunfei.cn/api/v1/models');assert.equal(init.headers.authorization,'Bearer fixture');assert.equal(init.headers.token,'fixture');assert.match(init.headers.traceparent,/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);assert.ok(init.headers['loomy-version']);assert.equal(init.redirect,'error');return jsonResponse(productionCatalog);},'/api/v1/models',{token:'fixture'});});
 test('production catalog retains precise capability metadata',async()=>{const rows=await loomyModels(SECRET,{fetchImpl:async()=>jsonResponse(productionCatalog)});assert.equal(rows[0].contextWindow,1048576);assert.equal(rows[0].maxTokens,384000);assert.equal(rows[0].tools,true);assert.deepEqual(rows[0].reasoning.supportedEfforts,['low','high']);});
 test('personal balance uses availableBalance field not a calculated sum or team balance',async()=>{const b=await loomyPointBalance(SECRET,{fetchImpl:async()=>ok({balance:5000,dailyBalance:4000,availableBalance:8999})});assert.equal(b.value,8999);assert.equal(b.parts[1].value,4000);const unknown=await loomyPointBalance(SECRET,{fetchImpl:async()=>ok({balance:0})});assert.equal(unknown.value,null);assert.equal(unknown.parts[0].value,0);});
-test('daily quota observes official data without any claim POST',async()=>{let n=0;const s=await loomyStatus(SECRET,'daily-quota',{fetchImpl:async(url,init)=>{n++;assert.equal(init.method,'GET');return ok({availableBalance:5000,dailyBalance:3000});}});assert.equal(s.observed,true);assert.equal(s.details.value,5000);const r=await loomyClaim(SECRET,'daily-quota');assert.equal(r.submitted,false);assert.equal(n,1);});
+test('daily quota observes official data without any claim POST',async()=>{let n=0;const s=await loomyStatus(SECRET,'daily-quota',{fetchImpl:async(url,init)=>{n++;assert.equal(init.method,'GET');return ok({availableBalance:5000,dailyBalance:3000});}});assert.equal(s.observed,false);assert.equal(s.active,true);assert.equal(s.claimed,false);assert.equal(s.details.value,5000);assert.equal(s.details.dailyQuotaObserved,false);assert.equal(n,1);});
 test('real nested pet snapshot is observable but not a fabricated reward eligibility',async()=>{const fetchImpl=async()=>ok({enabled:true,businessDate:'2026-10-11',config:{version:'pet-work-v1',tiers:[{tierId:'tier_1'}]},status:{earnedPointsToday:0,rewardedTierIds:[],dailyRewardCapped:false}});const s=await loomyStatus(SECRET,'pet-work',{fetchImpl});assert.equal(s.observed,true);assert.equal(s.claimable,false);assert.equal(s.configVersion,'pet-work-v1');assert.equal(s.details.earnedPointsToday,0);assert.equal((await loomyClaim(SECRET,'pet-work',{fetchImpl})).submitted,false);});
 test('chat rejects models outside the live catalog',async()=>{await assert.rejects(loomyChat({},SECRET,{model:'unknown'},undefined,{fetchImpl:async()=>jsonResponse(productionCatalog)}),{code:'loomy_model_unknown'});});
 test('chat stream business errors remain errors after normalizer integration',async()=>{await assert.rejects(loomyChat({},SECRET,{model:'official'},undefined,{fetchImpl:async(url)=>url.endsWith('/models')?jsonResponse(productionCatalog):new Response('data: {"code":"100002","desc":"expired"}\n\n',{headers:{'content-type':'text/event-stream'}})}),{code:'loomy_session_expired'});});
+
+const receiptNow='2026-10-13T04:00:00Z';
+function dailyFetch({date='2026-10-13',mismatch=false,posts=[]}={}) { return async(url,init)=>{ if(init.method==='POST'){posts.push({url,body:JSON.parse(init.body)});return ok({alreadyProcessed:true,currentBalance:10000,dailyBalance:5000,dailyQuota:5000,...(date?{dailyCycleDate:date}:{})});}return ok({balance:5000,dailyBalance:5000,availableBalance:mismatch?9999:10000});}; }
+test('daily-quota refresh: official empty POST then balance verification, never claims pet work',async()=>{const posts=[];const secret={...SECRET,principal:'daily-fixture'};const options={now:receiptNow,fetchImpl:dailyFetch({posts})};const r=await loomyClaim(secret,'daily-checkin',options);assert.equal(r.task,'daily-quota');assert.equal(r.claimed,false);assert.equal(r.dailyQuotaObserved,true);assert.equal(r.dailyCycleDate,'2026-10-13');assert.equal(r.alreadyProcessed,true);assert.deepEqual(posts,[{url:LOOMY_POINTS_ORIGIN+'/api/v1/points/first-login',body:{}}]);const health=await loomyPointBalance(secret,options);assert.equal(health.dailyQuotaObserved,true);assert.equal((await loomyPointBalance({...secret,accessToken:'rotated'},options)).dailyQuotaObserved,false);assert.equal((await loomyPointBalance(secret,{...options,now:'2026-10-14T04:00:00Z'})).dailyQuotaObserved,false);});
+test('daily-quota missing date or mismatching balance never verifies receipt; failure clears previous evidence',async()=>{const secret={...SECRET,principal:'daily-fail-fixture'};for(const scenario of [{date:null},{mismatch:true},{date:'2026-10-12'}]){const r=await loomyClaim(secret,'daily-quota',{now:receiptNow,fetchImpl:dailyFetch(scenario)});assert.equal(r.dailyQuotaObserved,false);assert.equal(r.claimed,false);}await loomyClaim(secret,'daily-quota',{now:receiptNow,fetchImpl:dailyFetch()});await assert.rejects(loomyClaim(secret,'daily-quota',{now:receiptNow,fetchImpl:async()=>err('100002','expired')}));assert.equal((await loomyPointBalance(secret,{now:receiptNow,fetchImpl:dailyFetch()})).dailyQuotaObserved,false);});
+test('caller-supplied pet progress cannot unlock an unqualified server snapshot',async()=>{let posts=0;const r=await loomyClaim(SECRET,'pet-work',{businessDate:'2026-10-13',configVersion:'v1',reachedTierId:'tier3',fetchImpl:async(url,init)=>{if(init.method==='POST')posts++;return ok({businessDate:'2026-10-13',config:{version:'v1'},status:{earnedPointsToday:0,rewardedTierIds:[]}});}});assert.equal(r.submitted,false);assert.equal(posts,0);});
+
+test('real ClaimService and Ledger execute daily refresh once, preserve idempotency, and renew next day',async(t)=>{
+  const {ClaimService}=await import('../src/claims.mjs'),{Ledger}=await import('../src/store.mjs'),{dayIn}=await import('../src/util.mjs');
+  const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-13T04:00:00Z')});
+  const dir=await mkdtemp(join(tmpdir(),'loomy-claim-integration-')),ledger=new Ledger(dir),secret={...SECRET,principal:'daily-integrated',principalHash:'daily-integrated'};let posts=0;
+  const fetchImpl=async(url,init)=>{if(init.method==='POST'){posts++;assert.equal(url,LOOMY_POINTS_ORIGIN+'/api/v1/points/first-login');assert.deepEqual(JSON.parse(init.body),{});return ok({alreadyProcessed:true,currentBalance:10000,dailyBalance:5000,dailyQuota:5000,dailyCycleDate:dayIn(new Date(),'Asia/Shanghai')});}return ok({availableBalance:10000,balance:5000,dailyBalance:5000});};
+  const options={fetchImpl},config={value:{accounts:[{id:'a',platform:'loomy',enabled:true,tasks:[{id:'daily-quota',enabled:true}]}],scheduler:{timezone:'Asia/Shanghai'}}};
+  const service=new ClaimService(config,{resolve:async()=>secret},{status:async()=>loomyStatus(secret,'daily-quota',options),claim:async()=>loomyClaim(secret,'daily-quota',options)},ledger);
+  try{
+    const before=await loomyStatus(secret,'daily-quota',options);assert.equal(before.observed,false);assert.equal(before.active,true);
+    const first=await service.run('a','daily-quota');assert.equal(first.status,'observed');assert.equal(first.claimed,false);assert.equal(first.officialRefreshConfirmed,true);assert.equal(first.details.dailyQuotaObserved,true);assert.equal(posts,1);
+    assert.equal((await service.run('a','daily-quota')).status,'observed');assert.equal(posts,1);
+    assert.equal((await loomyStatus(secret,'daily-quota',options)).active,false);
+    t.mock.timers.tick(86400000);assert.equal((await loomyStatus(secret,'daily-quota',options)).observed,false);
+    const next=await service.run('a','daily-quota');assert.equal(next.status,'observed');assert.equal(next.details.dailyCycleDate,'2026-10-14');assert.equal(next.officialRefreshConfirmed,true);assert.equal(posts,2);
+    assert.equal((await service.run('a','daily-quota')).status,'observed');assert.equal(posts,2);
+  }finally{ledger.close();await rm(dir,{recursive:true,force:true});t.mock.timers.reset();}
+});
+

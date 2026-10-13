@@ -315,14 +315,20 @@ export async function raccoonHealth({credential, cookieDbPath, localStatePath, f
 
 /** Contract `status`: no check-in surface exists — explicit unsupported, never a fake state. */
 export async function raccoonStatus(secret, task = 'daily-checkin', options={}) {
-  if(task==='daily-quota'){const data=await raccoonJson(secret,'/api/web/points/v1/balance',options);return {known:true,observed:true,task,claimed:null,claimable:false,reason:'server_auto_daily_quota',day:dayIn(new Date(),'Asia/Shanghai'),details:{dailyRemaining:Number.isFinite(data.daily_points)?data.daily_points:null,availablePoints:Number.isFinite(data.available_points)?data.available_points:null,unit:'积分',source:'/api/web/points/v1/balance',note:'官方每日自动额度；这里是实时剩余，不是新领取数量。'}};}
+  if(task==='daily-quota')return raccoonDailyStatus(secret,options);
   if (task !== 'daily-checkin') throw new AppError('小浣熊任务未登记', 400, 'raccoon_task_unknown');
   return {known: false, task, claimable: false, claimed: null, supported: false, reason: 'no_checkin_surface_found', evidence: descriptor.sourceUrls};
 }
 
 /** Contract `claim`: honest unsupported description (no fake success). */
-export async function raccoonClaim(secret,task='daily-checkin') {
-  if(task==='daily-quota')return {supported:false,observed:true,claimed:false,reason:'server_auto_daily_quota',note:'每日额度由服务端自动发放；本次没有发起领取请求。'};
+export async function raccoonClaim(secret,task='daily-checkin',options={}) {
+  if(task==='daily-quota'){
+   const before=await raccoonDailyStatus(secret,options);if(before.observed)return {...before,submitted:false,credit:0};
+   const grant=await raccoonJson(secret,'/api/web/desktop/v1/login/points/grant',{...options,method:'POST',headers:{'X-Client-Platform':'desktop-windows'}});
+   const after=await raccoonDailyStatus(secret,options);
+   if(!after.observed)throw new AppError('小浣熊每日额度与登录延期尚未获账单确认',502,'raccoon_daily_unconfirmed');
+   return {...after,claimed:false,submitted:true,credit:0,rechecked:true,desktopRewardGranted:grant.granted===true,desktopRewardPoints:Number.isFinite(grant.popup?.points)?grant.popup.points:null};
+  }
   return {
     supported: false,
     code: 'no_checkin_confirmed',
@@ -374,7 +380,7 @@ export async function readRaccoonNativeAuth(file=defaultRaccoonAuthPath(),{readF
 }
 function raccoonBearerHeaders(secret){rememberSecret(secret.accessToken);return {'authorization':'Bearer '+secret.accessToken,'content-type':'application/json','accept':'application/json'};}
 async function raccoonJson(secret,path,options={}){
- const response=await raccoonFetch(options.fetchImpl??globalThis.fetch,RACCOON_ORIGIN+path,{headers:raccoonBearerHeaders(secret),signal:options.signal,timeoutMs:options.timeoutMs??30000});
+ const response=await raccoonFetch(options.fetchImpl??globalThis.fetch,RACCOON_ORIGIN+path,{method:options.method??'GET',headers:{...raccoonBearerHeaders(secret),...options.headers},signal:options.signal,timeoutMs:options.timeoutMs??30000});
  if(!response.ok){await response.body?.cancel().catch(()=>{});throw new AppError('小浣熊官方接口 HTTP '+response.status,response.status,response.status===401?'raccoon_session_expired':'raccoon_upstream_error');}
  const reader=response.body?.getReader();if(!reader)throw new AppError('小浣熊空响应',502,'raccoon_empty_response');let bytes=0;const chunks=[];
  try{for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>JSON_LIMIT)throw new AppError('小浣熊响应过大',502,'raccoon_response_too_large');chunks.push(value);}}finally{await reader.cancel().catch(()=>{});}
@@ -391,7 +397,9 @@ export async function raccoonBearerHealth(secret,options={}){
  for(const [key,name]of [['daily_points','每日额度'],['monthly_points','月度额度'],['reward_points','奖励积分'],['topup_points','充值积分']])if(Number.isFinite(data[key]))balance.parts.push({name,value:data[key],unit:'积分'});
  if(data.topup_frozen===true)balance.note+='充值积分已冻结。';
  let models=[],modelError=null;try{models=await raccoonServerModels(secret,options);}catch(error){modelError={code:error.code??'raccoon_catalog_error',message:redact(error.message)};}
- return {status:'authenticated',credential:raccoonCredentialView(secret),balance,checkin:{supported:false,reason:'daily_grant_not_checkin'},capabilities:{checkin:false,inference:models.some(m=>m.category==='chat')},models,modelCount:models.length,...(modelError?{modelError}:{})};
+ let daily;try{daily=await raccoonDailyStatus(secret,{...options,balanceData:data});}catch(error){daily={known:false,observed:false,error:{code:error.code??'raccoon_daily_error'}};}
+ Object.assign(balance,{dailyQuotaObserved:daily.known===true&&daily.observed===true,dailyCycleDate:daily.day??dayIn(new Date(options.now??Date.now()),'Asia/Shanghai'),dailyQuota:daily.details?.receipt?.points??null,dailyQuotaObservedAt:new Date(options.now??Date.now()).toISOString(),dailyQuotaSource:'/api/web/points/v1/bills:daily_grant'});
+ return {status:'authenticated',credential:raccoonCredentialView(secret),balance,daily,checkin:{supported:false,reason:'daily_grant_not_checkin'},capabilities:{checkin:false,inference:models.some(m=>m.category==='chat')},models,modelCount:models.length,...(modelError?{modelError}:{})};
 }
 
 export const RACCOON_REFRESH_URL = RACCOON_ORIGIN + '/api/web/auth/v1/refresh';
@@ -407,11 +415,16 @@ export async function refreshRaccoonAuth(auth,{fetchImpl=fetch,now=Date.now(),si
  try{response=await fetchImpl(RACCOON_REFRESH_URL,{method:'POST',redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000),headers:{'content-type':'application/json',accept:'application/json',authorization:'Bearer '+at},body:JSON.stringify({refresh_token:rt})});}
  catch{throw new AppError('小浣熊续期请求未确认；等待登录态更新',503,'raccoon_refresh_unconfirmed');}
  const data=await refreshJson(response);
- if(!response.ok||![0,'0'].includes(data.code))throw new AppError('小浣熊官方续期失败 (HTTP '+response.status+')',response.ok?401:response.status,'raccoon_refresh_failed');
- const token=data.data?.access_token,refresh=data.data?.refresh_token;
+ if(!response.ok||![0,'0'].includes(data.code)){
+  const error=new AppError('小浣熊官方续期失败 (HTTP '+response.status+')',response.ok?401:response.status,'raccoon_refresh_failed');
+  // An explicit rate-limit rejection did not issue new credentials. Transport/5xx outcomes stay uncertain.
+  if(response.status===429){error.retryable=true;error.retryAt=now+600000;}
+  throw error;
+ }
+ const token=data.data?.access_token,refresh=data.data?.refresh_token===undefined?rt:data.data.refresh_token;
  if(typeof token!=='string'||!token||/[\r\n]/.test(token)||typeof refresh!=='string'||!refresh||/[\r\n]/.test(refresh))throw new AppError('小浣熊续期缺少轮换凭据',502,'raccoon_refresh_invalid');
  rememberSecret(token);rememberSecret(refresh);
- const next={access_token:token,refresh_token:refresh};
+ const next={...auth,access_token:token,refresh_token:refresh};
  const oldIdentity=tokenIdentity(auth),newIdentity=tokenIdentity(next);
  if(typeof oldIdentity!=='string'||!oldIdentity||newIdentity!==oldIdentity)throw new AppError('小浣熊续期身份不一致',401,'raccoon_refresh_identity_mismatch');
  const oldClaims=tokenClaims(at),newClaims=tokenClaims(token);
@@ -424,14 +437,16 @@ async function loadRaccoonRefreshed(file,options){
  let source,original;try{source=await readFile(file,'utf8');original=JSON.parse(source.replace(/^\uFEFF/,''));}catch{throw new AppError('小浣熊原生登录文件未就绪',401,'raccoon_credential_missing');}
  // Parse identity before any credential-bearing network operation.
  await readRaccoonNativeAuth(file,{readFileImpl:async()=>source});
- const sourceHash=hash(source),cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??homedir(),'AI Credit Gateway','private-cache','raccoon-'+hash(resolve(file)).slice(0,16)+'.json');
+ const sourceHash=hash(source),sourceCredentialHash=hash(JSON.stringify([tokenIdentity(original),original.refresh_token??original.refreshToken??null])),cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??homedir(),'AI Credit Gateway','private-cache','raccoon-'+hash(resolve(file)).slice(0,16)+'.json');
  const now=options.now??Date.now();let cached;
  try{cached=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw new AppError('小浣熊私有续期缓存需核验',409,'raccoon_refresh_cache_invalid');}
- const matches=cached?.sourceHash===sourceHash;
+ const matches=cached?.sourceCredentialHash?cached.sourceCredentialHash===sourceCredentialHash:cached?.sourceHash===sourceHash;
  let auth=matches&&cached?.auth?cached.auth:original;
  const token=auth.refresh_token??auth.refreshToken;
  const attemptedHash=typeof token==='string'?hash(token):null;
- if(cached?.refreshFailure&&(matches||attemptedHash&&cached.attemptedTokenHash===attemptedHash))throw new AppError('小浣熊上次续期未确认；等待本机登录态更新',401,'raccoon_refresh_needs_login');
+ if(tokenExpiry(original)>now+60000&&(original.access_token??original.accessToken)!==(cached?.auth?.access_token??cached?.auth?.accessToken))return {...await readRaccoonNativeAuth(file,{readFileImpl:async()=>source}),refreshTokenPresent:!!(original.refresh_token??original.refreshToken)};
+ if(matches&&cached?.retryAt&&now<cached.retryAt)throw Object.assign(new AppError('小浣熊续期暂缓，稍后自动重试',429,'raccoon_refresh_deferred'),{retryAt:cached.retryAt});
+ if(cached?.refreshFailure&&(matches||attemptedHash&&cached.attemptedTokenHash===attemptedHash)&&(!cached.retryAt||now<cached.retryAt))throw new AppError('小浣熊上次续期未确认；等待本机登录态更新',401,'raccoon_refresh_needs_login');
  const credential=async(raw,fromCache)=>{const value=await readRaccoonNativeAuth(file,{readFileImpl:async()=>JSON.stringify(raw)});return {...value,source:fromCache?'gateway_private_refresh_cache':'native_auth_file',refreshTokenPresent:!!(raw.refresh_token??raw.refreshToken)};};
  if(tokenExpiry(auth)>now+60000||!token||options.refresh===false)return credential(auth,matches&&!!cached?.auth);
  await mkdir(dirname(cacheFile),{recursive:true});let lock;
@@ -439,16 +454,35 @@ async function loadRaccoonRefreshed(file,options){
  try{
   // Recheck after lock acquisition: another process may have published while we awaited open.
   let latest;try{latest=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
-  if(latest?.sourceHash===sourceHash&&latest?.auth&&tokenExpiry(latest.auth)>now+60000&&!latest.refreshFailure)return credential(latest.auth,true);
-  if(latest?.refreshFailure&&(latest.sourceHash===sourceHash||latest.attemptedTokenHash===attemptedHash))throw new AppError('小浣熊上次续期未确认；等待本机登录态更新',401,'raccoon_refresh_needs_login');
+  const latestMatches=latest?.sourceCredentialHash?latest.sourceCredentialHash===sourceCredentialHash:latest?.sourceHash===sourceHash;
+  if(latestMatches&&latest?.auth&&tokenExpiry(latest.auth)>now+60000&&!latest.refreshFailure)return credential(latest.auth,true);
+  if(latestMatches&&latest?.auth){auth=latest.auth;}
+  if(latestMatches&&latest?.retryAt&&now<latest.retryAt)throw Object.assign(new AppError('小浣熊续期暂缓，稍后自动重试',429,'raccoon_refresh_deferred'),{retryAt:latest.retryAt});
+  if(latest?.refreshFailure&&(latestMatches||latest.attemptedTokenHash===attemptedHash)&&(!latest.retryAt||now<latest.retryAt))throw new AppError('小浣熊上次续期未确认；等待本机登录态更新',401,'raccoon_refresh_needs_login');
+  if(hash(await readFile(file,'utf8'))!==sourceHash)throw new AppError('小浣熊原生会话已更新，将重新读取后续期',409,'raccoon_refresh_source_changed');
   // Durable intent prevents replay of a possibly rotated token after timeout, parse failure, or crash.
-  await publishRaccoonCache(cacheFile,{sourceHash,attemptedTokenHash:attemptedHash,refreshFailure:'raccoon_refresh_pending'});
-  let next;try{next=await refreshRaccoonAuth(auth,options);}catch(error){await publishRaccoonCache(cacheFile,{sourceHash,attemptedTokenHash:attemptedHash,refreshFailure:error.code??'raccoon_refresh_unconfirmed'});throw error;}
-  await publishRaccoonCache(cacheFile,{sourceHash,auth:next});
+  await publishRaccoonCache(cacheFile,{sourceHash,sourceCredentialHash,auth,attemptedTokenHash:hash(auth.refresh_token??auth.refreshToken),refreshFailure:'raccoon_refresh_pending'});
+  let next;try{next=await refreshRaccoonAuth(auth,options);}catch(error){await publishRaccoonCache(cacheFile,{sourceHash,sourceCredentialHash,auth,attemptedTokenHash:hash(auth.refresh_token??auth.refreshToken),refreshFailure:error.code??'raccoon_refresh_unconfirmed',...(error.retryable?{retryAt:error.retryAt}:{})});throw error;}
+  await publishRaccoonCache(cacheFile,{sourceHash,sourceCredentialHash,auth:next});
   return credential(next,true);
  }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
 }
 export async function resolveRaccoonNativeAuth(file=defaultRaccoonAuthPath(),options={}){
  const key=resolve(file)+'|'+(options.cacheFile??'default');if(raccoonRefreshFlights.has(key))return raccoonRefreshFlights.get(key);
  const pending=loadRaccoonRefreshed(file,options);raccoonRefreshFlights.set(key,pending);try{return await pending;}finally{raccoonRefreshFlights.delete(key);}
+}
+
+// The server bill is the durable receipt; never infer today's login benefit from a positive balance.
+export function raccoonDailyReceipt(data,now=Date.now()){
+ if(!Array.isArray(data?.items))throw new AppError('小浣熊积分账单格式改变',502,'raccoon_bills_schema');
+ const day=dayIn(new Date(now),'Asia/Shanghai'),dayEnd=Date.parse(day+'T00:00:00+08:00')+86400000;
+ const rows=data.items.filter(x=>x?.biz_type==='daily_grant'&&Number.isFinite(Date.parse(x.grant_at))&&dayIn(new Date(x.grant_at),'Asia/Shanghai')===day&&Number.isFinite(x.points)&&x.points>=0);
+ const extended=rows.find(x=>Date.parse(x.expire_at)>dayEnd);
+ const row=extended??rows[0];return {day,observed:!!extended,dailyGranted:rows.length>0,loginExtended:!!extended,points:row?.points??null,grantAt:row?.grant_at??null,recordedAt:row?.created_at??null,expiresAt:row?.expire_at??null};
+}
+export async function raccoonDailyStatus(secret,options={}){
+ const balance=options.balanceData??await raccoonJson(secret,'/api/web/points/v1/balance',options);
+ const bills=await raccoonJson(secret,'/api/web/points/v1/bills?paging.limit=50&paging.offset=0',options);
+ const receipt=raccoonDailyReceipt(bills,options.now??Date.now());
+ return {known:true,active:!receipt.observed,task:'daily-quota',observed:receipt.observed,claimed:false,claimable:!receipt.observed,principal:secret.principal,day:receipt.day,reason:receipt.observed?'server_daily_login_verified':'daily_login_not_verified',details:{dailyRemaining:Number.isFinite(balance.daily_points)?balance.daily_points:null,availablePoints:Number.isFinite(balance.available_points)?balance.available_points:null,unit:'积分',source:'/api/web/points/v1/bills',receipt,note:receipt.observed?'今日额度与登录延期已由官方账单核验；不是本次新增领取数量':'每日额度或登录延期待账单核验，余额不构成今日回执'}};
 }

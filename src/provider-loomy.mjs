@@ -25,7 +25,7 @@ export const descriptor = Object.freeze({
   authKind: 'session_token',
   checkinSupported: true, // daily mechanic = pet-work (宠物打工) snapshot + rewards; confirmed in shipped source
   checkinKind: 'pet_work',
-  checkinTasks: ['pet-work', 'daily-checkin'],
+  checkinTasks: ['pet-work', 'daily-quota'],
   claimSupported: true, // guarded: submits only official preconditions and re-verifies the snapshot
   underlyingProvider: 'xfyun imodel production gateway (openai-compatible, session-auth)',
   billing: 'official_points',
@@ -264,7 +264,7 @@ export async function loomyPointsRecords(secret, {version = 1, query = {}, ...op
 // ------------------------------------------------------------------ status / claim (pet-work)
 
 function normalizeTask(task) {
-  if (task === 'pet-work' || task === 'daily-checkin') return 'pet-work';
+  if (task === 'pet-work') return 'pet-work';
   throw new AppError('Loomy 任务未登记', 400, 'loomy_task_unknown');
 }
 
@@ -279,7 +279,7 @@ function petWorkClaimable(snapshot) {
 }
 /** Contract `status`: real snapshot state; claimable only on an explicit server-side marker. */
 export async function loomyStatus(secret, task = 'pet-work', options = {}) {
-  if(task==='daily-quota'){const balance=await loomyPointBalance(secret,options);return {known:true,observed:true,task,claimed:null,claimable:false,reason:'server_auto_daily_quota',day:dayIn(new Date(),'Asia/Shanghai'),details:balance};}
+  if(task==='daily-quota'||task==='daily-checkin'){task='daily-quota';const balance=await loomyPointBalance(secret,options);const observed=balance.dailyQuotaObserved===true;return {known:true,active:!observed,observed,task,claimed:false,claimable:!observed,reason:observed?'server_auto_daily_quota':'daily_quota_receipt_unverified',day:dayIn(new Date(options.now??Date.now()),'Asia/Shanghai'),details:balance};}
   normalizeTask(task);
   const snapshot = await loomyPetWork(secret, options);
   const claimable = petWorkClaimable(snapshot) === true;
@@ -303,26 +303,27 @@ export async function loomyStatus(secret, task = 'pet-work', options = {}) {
 
 /**
  * Contract `claim`: submits ONLY the three server-defined fields with values taken from the live
- * snapshot (or explicit caller values), then re-reads the snapshot. If the fresh snapshot does not
+ * snapshot, never caller-supplied progress, then re-reads the snapshot. If the fresh snapshot does not
  * carry a recognized claimed-marker, the result is reported as submitted-but-unconfirmed — HTTP 200
  * is never converted into a success claim.
  */
 export async function loomyClaim(secret, task = 'pet-work', options = {}) {
-  if(task==='daily-quota')return {observed:true,claimed:false,submitted:false,reason:'server_auto_daily_quota',note:'自动额度仅核验，本次没有领取请求。'};
+  if(task==='daily-quota'||task==='daily-checkin')return loomyRefreshDailyQuota(secret,options);
   normalizeTask(task);
   const before = await loomyStatus(secret, task, options);
   if (before.claimed === true) return {...before, submitted: false, alreadyClaimed: true};
-  const businessDate = options.businessDate ?? before.businessDate;
-  const configVersion = options.configVersion ?? before.configVersion;
-  const reachedTierId = options.reachedTierId ?? before.reachedTierId;
+  const businessDate = before.businessDate;
+  const configVersion = before.configVersion;
+  const reachedTierId = before.reachedTierId;
   if (businessDate === null || configVersion === null || reachedTierId === null)
     return {...before, submitted: false, reason: 'preconditions_missing', note: '需要服务端快照提供 businessDate/configVersion/reachedTierId'};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(businessDate)))
     return {...before, submitted: false, reason: 'business_date_invalid'};
+  if (!before.claimable) return {...before, submitted:false, reason:'server_eligibility_unverified'};
   const body = {businessDate, configVersion, reachedTierId}; // exactly the three official fields
   let failure = null;
   try {
-    await loomyRequest(secret, {path: '/api/v1/pet-work/rewards', method: 'POST', body, ...options});
+    await loomyRequest(secret, {...options, path: '/api/v1/pet-work/rewards', method: 'POST', body});
   } catch (error) {
     failure = {code: error.code ?? 'loomy_claim_error', status: error.status ?? 502, message: redact(error.message ?? '').slice(0, 200)};
   }
@@ -347,6 +348,7 @@ function errorView(error) {
  * Identity failure and pet-work failure are independent; a stale session (100002) is reported as
  * 'rejected' with the real reason — nothing is fabricated.
  */
+export function loomyHealthProbeBudget(limit,timeoutMs){return Number.isFinite(timeoutMs)&&timeoutMs>=0?Math.max(1,Math.min(limit,Math.floor(timeoutMs))):limit;}
 export async function loomyHealth(secret, options = {}) {
   const base = {
     balance: {value: null, unit: 'points', parts: [], note: '个人积分待官方接口返回；不使用团队余额替代', checkedIn: null},
@@ -355,29 +357,35 @@ export async function loomyHealth(secret, options = {}) {
   if (!secret?.accessToken) {
     return {...base, status: 'credential_missing', credential: loomyCredentialView(secret), services: {identity: null, petWork: null}};
   }
-  let identity = null; let identityError = null;
-  try { identity = await loomyIdentity(secret, options); } catch (error) { identityError = errorView(error); }
-  let pet = null; let petError = null;
-  try { pet = await loomyPetWork(secret, options); } catch (error) { petError = errorView(error); }
+  // Independent GET probes run together. Auxiliary metadata cannot multiply the
+  // balance deadline; every probe also honors a shorter caller timeout/signal.
+  const probe = async (fn,limit) => {
+    const budget=loomyHealthProbeBudget(limit,options.timeoutMs);
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),budget);
+    const signal=options.signal?AbortSignal.any([options.signal,controller.signal]):controller.signal;
+    try{return {value:await fn(secret,{...options,timeoutMs:budget,signal}),error:null};}
+    catch(error){return {value:null,error:errorView(error)};}
+    finally{clearTimeout(timer);}
+  };
+  const [identityRead,petRead,quotaRead,modelsRead]=await Promise.all([
+    probe(loomyIdentity,8000),probe(loomyPetWork,8000),probe(loomyPointBalance,20000),probe(loomyModels,8000),
+  ]);
+  const identity=identityRead.value,identityError=identityRead.error;
+  const pet=petRead.value,petError=petRead.error;
+  const quota=quotaRead.value,quotaError=quotaRead.error;
+  const models=modelsRead.value??[],modelsError=modelsRead.error;
   const rejected = [identityError, petError].filter(Boolean);
   const expired = rejected.some(e => e.code === 'loomy_session_expired');
   const status = identity === null && pet === null
     ? (expired ? 'session_expired' : 'unknown')
     : (identityError === null ? 'authenticated' : 'degraded');
-  if (pet?.claimed === true) base.balance.checkedIn = true;
-  else if (pet?.claimed === false) base.balance.checkedIn = false;
-  if (pet?.balanceCandidate !== null && pet?.balanceCandidate !== undefined) {
-    base.balance.value = pet.balanceCandidate;
-    base.balance.parts = [{kind: 'snapshot', label: 'pet-work 快照余额', value: pet.balanceCandidate}];
-    base.balance.note = '来自官方 pet-work 快照的余额字段';
-  }
-  let quota=null,quotaError=null,models=[],modelsError=null;
-  try{quota=await loomyPointBalance(secret,options);base.balance={...quota,checkedIn:pet?.claimed??null};}catch(error){quotaError=errorView(error);}
-  try{models=await loomyModels(secret,options);}catch(error){modelsError=errorView(error);}
+  // Pet-work is not an authoritative personal balance fallback.
+  if(quota)base.balance={...quota,checkedIn:null};
   base.capabilities.inference=models.some(m=>m.category==='chat');
   return {
     ...base,
-    models,modelCount:models.length,
+    models,modelCount:models.length,petWork:pet,
     ...(quotaError?{balanceError:quotaError}:{}),...(modelsError?{modelsError}:{}),
     status:quota?'authenticated':status,
     credential: loomyCredentialView(secret),
@@ -396,9 +404,32 @@ export async function loomyServerModels(secret,options={}){
  const payload=await loomyRequest(secret,{path:'/api/v1/models',...options});const rows=Array.isArray(payload?.data)?payload.data:[];
  return rows.filter(m=>typeof m.id==='string').map(m=>({id:m.id,name:m.name??m.id,category:m.type??'chat',protocol:m.protocol??null,contextWindow:Number.isSafeInteger(m.context_length)?m.context_length:null,maxTokens:Number.isSafeInteger(m.max_output_tokens)?m.max_output_tokens:null,officialMaxTokens:Number.isSafeInteger(m.max_output_tokens)?m.max_output_tokens:null,maxTokensSource:'official_catalog',tools:typeof m.capabilities?.function_calling==='boolean'?m.capabilities.function_calling:null,multimodal:typeof m.capabilities?.vision==='boolean'?m.capabilities.vision:null,reasoning:{supportedEfforts:Array.isArray(m.reasoning_efforts)?m.reasoning_efforts:[],defaultEffort:m.default_reasoning_effort??null},source:'official_model_catalog',callable:(m.type??'chat')==='chat',publishable:(m.type??'chat')==='chat'}));
 }
+// A receipt is account/session-bound and expires at the Shanghai day boundary.
+// A balance GET alone carries no cycle date and never proves today's automatic quota.
+const dailyQuotaReceipts = new Map();
+const dailyReceiptKey = secret => createHash('sha256').update(String(secret?.principal??'')+'|'+String(secret?.accessToken??'')).digest('hex');
+function dailyQuotaEvidence(secret,options={}) {
+  const receipt=dailyQuotaReceipts.get(dailyReceiptKey(secret));
+  const today=dayIn(new Date(options.now??Date.now()),'Asia/Shanghai');
+  return {dailyQuotaObserved:!!receipt&&receipt.dailyCycleDate===today,dailyCycleDate:receipt?.dailyCycleDate??null,dailyQuota:receipt?.dailyQuota??null,dailyQuotaObservedAt:receipt?.dailyQuotaObservedAt??null,dailyQuotaSource:receipt?.dailyQuotaSource??null};
+}
+export async function loomyRefreshDailyQuota(secret,options={}) {
+  const key=dailyReceiptKey(secret); dailyQuotaReceipts.delete(key);
+  const reply=await loomyRequest(secret,{...options,path:'/api/v1/points/first-login',method:'POST',body:{}});
+  const d=reply?.data??{};
+  const balance=await loomyPointBalance(secret,options);
+  const date=typeof d.dailyCycleDate==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d.dailyCycleDate)?d.dailyCycleDate:null;
+  if(date&&Number.isFinite(d.dailyQuota)&&d.dailyQuota>=0&&Number.isFinite(d.dailyBalance)&&Number.isFinite(d.currentBalance)&&balance.parts[1]?.value===d.dailyBalance&&balance.value===d.currentBalance) {
+    dailyQuotaReceipts.set(key,{dailyCycleDate:date,dailyQuota:d.dailyQuota,dailyQuotaObservedAt:new Date(options.now??Date.now()).toISOString(),dailyQuotaSource:'/api/v1/points/first-login'});
+    if(dailyQuotaReceipts.size>500)dailyQuotaReceipts.delete(dailyQuotaReceipts.keys().next().value);
+  }
+  const evidence=dailyQuotaEvidence(secret,options);
+  return {task:'daily-quota',known:true,observed:true,claimed:false,submitted:true,rechecked:true,reason:'server_auto_daily_quota',alreadyProcessed:typeof d.alreadyProcessed==='boolean'?d.alreadyProcessed:null,registerReward:Number.isFinite(d.registerReward)?d.registerReward:null,...evidence,details:{...balance,...evidence},note:'官方登录额度刷新及余额复核；不是宠物打工奖励或人工签到。'};
+}
+
 export async function loomyPointBalance(secret,options={}){
- const result=await loomyPointsRecords(secret,{query:{record_type:'all',page_no:1,page_size:1},...options});const d=result.data??{};
- return {value:Number.isFinite(d.availableBalance)?d.availableBalance:null,unit:'积分',parts:[{name:'长期积分',value:Number.isFinite(d.balance)?d.balance:null,unit:'积分'},{name:'每日积分',value:Number.isFinite(d.dailyBalance)?d.dailyBalance:null,unit:'积分'}],note:'官方个人积分账户；可用总额来自 availableBalance，每日积分与宠物奖励分开。'};
+ const result=await loomyPointsRecords(secret,{query:{recordType:'all',pageNo:1,pageSize:1},...options});const d=result.data??{};
+ return {...dailyQuotaEvidence(secret,options),value:Number.isFinite(d.availableBalance)?d.availableBalance:null,unit:'积分',parts:[{name:'长期积分',value:Number.isFinite(d.balance)?d.balance:null,unit:'积分'},{name:'每日积分',value:Number.isFinite(d.dailyBalance)?d.dailyBalance:null,unit:'积分'}],note:'官方个人积分账户；可用总额来自 availableBalance，每日积分与宠物奖励分开。'};
 }
 
 // ------------------------------------------------------------------ chat

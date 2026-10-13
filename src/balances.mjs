@@ -9,7 +9,7 @@ export function nvidiaQuotaView(h={}) {
  return {mode:'rate_limited_free',dailyLimit:null,remaining:null,requestLimit:number(q.requestLimit),requestRemaining:number(q.requestRemaining),tokenLimit:number(q.tokenLimit),tokenRemaining:number(q.tokenRemaining),resetAt:typeof q.resetAt==='string'&&Number.isFinite(Date.parse(q.resetAt))?q.resetAt:null,retryAfterSeconds:number(q.retryAfterSeconds),observedAt:typeof q.observedAt==='string'&&Number.isFinite(Date.parse(q.observedAt))?q.observedAt:null,source:q.source==='official_response_headers'?'official_response_headers':'official_policy',credentialStatus:q.credentialStatus??'configured'};
 }
 export function normalizeBalance(platform,h){
- if(desktopProviderKinds.has(platform))return desktopBalance(h);
+ if(desktopProviderKinds.has(platform)){if(h?.balanceError){const e=new Error(h.balanceError.message??'官方余额核验失败');e.code=h.balanceError.code??'balance_upstream_error';e.status=h.balanceError.status??502;throw e;}return desktopBalance(h);}
  let value=null,unit='积分',parts=[],expiresAt=null,checkedIn=false,note='';
  if(platform==='workbuddy'){value=num(h.credits.total);parts=h.credits.packages.map(p=>({name:p.packageName,value:p.remain,expiresAt:p.expiresAtMs?new Date(p.expiresAtMs).toISOString():null}));checkedIn=h.checkin.todayCheckedIn;note='连续签到 '+h.checkin.streakDays+' 天 · 今日 '+h.checkin.todayCredit+' 积分';}
  if(platform==='trae'){const s=h.snapshot.summary;value=Math.round((s.totalAmount-s.consumedAmount)*100)/100;checkedIn=h.checkin.checkedIn;note='总额度 '+s.totalAmount+' · 已使用 '+s.consumedAmount;}

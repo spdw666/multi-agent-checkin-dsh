@@ -45,7 +45,9 @@ export class Ledger {
   principalHash(accountId){return this.db.prepare('SELECT principal_hash FROM bindings WHERE account_id=?').get(accountId)?.principal_hash;}
   unbind(accountId){this.db.prepare('DELETE FROM bindings WHERE account_id=?').run(accountId);}
   claimKey(platform,fingerprint,day,task,device=''){return hash([platform,fingerprint,day,task,device].join('\0'));}
-  reserve(key,now=Date.now()) {
+  claimReceipt(key){const row=this.db.prepare('SELECT status,result FROM claims WHERE key=?').get(key);if(!row)return null;try{return {status:row.status,result:JSON.parse(row.result)}}catch{return null}}
+  reserve(key,now=Date.now(),{observationDay}={}) {
+    if(observationDay!==undefined&&(typeof observationDay!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(observationDay)))throw new RangeError('observationDay must be YYYY-MM-DD');
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row=this.db.prepare('SELECT * FROM claims WHERE key=?').get(key);
@@ -53,7 +55,10 @@ export class Ledger {
       // Also recover rows written by v8, which incorrectly made this refusal terminal.
       const priorResult=row?JSON.parse(row.result):{};
       const transientRejection=row?.status==='rejected'&&/9074|当前参与用户太多/.test(priorResult.error?.message??'');
-      if(row&&['success','already','observed','rejected'].includes(row.status)&&!transientRejection){this.db.exec('COMMIT');return {acquired:false,done:true,status:row.status,result:priorResult};}
+      // Only old automatic-observation rows are reopened. Paid/successful claims
+      // and uncertain submissions keep their original non-replay protection.
+      const legacyObservation=observationDay!==undefined&&row?.status==='observed'&&(priorResult.observationSchema!==1||priorResult.observationVerifiedDay!==observationDay);
+      if(row&&['success','already','observed','rejected'].includes(row.status)&&!transientRejection&&!legacyObservation){this.db.exec('COMMIT');return {acquired:false,done:true,status:row.status,result:priorResult};}
       if(row&&row.status==='running'&&now-Date.parse(row.updated_at)<300000){this.db.exec('COMMIT');return {acquired:false,done:false};}
       const uncertain=row?.status==='uncertain'||row?.status==='running';
       this.db.prepare('INSERT INTO claims VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at').run(key,'running',new Date(now).toISOString(),'{}');

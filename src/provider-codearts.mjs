@@ -239,7 +239,10 @@ export async function refreshCodeArtsAuth(auth,{fetchImpl=fetch,now=Date.now(),s
   body:new URLSearchParams({client_id:'codearts-agent',code_verifier:verifier,grant_type:'refresh_token',refresh_token:auth.refresh_token}).toString()});}
  catch {throw new AppError('CodeArts 续期请求未确认；未自动重试',503,'codearts_refresh_unconfirmed');}
  const text=await readBoundedText(response,signal);let data;try{data=JSON.parse(text)}catch{throw new AppError('CodeArts 续期响应格式错误',502,'codearts_refresh_invalid');}
- if(!response.ok){const error=new AppError('CodeArts 官方续期失败',response.status,'codearts_refresh_failed');error.upstreamCode=typeof data?.error_code==='string'?data.error_code.slice(0,80):null;throw error;}
+ if(!response.ok){const error=new AppError('CodeArts 官方续期失败',response.status,'codearts_refresh_failed');error.upstreamCode=typeof data?.error_code==='string'&&/^[A-Za-z0-9_.-]{1,80}$/.test(data.error_code)?data.error_code:null;
+  const terminal=data?.error==='invalid_grant'||/ExpiredRefreshToken/.test(error.upstreamCode??'');
+  if(!terminal&&(response.status===429||/InvalidDPoPHeader/.test(error.upstreamCode??''))){error.retryable=true;error.retryAt=now+600000;}
+  throw error;}
  const c=data?.credentials;
  if(!c||![c.access_key_id,c.secret_access_key,c.security_token,data.refresh_token].every(v=>typeof v==='string'&&v.length>0)||!(Date.parse(c.expiration)>now))
   throw new AppError('CodeArts 续期响应缺少有效凭据',502,'codearts_refresh_invalid');
@@ -266,15 +269,22 @@ function credentialFromCodeArtsAuth(base,auth,source) {
  for(const s of [auth.accessKey,auth.secretKey,auth.securitytoken])rememberSecret(s);
  return {...base,accessKey:auth.accessKey,secretKey:auth.secretKey,securityToken:auth.securitytoken,accessToken:auth.securitytoken,expiresAt:auth.expires_at,source};
 }
+async function publishCodeArtsCache(file,data){const temp=file+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify(data),{mode:0o600});await rename(temp,file);}
 async function resolveCodeArtsFresh(base,file,options={}) {
  const stored=await nativeCodeArtsStored(file);if(!stored)return base;
  const cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??dirname(file),'AI Credit Gateway','private-cache','codearts-'+sha256Hex(Buffer.from(file)).slice(0,16)+'.json');
- const now=options.now??Date.now();let cached;
- try{cached=JSON.parse(await readFile(cacheFile,'utf8'));if(cached.sourceHash!==stored.sourceHash)cached=null;}catch(error){if(error.code==='ENOENT')cached=null;else throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}
- if(cached?.refreshFailure)throw new AppError('CodeArts 上次续期未确认；等待本机登录态更新',401,'codearts_refresh_needs_login');
- if(cached?.auth && Date.parse(cached.auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,cached.auth,'gateway_private_refresh_cache');
+ const now=options.now??Date.now();
  const localState=options.localState??join(dirname(dirname(dirname(file))),'Local State');
- let auth=cached?.auth??await (options.decryptAuthImpl??decryptCodeArtsAuth)(stored,localState);
+ const original=await (options.decryptAuthImpl??decryptCodeArtsAuth)(stored,localState);
+ const sourceCredentialHash=sha256Hex(Buffer.from(JSON.stringify([base.principal,original.refresh_token??null,original.loginContext?.pkcePair?.codeVerifier??null,['kty','crv','x','y'].map(k=>original.loginContext?.dpopKeyPair?.publicKeyJwk?.[k]??null)])));
+ const matches=value=>value?.sourceCredentialHash?value.sourceCredentialHash===sourceCredentialHash:value?.sourceHash===stored.sourceHash;
+ let cached;
+ try{cached=JSON.parse(await readFile(cacheFile,'utf8'));if(!matches(cached))cached=null;}catch(error){if(error.code==='ENOENT')cached=null;else throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}
+ if(Date.parse(original.expires_at)>now+60000&&cached?.auth?.accessKey!==original.accessKey)return credentialFromCodeArtsAuth(base,original,'ide_secret_storage');
+ if(cached?.retryAt&&now<cached.retryAt)throw Object.assign(new AppError('CodeArts 续期暂缓，稍后自动重试',429,'codearts_refresh_deferred'),{retryAt:cached.retryAt});
+ if(cached?.refreshFailure&&(!cached.retryAt||now<cached.retryAt))throw new AppError('CodeArts 上次续期未确认；等待本机登录态更新',401,'codearts_refresh_needs_login');
+ if(cached?.auth && Date.parse(cached.auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,cached.auth,'gateway_private_refresh_cache');
+ let auth=cached?.auth??original;
  if(Date.parse(auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,auth,'ide_secret_storage');
  if(!auth.refresh_token||!auth.loginContext)return base;
  await mkdir(dirname(cacheFile),{recursive:true});let lock;
@@ -282,18 +292,20 @@ async function resolveCodeArtsFresh(base,file,options={}) {
  try{
   // Re-read while holding the cross-process lock before consuming a rotating token.
   let latest;try{latest=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}
-  if(latest?.sourceHash===stored.sourceHash){
-   if(latest.refreshFailure)throw new AppError('CodeArts 上次续期未确认；等待本机登录态更新',401,'codearts_refresh_needs_login');
+  if(matches(latest)){
+   if(latest.retryAt&&now<latest.retryAt)throw Object.assign(new AppError('CodeArts 续期暂缓，稍后自动重试',429,'codearts_refresh_deferred'),{retryAt:latest.retryAt});
+   if(latest.refreshFailure&&(!latest.retryAt||now<latest.retryAt))throw new AppError('CodeArts 上次续期未确认；等待本机登录态更新',401,'codearts_refresh_needs_login');
    if(latest.auth)auth=latest.auth;
    if(Date.parse(auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,auth,'gateway_private_refresh_cache');
   }
+  if((await nativeCodeArtsStored(file))?.sourceHash!==stored.sourceHash)throw new AppError('CodeArts 原生会话已更新，将重新读取后续期',409,'codearts_refresh_source_changed');
   let refreshed;
+  await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:'codearts_refresh_pending'});
   try{refreshed=await refreshCodeArtsAuth(auth,options);}catch(error){
    // Keep a marker tied to the source login so polling does not replay a rotating token.
-   await writeFile(cacheFile,JSON.stringify({sourceHash:stored.sourceHash,auth,refreshFailure:error.code??'codearts_refresh_unconfirmed'}),{mode:0o600});throw error;
+   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:error.code??'codearts_refresh_unconfirmed',...(error.retryable?{retryAt:error.retryAt}:{})});throw error;
   }
-  const temp=cacheFile+'.'+randomBytes(6).toString('hex')+'.tmp';
-  await writeFile(temp,JSON.stringify({sourceHash:stored.sourceHash,auth:refreshed}),{mode:0o600});await rename(temp,cacheFile);
+  await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth:refreshed});
   return credentialFromCodeArtsAuth(base,refreshed,'gateway_private_refresh_cache');
  }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
 }
@@ -484,12 +496,12 @@ export async function codeartsStatus(credential, task = 'daily-checkin', options
   const campaign = findDailyCampaign(items);
   const status = typeof campaign?.status === 'string' ? campaign.status : null;
   const claimable = campaign?.claimable === true;
-  const claimed = status === 'CLAIMED' || status === 'CONFIRMED' || status === 'CONSUMED';
+  const claimed = status === 'CONFIRMED' || status === 'CONSUMED';
   return {
     known: campaign !== null,
     task, campaignId: DAILY_CAMPAIGN_ID,
     title: typeof campaign?.title === 'string' ? campaign.title : null,
-    status, claimable, claimed, confirmed:status === "CONFIRMED" || status === "CONSUMED",
+    status, claimable, claimed, pendingConfirmation:status==='CLAIMED', active:claimable||status==='CLAIMED', credits:firstNumber(campaign,'benefitAmount'), confirmed:status === "CONFIRMED" || status === "CONSUMED",
     pendingAmount: firstNumber(campaign, 'pendingTotalAmount'),
     credit: firstNumber(campaign, 'benefitAmount'),
     unit: typeof campaign?.benefitUnit === 'string' ? campaign.benefitUnit : null,
@@ -502,18 +514,20 @@ export async function codeartsStatus(credential, task = 'daily-checkin', options
 /** Contract `claim`: submit, then re-read delivery and require the server to have moved the state. */
 export async function codeartsClaim(credential, task = 'daily-checkin', options = {}) {
   const before = await codeartsStatus(credential, task, options);
+  if (options.confirmOnly === true && !before.claimed && !(before.known && before.pendingConfirmation))
+    return {...before, submitted: false, reason: 'pending_confirmation_changed'};
   if (!before.known) return {...before, submitted: false, reason: 'campaign_absent'};
   if (before.claimed) return {...before, submitted: false, alreadyClaimed: true};
-  if (!before.claimable) return {...before, submitted: false, reason: 'not_claimable'};
+  if (!before.claimable && !before.pendingConfirmation) return {...before, submitted: false, reason: 'not_claimable'};
   const body = {campaignId: DAILY_CAMPAIGN_ID, idempotentKey: `claim_${DAILY_CAMPAIGN_ID}_${Date.now()}`, channel: OPS_CHANNEL};
-  await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/claim', body, ...options});
+  if(!before.pendingConfirmation)await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/claim', body, ...options});
   // claim alone is not a receipt: the upstream has a CLAIMED (claimed-but-unconfirmed) state,
   // and only /v1/ops/confirm pushes it to CONFIRMED.
   let confirmed = false;
   try { await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/confirm', body: {campaignId: DAILY_CAMPAIGN_ID}, ...options}); confirmed = true; }
   catch { confirmed = false; }
   const after = await codeartsStatus(credential, task, options);
-  const settled = after.status === 'CLAIMED' || after.status === 'CONFIRMED' || after.status === 'CONSUMED';
+  const settled = after.status === 'CONFIRMED' || after.status === 'CONSUMED';
   if (!settled) throw new AppError('CodeArts 领取结果尚未得到服务端确认', 502, 'codearts_claim_unconfirmed');
   return {...after, submitted: true, confirmed:confirmed && after.confirmed === true, rechecked: true};
 }

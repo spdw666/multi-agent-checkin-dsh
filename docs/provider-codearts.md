@@ -31,3 +31,13 @@ GLM-5.2 的 toolRoundtripVerified=true 来自正式网关上实际 DSH 与 Herme
 ## 并发限制 HTTP 规范化
 
 仅已证实的上游 HTTP 400 且业务码 TM.00001041，网关规范化为 HTTP 429，供客户端按限流策略处理。异常保留 upstreamStatus=400、upstreamCode=TM.00001041，message 明确保留原 HTTP 400 与业务码。其它 400、401、403 或 500 不套用此映射，即使携带相同码也保留其原状态。产品不自动重放生成请求，不伪造 Retry-After；有界复测仅属独立验收操作，初次失败与复测均留存。
+
+## 续期恢复与待确认领取
+
+协议对照固定至 [dsh-our-free-model 的 oauth.ts](https://github.com/Ebony-Vinyl/dsh-our-free-model/blob/ddb451c2f24bac0b0f8b03b2473efbb1f0aefb68/vendor/channel-pack/src/oauth.ts)（MIT，仅参考协议和错误分类，未复制程序）。`InvalidDPoPHeader` 是本次证明被拒，不等同 refresh token 失效。该明确错误及 HTTP429 记录十分钟 retryAt，随后下一次 resolve 才重试；invalid_grant、ExpiredRefreshToken 和结果未知不重复消费。私有持久 intent 在发出轮换请求之前原子落盘，防进程中断后重放。
+
+缓存新增凭据语义指纹（稳定身份、原始RT、PKCE、公钥字段），原生 secret storage 仅随机重新封装不会丢网关轮换链；原生真正新登录优先读取。POST前锁内重查源，检测到原生更新即中止本次刷新。锁仅约束网关进程，不声称覆盖原生客户端的旋转竞争。原生文件不回写；跨日模拟与当前原生登录有效不等于已经证明下一日实机长期恢复。
+
+`CLAIMED` 为待确认：status 返回 claimed=false、pendingConfirmation=true、active=true，claim 仅补 `/v1/ops/confirm`，不重发 `/claim`。只有再次读取到 `CONFIRMED` 或 `CONSUMED` 才报告到账；确认失败且仍CLAIMED返回 codearts_claim_unconfirmed。每日真实已确认状态读到后不重复 POST。
+
+后台恢复未确认账本时，`confirmOnly: true` 会再次读取活动状态：CLAIMED 只发 confirm；CONFIRMED/CONSUMED 直接返回已有回执；重新变为 CLAIMABLE 或未知时返回 `submitted: false, reason: pending_confirmation_changed`，不重发 claim，由共享账本继续保留未确认记录。
