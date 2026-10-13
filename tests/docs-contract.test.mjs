@@ -5,8 +5,20 @@ import {join, dirname, resolve} from 'node:path';
 import {projectRoot} from '../src/config.mjs';
 import {gatewayRequestTimeout} from '../src/server.mjs';
 
-const read = name => readFile(join(projectRoot, name), 'utf8');
+const normalizeMarkdown = text => text.replace(/\r\n?/g, '\n');
+const read = name => readFile(join(projectRoot, name), 'utf8').then(normalizeMarkdown);
 const exists = p => access(p).then(() => true, () => false);
+
+test('Markdown contract parsing is invariant across LF CRLF and CR checkouts', () => {
+  const source = '# contract\n\n```json\n{"modelRequestTimeouts":{"sample/model":600000}}\n```\n';
+  for (const newline of ['\n', '\r\n', '\r']) {
+    const text = normalizeMarkdown(source.replaceAll('\n', newline));
+    assert.equal(text, source);
+    assert.equal(text.split('\n').filter(Boolean).length, 4);
+    const block = [...text.matchAll(/```json\n([\s\S]*?)```/g)][0]?.[1];
+    assert.equal(JSON.parse(block).modelRequestTimeouts['sample/model'], 600000);
+  }
+});
 
 test('docs/api.md keeps the core management contract sections', async () => {
   const api = await read('docs/api.md');
