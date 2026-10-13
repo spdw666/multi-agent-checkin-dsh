@@ -47,7 +47,24 @@ AI网关（AI gateway）是一个**本机运行的独立服务**：一边读取�
 | 余额与用量 | 区分真实零 / 未知 / 带核验时间的缓存值；按实际上游尝试记账，回退尝试共享 `requestId` |
 | 接入方式 | DSH bundle、Hermes 命名 Provider、任意 OpenAI 兼容客户端；模型 API 与管理 API 分离 |
 
-支持的桌面平台（证据强度以本机实测与各平台官方文档为准）：WorkBuddy、Trae（CN / 国际）、千问办公、MiniMax Code、ZCode、智谱 BigModel、Antigravity、NVIDIA NIM、Qoder、CodeBuddy、CodeArts Agent、LobsterAI、Cline、商汤小浣熊、Loomy。逐平台登录态来源与注意事项见 [docs/desktop-platforms.md](docs/desktop-platforms.md)。
+### 支持反代的 Agent 与平台（完整清单）
+
+下表列出全部 **16 种已实现的上游适配类型**，即把这些 Agent／平台的模型反代给调用端。国内与国际版分别使用自己的登录态。
+
+| Agent／平台 | 网关类型 | Agent／平台 | 网关类型 |
+|---|---|---|---|
+| WorkBuddy | `workbuddy` | Qoder、Qoder CN（国际／国内） | `qoder` |
+| Trae（国内／国际） | `trae` | CodeBuddy、CodeBuddy CN（国际／国内） | `codebuddy` |
+| 千问办公 | `qwenwork` | WorkBuddy AI | `workbuddyai` |
+| MiniMax Code | `minimax` | Cline | `cline` |
+| ZCode | `zcode` | CodeArts Agent | `codearts` |
+| 智谱 BigModel（官方 API） | `bigmodel` | LobsterAI | `lobster` |
+| Antigravity | `antigravity` | 商汤小浣熊 Raccoon | `raccoon` |
+| NVIDIA NIM（官方 API） | `nvidia` | Loomy | `loomy` |
+
+**支持适配不等于每个模型、账号或地区均已实测通过**；具体模型以实时目录、已启用路由及体检结果为准。逐平台登录态来源见 [docs/desktop-platforms.md](docs/desktop-platforms.md)。
+
+**调用端另行区分：** DSH、Hermes、FleshOut 已有接入说明；其他支持自定义 OpenAI 兼容端点的 Agent／客户端可经 `/v1` 接入，但不列为已逐一验收的软件。
 
 ### 与原生前端本地分发的区别
 
