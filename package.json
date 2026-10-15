@@ -1,6 +1,6 @@
 {
   "name": "dsh-ai-credit-gateway",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "description": "AI gateway: local desktop accounts, daily entitlements, selected model audits, DSH and Hermes",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,8 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "desktop"
   ],
   "scripts": {
     "start": "node bin/ai-credit.mjs serve",

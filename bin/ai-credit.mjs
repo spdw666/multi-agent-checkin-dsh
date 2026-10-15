@@ -32,7 +32,7 @@ try {
   }else if(command==='stop'||command==='ui'){
     const c=new ConfigStore(configFile);await c.load();const state=await readJson(join(c.dataDir,'runtime.json'));const keys=await readJson(join(c.dataDir,'api-keys.json'));
     if(command==='stop'){const r=await fetch(state.baseUrl+'/admin/shutdown',{method:'POST',headers:{Authorization:`Bearer ${keys.adminKey}`},signal:AbortSignal.timeout(5000)});emit(await r.json());}
-    else {throw new Error('Headless source package: build your own UI against docs/api.md');const url=state.baseUrl+'/#key='+encodeURIComponent(keys.adminKey);const [cmd,argv]=process.platform==='win32'?['powershell.exe',['-NoProfile','-Command',`Start-Process '${url.replaceAll("'","''")}'`]]:process.platform==='darwin'?['open',[url]]:['xdg-open',[url]];const child=spawn(cmd,argv,{windowsHide:true,stdio:'ignore'});child.on('error',()=>{});emit({opened:true,baseUrl:state.baseUrl});}
+    else {const url=state.baseUrl+'/#key='+encodeURIComponent(keys.adminKey);const [cmd,argv]=process.platform==='win32'?['powershell.exe',['-NoProfile','-Command',`Start-Process '${url.replaceAll("'","''")}'`]]:process.platform==='darwin'?['open',[url]]:['xdg-open',[url]];const child=spawn(cmd,argv,{windowsHide:true,stdio:'ignore'});child.on('error',()=>{});emit({opened:true,baseUrl:state.baseUrl});}
   }else if(command==='install-autostart'||command==='uninstall-autostart'){
     if(process.platform!=='win32')throw new Error('Use docs/linux.md for systemd deployment');
     const ps=join(projectRoot,'scripts',command+'.ps1');const child=spawn('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',ps,'-ConfigFile',configFile,'-NodeExecutable',process.execPath],{windowsHide:true,stdio:'inherit'});child.on('exit',code=>process.exitCode=code??1);
@@ -41,7 +41,7 @@ try {
       const id=option('account','workbuddy-main');
       if(command==='doctor'){const results=[];for(const a of s.config.value.accounts)results.push(a.enabled===false?{accountId:a.id,status:'disabled'}:await s.credentials.doctor(a.id));emit({results});if(results.some(r=>r.status==='error'))process.exitCode=1;}
       else if(command==='health')emit({accountId:id,...await s.platforms.health(id)});
-      else if(command==='claim'){const r=args.includes('--all')?{results:await s.claims.all()}:await s.claims.run(id,option('task','daily-checkin'));emit(r);if(['error','uncertain','rejected','action_required'].includes(r.status))process.exitCode=1;}
+      else if(command==='claim'){const r=await s.claims.run(id,option('task','daily-checkin'));emit(r);if(['error','uncertain','rejected','action_required'].includes(r.status))process.exitCode=1;}
       else if(command==='models')emit(await s.router.models());
       else if(command==='records')emit({records:s.ledger.records()});
       else throw new Error('Unknown command: '+command);

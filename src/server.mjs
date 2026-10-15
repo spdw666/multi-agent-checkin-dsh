@@ -2,19 +2,39 @@ import {balances} from './balances.mjs';
 import {startModelAudit} from './model-audit.mjs';
 import {restartDsh} from './dsh-control.mjs';
 import {captureWorkBuddyAccount,configureWorkBuddyPool} from './workbuddy-pool.mjs';
-import {modelDirectory,importModels} from './model-directory.mjs';
+import {modelDirectory,importModels,exportModels,withConfigMutation} from './model-directory.mjs';
 import http from 'node:http';
 import {timingSafeEqual} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {once} from 'node:events';
+import {workBuddySummary,workBuddyAccountDetails,saveWorkBuddySettings,switchWorkBuddyAccount,deleteGatewayAccount} from './workbuddy-management.mjs';
+import {markWorkBuddyStatus} from './workbuddy-status.mjs';
+import {mergeWorkBuddySessions} from './workbuddy-sessions.mjs';
+import {queryWorkBuddyTasks,runWorkBuddyTasks} from './workbuddy-tasks.mjs';
+import {startWorkBuddyLogin,pollWorkBuddyLogin,cancelWorkBuddyLogin} from './workbuddy-login.mjs';
 import {projectRoot} from './config.mjs';
 import {AppError,errorView} from './util.mjs';
 import {collectChat,validateChat} from './openai.mjs';
-export function gatewayRequestTimeout(policy={},routeId){return policy.modelRequestTimeouts&&Object.hasOwn(policy.modelRequestTimeouts,routeId)?policy.modelRequestTimeouts[routeId]:(policy.requestTimeoutMs??180000);}
+import {buildActivityContext} from './activity-context.mjs';
+import {relayPolicy,validateRelay} from './model-relay.mjs';
+import {freeProviderMetadata,freeProviderList,prepareFreeProviderConfig,resolveFreeCredential,freeProviderModels} from './free-providers.mjs';
+import {importedRouteId} from './model-directory.mjs';
+import {gatewayRequestTimeout} from './request-timeouts.mjs';
+export {gatewayRequestTimeout} from './request-timeouts.mjs';
 function equal(a,b){const x=Buffer.from(a??''),y=Buffer.from(b??'');return x.length===y.length&&timingSafeEqual(x,y);}
 function authorized(req,token){const h=req.headers.authorization;return typeof h==='string'&&h.startsWith('Bearer ')&&equal(h.slice(7),token);}
 function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
+// Every drain wait owns, and then removes, all three competing listeners.
+// Promise.race(once(drain), once(close)) retained losing close/error listeners
+// for each backpressure cycle in long DSH conversations.
+export function waitForResponseDrain(res,signal){
+  return new Promise((resolve,reject)=>{
+    const cleanup=()=>{res.off('drain',drain);res.off('close',close);res.off('error',error);signal?.removeEventListener('abort',abort);};
+    const finish=(e)=>{cleanup();e?reject(e):resolve();},drain=()=>finish(),close=()=>finish(new AppError('Client closed',499,'request_cancelled')),error=e=>finish(e),abort=()=>finish(signal.reason??new AppError('Request cancelled',499,'request_cancelled'));
+    if(res.destroyed||res.closed||res.writableEnded)return close();if(signal?.aborted)return abort();
+    res.once('drain',drain);res.once('close',close);res.once('error',error);signal?.addEventListener('abort',abort,{once:true});
+  });
+}
 async function readBody(req,limit=4194304,{allowEmpty=false}={}){
   let bytes=0;const chunks=[];
   const tooLarge=size=>new AppError(`Request body exceeds limit (${size} bytes > ${limit} bytes). Increase server.bodyLimitBytes for long DSH conversations; message history was not trimmed.`,413,'body_too_large');
@@ -44,9 +64,40 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
       if(url.pathname.startsWith('/admin/')){
         if(!admin)throw new AppError('Admin surface is not mounted in this shim',404,'not_found');
         if(!authorized(req,adminKey))throw new AppError('Admin Bearer key required',401,'authentication_error');
-        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/capture')return json(res,200,await captureWorkBuddyAccount(service,await readBody(req)));
+        if(req.method==='GET'&&url.pathname==='/admin/free-providers')return json(res,200,{source:{repository:'https://github.com/tashfeenahmed/freellmapi',referenceCommit:freeProviderMetadata.referenceCommit,registeredProviders:freeProviderMetadata.registeredProviders,advertisedProviders:freeProviderMetadata.readmeAdvertisedProviders},checkedAt:freeProviderMetadata.checkedAt,providers:freeProviderList().map(p=>{const accounts=service.config.value.accounts.filter(a=>a.platform==='freeapi'&&a.freeProviderId===p.id);return {...p,configured:accounts.some(a=>a.enabled!==false),accountIds:accounts.map(a=>a.id),missingCredential:!p.keyless&&!accounts.some(a=>a.credentials?.file),credentialStatus:accounts.some(a=>a.enabled!==false)?'configured':accounts.length?'pending_configuration':'not_added'};})});
+        if(req.method==='POST'&&url.pathname==='/admin/free-provider-add'){
+          if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress))throw new AppError('Provider credential input requires the local management endpoint',403,'loopback_required');
+          const b=await readBody(req),expected=service.config.value,prepared=await prepareFreeProviderConfig(service.config,expected,b),value=prepared.value,a=value.accounts.at(-1),u=value.upstreams.at(-1);a.label=a.name;let credentialStatus='missing',catalog=[],setupError;
+          try{
+            try{const c=await resolveFreeCredential(a,service.config);credentialStatus=c.credentialStatus;catalog=await freeProviderModels(c,{refresh:true,signal:AbortSignal.timeout(15000)});if(!catalog.some(m=>m.callable&&m.importable))throw new AppError('No verified chat capacity in provider catalog',409,'provider_metadata_unverified');a.enabled=true;u.enabled=true;}catch(e){if([401,403].includes(e.status)&&credentialStatus!=='missing')credentialStatus='rejected';setupError={code:errorView(e).code};}
+            const selected=Array.isArray(b.models)?b.models:[];let routesAdded=0;
+            if(a.enabled)for(const id of selected){const model=catalog.find(m=>m.id===id&&m.callable&&m.importable);if(!model)throw new AppError('Selected provider model is not verified',400,'invalid_model');value.routes.push({id:importedRouteId(u.id,id),name:a.label+' · '+(model.name??id),enabled:true,targets:[{upstreamId:u.id,model:id}]});routesAdded++;}
+            const result=await withConfigMutation(service,async()=>{if(service.config.value!==expected)throw new AppError('Configuration changed during provider verification; reload and retry',409,'configuration_changed');await prepared.persist();return {saved:true,accountId:a.id,upstreamId:u.id,routesAdded,credentialStatus,enabled:a.enabled,setupError};});return json(res,200,result);
+          }catch(e){await prepared.rollback();throw e;}
+        }
+        if(req.method==='GET'&&url.pathname==='/admin/activity-context')return json(res,200,buildActivityContext(service,Object.fromEntries(['range','limit','search','source','model'].map(k=>[k,url.searchParams.get(k)??undefined]))));
+        if(req.method==='GET'&&url.pathname==='/admin/model-relay')return json(res,200,service.router.relay.status());
+        if(req.method==='POST'&&url.pathname==='/admin/model-relay'){const b=await readBody(req);if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['enabled','reservePercent','reserveCredits','partitions'].includes(k)))throw new AppError('Invalid relay settings',400,'invalid_model_relay');return json(res,200,await withConfigMutation(service,async()=>{const value=structuredClone(service.config.value);value.modelRelay=validateRelay({...relayPolicy(value),...b});await service.config.save(value);return {saved:true,...service.router.relay.status()};}));}
+        if(req.method==='GET'&&url.pathname==='/admin/workbuddy/summary')return json(res,200,await workBuddySummary(service,{refresh:['1','true'].includes(url.searchParams.get('refresh')),accountId:url.searchParams.get('accountId')??undefined,includeTasks:true}));
+        const wbDetails=/^\/admin\/workbuddy\/accounts\/([^/]+)\/details$/.exec(url.pathname);
+        if(req.method==='GET'&&wbDetails)return json(res,200,await workBuddyAccountDetails(service,decodeURIComponent(wbDetails[1]),{refresh:['1','true'].includes(url.searchParams.get('refresh'))}));
+        const wbStatus=/^\/admin\/workbuddy\/accounts\/([^/]+)\/mark-status$/.exec(url.pathname);
+        if(req.method==='POST'&&wbStatus){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>markWorkBuddyStatus(service,decodeURIComponent(wbStatus[1]),b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/settings'){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>saveWorkBuddySettings(service,b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/pool/normalize'){await readBody(req,4194304,{allowEmpty:true});return json(res,200,await withConfigMutation(service,async()=>({...await saveWorkBuddySettings(service,{}),normalized:true,models:(await workBuddySummary(service)).models})));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/login/start')return json(res,200,await startWorkBuddyLogin(service,await readBody(req,4194304,{allowEmpty:true})));
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/login/poll'){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>pollWorkBuddyLogin(service,b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/login/cancel')return json(res,200,cancelWorkBuddyLogin(service,await readBody(req)));
+        const switchAccount=/^\/admin\/workbuddy\/accounts\/([^/]+)\/switch$/.exec(url.pathname);
+        if(req.method==='POST'&&switchAccount){const b=await readBody(req,4194304,{allowEmpty:true});return json(res,200,await withConfigMutation(service,()=>switchWorkBuddyAccount(service,decodeURIComponent(switchAccount[1]),b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/sessions/merge'){const b=await readBody(req,4194304,{allowEmpty:true});return json(res,200,await mergeWorkBuddySessions(service,b));}
+        const deleteAccount=/^\/admin\/accounts\/([^/]+)$/.exec(url.pathname);
+        if(req.method==='DELETE'&&deleteAccount){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>deleteGatewayAccount(service,decodeURIComponent(deleteAccount[1]),b)));}
+        if(req.method==='GET'&&url.pathname==='/admin/workbuddy/tasks')return json(res,200,await queryWorkBuddyTasks(service,{accountId:url.searchParams.get('accountId')??service.ledger.get('wb-management-current')?.accountId}));
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/tasks')return json(res,200,await runWorkBuddyTasks(service,await readBody(req)));
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/capture'){const body=await readBody(req);return json(res,200,await withConfigMutation(service,()=>captureWorkBuddyAccount(service,body)));}
         if(req.method==='GET'&&url.pathname==='/admin/workbuddy/pools')return json(res,200,{routes:service.config.value.routes.filter(r=>r.enabled!==false&&service.config.value.upstreams.find(u=>u.id===r.targets[0].upstreamId)?.kind==='workbuddy').map(r=>service.router.pool.status(r))});
-        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/pool')return json(res,200,await configureWorkBuddyPool(service,await readBody(req)));
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/pool'){const body=await readBody(req);return json(res,200,await withConfigMutation(service,()=>configureWorkBuddyPool(service,body)));}
         if(req.method==='POST'&&url.pathname==='/admin/workbuddy/switch'){const b=await readBody(req),r=service.config.value.routes.find(r=>r.id===b.routeId&&r.enabled!==false);if(!r)throw new AppError('Unknown enabled route',404,'model_not_found');return json(res,200,service.router.pool.select(r,b.accountId));}
         if(req.method==='POST'&&url.pathname==='/admin/restart-dsh')return json(res,200,await restartDsh());
         if(req.method==='GET'&&url.pathname==='/admin/model-tests')return json(res,200,service.ledger.get('model-audit')??{status:'not_started',results:[]});
@@ -61,9 +112,13 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='GET'&&url.pathname==='/admin/models')return json(res,200,await service.router.models());
         if(req.method==='GET'&&url.pathname==='/admin/model-directory')return json(res,200,await modelDirectory(service,{refresh:url.searchParams.get('refresh')==='1'}));
         if(req.method==='POST'&&url.pathname==='/admin/model-import'){const b=await readBody(req);return json(res,200,await importModels(service,b.items,{enabled:b.enabled!==false}));}
+        if(req.method==='POST'&&url.pathname==='/admin/model-export'){const b=await readBody(req);return json(res,200,await exportModels(service,b?.routeIds));}
         if(req.method==='PUT'&&url.pathname==='/admin/config'){
-          const value=await readBody(req);if(value.dataDir!==service.config.value.dataDir)throw new AppError('Change dataDir with the service stopped',409,'restart_required');
-          await service.config.save(value);service.balanceCache?.clear();service.credentials.cache.clear();service.platforms.catalogs.clear();service.platforms.trae.clear();return json(res,200,{saved:true,serverRestartRequired:value.server.host!==host||value.server.port!==port});
+          const expected=service.config.value,value=await readBody(req);await withConfigMutation(service,async()=>{
+            if(service.config.value!==expected)throw new AppError('Configuration changed during this request; reload and retry',409,'configuration_changed');
+            if(value.dataDir!==service.config.value.dataDir)throw new AppError('Change dataDir with the service stopped',409,'restart_required');
+            await service.config.save(value);service.balanceCache?.clear();service.credentials.cache.clear();service.platforms.catalogs.clear();service.platforms.trae.clear();
+          });return json(res,200,{saved:true,serverRestartRequired:value.server.host!==host||value.server.port!==port});
         }
         if(req.method==='GET'&&url.pathname==='/admin/records')return json(res,200,{records:service.ledger.records({limit:url.searchParams.get('limit')??100,accountId:url.searchParams.get('accountId')??'',platform:url.searchParams.get('platform')??''})});
         if(req.method==='GET'&&url.pathname==='/admin/state')return json(res,200,{baseUrl,keysFile:service.keysFile,configFile:service.config.file,schedule:service.ledger.get('schedule-plan'),lastRun:service.ledger.get('schedule-last')});
@@ -73,7 +128,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='POST'&&url.pathname==='/admin/health'){const body=await readBody(req);try{return json(res,200,{accountId:body.accountId,...await service.platforms.health(body.accountId)})}catch(e){return json(res,e.status??502,{accountId:body.accountId,error:errorView(e)})}}
         if(req.method==='POST'&&url.pathname==='/admin/claim'){const b=await readBody(req);return json(res,200,b.accountId?await service.claims.run(b.accountId,b.taskId):{results:await service.claims.all()});}
         if(req.method==='POST'&&url.pathname==='/admin/catalog'){const b=await readBody(req);return json(res,200,{upstreamId:b.upstreamId,models:await service.platforms.models(b.upstreamId,{refresh:true})});}
-        if(req.method==='POST'&&url.pathname==='/admin/rebind'){const b=await readBody(req);service.credentials.account(b.accountId);service.ledger.unbind(b.accountId);service.credentials.cache.delete(b.accountId);return json(res,200,await service.credentials.doctor(b.accountId));}
+        if(req.method==='POST'&&url.pathname==='/admin/rebind'){const b=await readBody(req);service.credentials.account(b.accountId);service.ledger.unbind(b.accountId);service.credentials.cache.delete(b.accountId);service.balanceCache?.delete(b.accountId);service.balanceCacheKeys?.delete(b.accountId);return json(res,200,await service.credentials.doctor(b.accountId));}
         if(req.method==='POST'&&url.pathname==='/admin/shutdown'&&onShutdown){json(res,200,{stopping:true});setTimeout(onShutdown,50).unref();return;}
         throw new AppError('Admin endpoint not found',404,'not_found');
       }
@@ -86,17 +141,18 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         const timeout=setTimeout(()=>controller.abort(new DOMException('Gateway request deadline exceeded','TimeoutError')),gatewayRequestTimeout(policy,body.model));
         const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnect);
         try {
-          const stream=service.router.chat(body,controller.signal,{source:admin?'api':'dsh'});
+          const source=!admin?'dsh':['dsh','hermes'].includes(req.headers['x-ai-credit-source'])?req.headers['x-ai-credit-source']:'api';
+          const stream=service.router.chat(body,controller.signal,{source});
           if(!body.stream)return json(res,200,await collectChat(stream));
           let first=true;
           for await(const chunk of stream){if(first){first=false;res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});}
-            if(!res.write(`data: ${JSON.stringify(chunk)}\n\n`))await Promise.race([once(res,'drain'),once(res,'close').then(()=>{throw new AppError('Client closed',499,'request_cancelled')})]);
+            if(!res.write(`data: ${JSON.stringify(chunk)}\n\n`))await waitForResponseDrain(res,controller.signal);
           }
           res.end('data: [DONE]\n\n');return;
-        }finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
+        }catch(e){if(controller.signal.aborted&&controller.signal.reason?.name==='TimeoutError')throw new AppError('Gateway request deadline exceeded',504,'request_timeout');throw e;}finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
       }
       throw new AppError('Endpoint not found',404,'not_found');
-    }catch(e){const error=errorView(e);if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}})}\n\n`);}else {if(error.status===429&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0)res.setHeader('Retry-After',String(Math.ceil(e.retryAfterSeconds)));json(res,error.status,{error:{message:error.message,type:error.code,code:error.code,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}});}}
+    }catch(e){const error=errorView(e),retry=[429,503].includes(error.status)&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0?{retryAfterSeconds:e.retryAfterSeconds}:{};if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code,...retry,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}})}\n\n`);}else {if(retry.retryAfterSeconds!==undefined)res.setHeader('Retry-After',String(Math.ceil(retry.retryAfterSeconds)));json(res,error.status,{error:{message:error.message,type:error.code,code:error.code,...retry,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}});}}
   });
   server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.off('error',reject);resolve()})});

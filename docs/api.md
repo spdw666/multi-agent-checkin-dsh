@@ -13,7 +13,7 @@
 - 两把密钥在 `data/api-keys.json` 中自动生成，各自至少 24 字符；`apiKey` 用于推理，`adminKey` 只用于管理操作。**管理面不接受 `apiKey`，模型面不接受 `adminKey`**，两者不能互相顶替。
 - 密钥比较为定长 `timingSafeEqual`；缺少或格式不符的 `Authorization` 一律 `401 authentication_error`。
 - 管理面在 `startServer` 传入 `admin:false` 时不挂载（DSH worker shim 场景），任何 `/admin/*` 返回 `404 not_found`，不能凭猜测路径探测。
-- 公开源码包不附带前端：`web/` 资源不在仓库内，公开入口是 CLI 与管理 API；自建前端请把密钥留在本地，不要写入 URL、日志或聊天。
+- 公开仓库包含 Windows 原生桌面源码与 `desktop/build.ps1`；CLI、原生界面和自建前端共用管理契约。个人 EXE、runtime、登录态和数据库不随源码分发。密钥保留在本地，不写入 URL、日志或聊天。
 
 ## 2. Host 与 Origin 防护
 
@@ -65,6 +65,7 @@
 | `GET` | `/admin/models` | 与 `/v1/models` 同源的路由清单 |
 | `GET` | `/admin/model-directory` | 目录发现结果（`count`、`providers[].models[].imported` 等）；`?refresh=1` 强制刷新 |
 | `POST` | `/admin/model-import` | 导入/停用路由，`{items:[{upstreamId,model,enabled}]}` |
+| `POST` | `/admin/model-export` | 按 `{routeIds:[...]}` 精确取消导入，保留 targets/历史；不是文件下载 |
 | `GET` / `POST` | `/admin/model-tests` | 模型体检，见第 7 节 |
 | `GET` | `/admin/balances` | 账号余额，见第 8 节；`?refresh=1` 绕过 60 秒缓存 |
 | `GET` | `/admin/usage` | 调用用量，见第 9 节 |
@@ -76,6 +77,18 @@
 | `GET` | `/admin/records` | 领取/签到记录，支持 `limit` / `accountId` / `platform` |
 | `POST` | `/admin/workbuddy/capture` | 保存当前 WorkBuddy 账号快照 |
 | `GET` | `/admin/workbuddy/pools` | 各 WorkBuddy 路由的账号池状态 |
+| `GET` | `/admin/workbuddy/summary` | 全部已保存 WB 账号、已知积分汇总、去重模型与设置；包含停用/封禁/认证失效账号 |
+| `GET` | `/admin/workbuddy/accounts/:id/details` | 单账号完整身份、凭据有效期、封禁证据、全部积分包、任务与回执；`?refresh=true` 刷新 |
+| `POST` | `/admin/workbuddy/accounts/:id/mark-status` | `{status:"banned"\|"clear",confirm:true,reason?}` 保存或清除本机封禁标记，不冒充官方状态 |
+| `POST` | `/admin/workbuddy/accounts/:id/switch` | 切换客户端及后续网关请求；`switchClient:false` 只切网关 |
+| `POST` | `/admin/workbuddy/login/start` | 发起独立官方授权 |
+| `POST` | `/admin/workbuddy/login/poll` | 查询授权并保存独立账号 |
+| `POST` | `/admin/workbuddy/login/cancel` | 取消本次登录等待 |
+| `POST` | `/admin/workbuddy/settings` | 保存 `autoTasks` / `autoMigrateSessions` 布尔设置 |
+| `POST` | `/admin/workbuddy/sessions/merge` | 加法复制本机 JSONL/SQLite 会话，保留来源与备份 |
+| `GET` / `POST` | `/admin/workbuddy/tasks` | 完整任务查询及 `query/accept/run/claim` 动作；真实执行器未注册者保留待操作 |
+| `POST` | `/admin/workbuddy/pool/normalize` | 建立同版本同型号 WB 池，保留旧模型 ID、默认与停用项 |
+| `DELETE` | `/admin/accounts/:id` | `{confirm:true}` 删除账号并清理引用，保留聊天、历史与私密备份 |
 | `POST` | `/admin/workbuddy/pool` | 配置同模型备用账号池 |
 | `POST` | `/admin/workbuddy/switch` | 指定下一请求使用的账号（不迁移正在输出的请求） |
 | `POST` | `/admin/restart-dsh` | 重启本机 DSH |
@@ -189,7 +202,7 @@ HTTP `200` 不等于权益已发放，必须逐账号看 `status`。真实代码
 - 幂等键由平台、账号身份指纹、日期（或活动窗口）、任务与设备标识组成；Qoder 等按活动窗口换期（10:00 CST）而非按自然日。
 - 千问办公个人版的每日额度由服务端**自动重置**，属 `observed`，不存在手动签到接口——**“官方每日自动额度”不等于“主动签到成功”**。
 - 适配器与新的已知服务端回执同时返回 `observed:true` 时，官方每日额度刷新记为 `observed` / `claimed:false` / `officialRefreshConfirmed:true`；只收到刷新接口成功但没有相符回执仍是 `uncertain`，不把每日公示额加到新领取统计。
-- `claim --all` 的批量输出按账号逐项给出结果，退出码不能替代逐项检查。
+- `POST /admin/claim` 省略 `accountId` 时批量处理启用账号，输出按账号逐项检查；CLI 的 `claim --account ACCOUNT --task TASK` 为单账号任务，不以未实现的 `--all` 参数代替批量接口。
 
 ## 11. 自建前端注意事项
 
@@ -198,3 +211,58 @@ HTTP `200` 不等于权益已发放，必须逐账号看 `status`。真实代码
 3. `202` 与 `200` 都不代表业务成功：体检看 `status` 与 `jobKeys`，领取看逐账号 `status`，余额看 `value` 与 `stale`。
 4. 未知状态显示为“未知”，不要用绿色或零值填充；缓存数值必须同时显示 `checkedAt` 与 `stale`。
 5. 长会话超限时提示调整 `server.bodyLimitBytes`；管理请求上限固定 4 MiB，不要一并放大。
+
+### 模型目录占位与“导出选中”（取消导入）
+
+`GET /admin/model-directory` 合并实时目录与当前启用路由目标。每条模型的 `importedRouteIds` 精确列出使用该目标的启用路由；`imported` 表示配置关系，不证明可调用。实时目录缺失的目标仍显示：`source: configured_route`、`catalogStatus: missing`（接口失败为 `unavailable`，上游停用为 `upstream_disabled`）、`imported: true`、`callable: false`、`importable: false`，不补造 contextWindow/maxTokens/tools。接口失败另保留 provider.error；发布计数失败返回 published:null 与 publishedError，不吞掉配置条目。停用路由不生成占位。
+
+`POST /admin/model-export` 接受 `{routeIds:["antigravity-main/gemini-pro-agent"]}`，这里“导出”指取消导入，不是文件下载。需要 adminKey；选择为 1–500 个唯一非空字符串。空、错类型、重复返回 HTTP 400 `invalid_selection`；任一路由不存在返回 HTTP 400 `invalid_route`，全请求不写配置。返回 `{saved:true,selected,disabled,alreadyDisabled,routeIds,disabledRouteIds}`：disabled 仅本次停用数；两个 ID 数组均包含全量选择（含原已停用路由）。该操作不访问目录或模型接口，只精确设置选中路由 enabled=false，保留 targets、历史、未选路由及其他配置；重复执行成功且不重复写盘。多目标或同目标别名仍按 routeId 精确操作。
+
+同服务 ConfigStore 的 import/export、PUT config、WorkBuddy capture/pool 使用共同提交队列。模型导入的远程发现置于写锁外；发现期间选中路由或上游变更返回 HTTP 409 `configuration_changed`，不以旧请求复活已取消路由；无关路由修改合并到最新配置。并发 PUT 请求在读 body/等待锁期间发现配置版本对象改变也返回 409，调用方应重读后重新操作。本机制为同服务进程内保护，不宣称跨进程文件事务。旧 model-import 的 enabled:false 分支保留兼容且不再依赖目录，精确批量取消优先使用 model-export。
+
+旧 `/admin/model-import` 的取消条目可携带 `importedRouteIds`；服务端逐一核对这些现存路由仍包含该 upstream/model，全部匹配才停用指定路由，其他别名/多目标路由保持不变。未携带该字段的旧客户端沿用原单目标匹配行为。请优先使用 `/admin/model-export` 明确选择 routeIds。
+
+体检预算独立于模型请求服务器预算：`trae-code-cn/deepseek-v4.1-flash` 的每一体检阶段为 120000ms，耗尽本地预算标记 `audit_stage_timeout`（HTTP 408），并不当作官方接口返回；其他普通体检维持 45000ms，NVIDIA 专属预算与服务器请求截止保持各自策略。
+
+### 同模型接力 活动与免费平台
+
+新增 `GET/POST /admin/model-relay`、`GET /admin/activity-context`、`GET /admin/free-providers`、`POST /admin/free-provider-add`。均要求adminKey，同样使用固定4MiB管理请求上限。策略、元数据覆盖、流式有界缓冲、待配置状态和文件引用契约见[同模型自动接力与活动洞察](model-relay.md)。来源标记只接受 `X-AI-Credit-Source: dsh|hermes`，不会把客户端值当作体检来源来绕过接力。
+
+## 12. WB 帐号池与详细账号状态
+
+完整操作与字段见 [WB 帐号池](wb-account-pool.md)。以下为调用方必须保持的兼容语义。
+
+### 查询与显示
+
+- `GET /admin/workbuddy/summary` 默认读取本机已知结果，包含全部保存的 WB 账号；停用、认证拒绝与封禁账号仍在 `accounts` 中，不从列表移除。
+- `?refresh=true` 刷新；加 `accountId=ACCOUNT` 可定向刷新。`GET /admin/workbuddy/accounts/ACCOUNT/details?refresh=true` 返回 `{account}`，提供单账号详情。
+- 旧账号行的 `remaining` / `total` 保留；详细对象包括 `identity`、`profile`、`credential`、`ban`、`balance`、`tasks`、`dailyCheckin`。UID、userId 与网关账号 ID 分开，缺失值为未知。
+- `credential` 只返回状态、`accessState` / `refreshState` 与 Access/Refresh 有效期等元数据，不返回 token/Cookie。账号身份留在本机管理面，不进入活动用量日志。
+- `balance` 包含当前余额/总额、全部分页积分包、最近成功/失败与错误；刷新失败保留可识别的旧数据，不将其伪装为新成功。未知不填零，总额不拿剩余冒充。
+- `tasks.items` 保留任务内容、目标/进度、奖励、接受/达标/领奖/锁定状态与执行策略。查询失败和未查询分别标记，不能把空数组统一解释为“无任务”。
+- 原生“积分总览”排除 WB，池页使用显眼的“积分剩余 / 总额”；余额管理 API 的默认全平台契约保留，避免破坏既有调用方。
+
+### 封禁与人工标记
+
+`ban.status` 区分 `banned`、`auth_rejected`、`unknown`、`clear`，保留 `reason`、`httpStatus`、`upstreamCode`、`source` 与 `checkedAt`。HTTP 401/403 或 `12153` 等业务认证拒绝不独立证明官方封禁；明确封禁/blocked 证据才作为官方封禁。
+
+```json
+{"status":"banned","reason":"SAMPLE：已由用户核对","confirm":true}
+```
+
+将该 body 发送到 `POST /admin/workbuddy/accounts/ACCOUNT/mark-status` 只保存可撤销的**本机用户标记**，不向上游封号、不冒充官方事实；`status:"clear"` 清除本地标记。标记为封禁后退出 WB 池候选，但账号卡、详情、聊天和历史保留；删号仍需单独显式确认。
+
+### 任务、切换与会话
+
+`GET /admin/workbuddy/tasks?accountId=ACCOUNT` 查询任务；POST 支持 `action: query/accept/run/claim`。当前真实执行覆盖接受任务、每日签到与领取已达标奖励，并查询确认；创建自动化、应用体验、专家使用等未注册真实执行器时保持 `manual_action_required`，不伪造进度或遥测。
+
+设置只接受布尔 `autoTasks` / `autoMigrateSessions`，默认关闭。自动任务同账号互斥，约每 30 分钟检查，不以刷新余额代替签到。
+
+账号切换使用 `POST /admin/workbuddy/accounts/ACCOUNT/switch`；`switchClient:false` 只切网关后续请求。会话合并是新 ID 的本机加法副本，保留源与幂等映射；`cloudSyncConfirmed:false` 不表示云端同步已确认。官方客户端运行或写入失败时返回实际状态并回滚，不重放已经输出的模型请求。
+
+### 接力分区
+
+`POST /admin/model-relay` 支持 `partitions:{workbuddy:true,other:true}`，两者均为布尔。WB 只接 WB；非 WB 供应排除 WB，即使手工构造混合配置也做分区筛选。账号封禁/停用不参与供给，认证失败按独立原因处理。
+
+HTTP 截止与供给进度超时不同：接力默认 30 秒无有效进展，正文/推理/工具增量刷新计时。主供应窗口广播与备用能力筛选分离，保留模型 ID、历史、工具与输出预算；不要将能力错误写成真实积分耗尽。
+

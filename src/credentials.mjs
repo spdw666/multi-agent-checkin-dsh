@@ -1,8 +1,9 @@
 import {desktopProvider,desktopProviderKinds} from './provider-registry.mjs';
+import {resolveFreeCredential} from './free-providers.mjs';
 import {bigModelCredential} from './bigmodel.mjs';
-import {readFile, stat, access} from 'node:fs/promises';
+import {readFile, stat, access, open, unlink} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
-import {join, dirname} from 'node:path';
+import {join, dirname, resolve} from 'node:path';
 import {homedir, userInfo} from 'node:os';
 import {createHash,createDecipheriv} from 'node:crypto';
 import {AppError, rememberSecret, readJson, hash,atomicJson} from './util.mjs';
@@ -12,6 +13,7 @@ import {decryptElectronJson} from './windows-crypto.mjs';
 import {parseMiniMaxCredential} from './minimax.mjs';
 import {refreshQwenSession} from './qwenwork.mjs';
 import {readMiniMaxDesktop,miniMaxRuntimeDir} from './minimax-desktop.mjs';
+import {refreshWorkBuddyCredential} from './workbuddy-auth.mjs';
 export function jwtClaims(token) {try{return JSON.parse(Buffer.from(token.split('.')[1],'base64url').toString())}catch{return {}}}
 async function firstExisting(paths) {for(const p of paths){if(!p)continue;try{await access(p);return p}catch{}}throw new AppError('Local credential file not found',401,'credential_missing');}
 function appData() {return process.env.APPDATA??(process.platform==='darwin'?join(homedir(),'Library/Application Support'):join(homedir(),'.config'));}
@@ -58,13 +60,14 @@ export function runNativeHelper(executable,value,{timeout=12000}={}) {
 export class CredentialManager {
   constructor(config,ledger){this.config=config;this.ledger=ledger;this.cache=new Map();this.flights=new Map();}
   account(id) {const a=this.config.value.accounts.find(a=>a.id===id);if(!a||a.enabled===false)throw new AppError('Account missing or disabled',400,'account_disabled');return a;}
-  async resolve(id,{force=false}={}) {
+  async resolve(id,{force=false,renew=false}={}) {
     const account=this.account(id);
     if(force)this.cache.delete(id);
     if(this.flights.has(id))return this.flights.get(id);
-    const p=this.read(account).catch(e=>{if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>this.flights.delete(id));this.flights.set(id,p);return p;
+    const p=this.read(account,{renew}).catch(e=>{if(/^(codearts|raccoon)_refresh_source_changed$/.test(e.code??''))return this.read(account,{renew});if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>this.flights.delete(id));this.flights.set(id,p);return p;
   }
-  async read(account) {
+  async read(account,{renew=false}={}) {
+    if(account.platform==='freeapi'){const c=await resolveFreeCredential(account,this.config),binding=this.ledger.bind(account.id,'freeapi',c.principal);if(!binding.ok)throw new AppError('Provider credential identity changed; rebind this account',409,'principal_changed');return {...c,principalHash:binding.fingerprint};}
     if(desktopProviderKinds.has(account.platform)){
       const p=await desktopProvider(account.platform),c=await p.resolve(account,this.config);
       for(const value of [c?.accessToken,c?.apiKey,c?.token,c?.refreshToken,c?.accessKey,c?.secretKey,c?.securityToken])if(typeof value==='string'&&value)rememberSecret(value);
@@ -75,7 +78,8 @@ export class CredentialManager {
     }
     const file=await resolveCredentialFile(account,this.config);const info=await stat(file).catch(e=>{if(account.platform==='nvidia')throw new AppError('NVIDIA API Key 待填入本机凭据文件',401,'nvidia_credential_missing');if(account.platform==='minimax')throw new AppError('MiniMax Code 登录态待导入本机凭据文件',401,'minimax_login_required');throw e});
     const fingerprint=hash(JSON.stringify(account.credentials)+file+info.mtimeMs+info.size);
-    let credential=account.platform==='minimax'&&account.credentials.kind==='desktop'?undefined:this.cache.get(account.id)?.fingerprint===fingerprint?this.cache.get(account.id).credential:undefined;
+    let credential=account.platform==='minimax'&&account.credentials.kind==='desktop'||renew?undefined:this.cache.get(account.id)?.fingerprint===fingerprint?this.cache.get(account.id).credential:undefined;
+    if(account.platform==='workbuddy'&&Number.isFinite(credential?.expiresAtMs)&&credential.expiresAtMs<=Date.now()+60000)credential=undefined;
     if(!credential) {
       if(account.platform==='minimax') {
         const raw=await readJson(file).catch(()=>{throw new AppError('MiniMax Code 登录态待导入本机凭据文件',401,'minimax_login_required')});
@@ -86,11 +90,15 @@ export class CredentialManager {
         if(typeof key!=='string'||!/^nvapi-[A-Za-z0-9_-]{20,}$/.test(key))throw new AppError('NVIDIA API Key 待填入本机凭据文件',401,'nvidia_credential_missing');
         credential={accessToken:key,principal:typeof raw.principal==='string'&&raw.principal.trim()?raw.principal:hash(key),proxyUrl:raw.proxyUrl,source:'local-config',filePath:file};
       }else if(account.platform==='bigmodel'){credential={...bigModelCredential(await readJson(file),account.id),filePath:file};}else if(account.credentials.kind==='file') {
-        const raw=await readJson(file);credential={...raw,accessToken:raw.accessToken??raw.token,principal:raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub,expiresAtMs:raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000,source:'local-config',filePath:file};
+        let raw=await readJson(file);if(account.platform==='workbuddy')raw=await this.renewOwnedWorkBuddy(account,file,raw,{renew});credential={...raw,accessToken:raw.accessToken??raw.token,principal:raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub,expiresAtMs:raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000,source:'local-config',filePath:file};
       }else if(account.platform==='workbuddy') {
         const raw=await readJson(file);let accessToken=raw.auth?.accessToken;
         if(typeof accessToken==='object')accessToken=await runNativeHelper(await resolveWorkBuddyExecutable(account,this.config),accessToken);
-        credential={accessToken,refreshToken:'',uid:String(raw.account?.uid??''),principal:String(raw.account?.uid??''),domain:raw.auth?.domain??'www.workbuddy.cn',expiresAtMs:raw.auth?.expiresAt??jwtClaims(accessToken??'').exp*1000,source:'desktop',filePath:file};
+        let refreshToken=raw.auth?.refreshToken??'';
+        if(refreshToken&&typeof refreshToken==='object'){try{refreshToken=await runNativeHelper(await resolveWorkBuddyExecutable(account,this.config),refreshToken);}catch{refreshToken='';}}
+        if(typeof refreshToken!=='string')refreshToken='';if(refreshToken)rememberSecret(refreshToken);
+        const domain=raw.auth?.domain??'www.workbuddy.cn';
+        credential={accessToken,refreshToken,uid:String(raw.account?.uid??''),principal:String(raw.account?.uid??''),domain,edition:account.edition??(/workbuddy\.ai$/i.test(domain)?'ai':'cn'),expiresAtMs:raw.auth?.expiresAt??jwtClaims(accessToken??'').exp*1000,profileRaw:raw.account,source:'desktop',filePath:file};
       }else if(account.platform==='trae') {
         const text=await readFile(file,'utf8');const raw=parseTraeStorageDocument(text);
         credential={accessToken:raw.token??raw.accessToken,refreshToken:'',userId:String(raw.userId??''),principal:String(raw.userId??''),host:raw.host??'',userRegion:raw.userRegion?.region??raw.userRegion,edition:account.edition??'cn',expiresAtMs:typeof raw.expiredAt==='string'?Date.parse(raw.expiredAt):(raw.expiredAt<1e12?raw.expiredAt*1000:raw.expiredAt),source:'desktop',filePath:file};
@@ -119,6 +127,35 @@ export class CredentialManager {
     if(!binding.ok)throw new AppError('Desktop account changed; explicitly rebind this account before using it',409,'principal_changed');
     if(Number.isFinite(credential.expiresAtMs)&&credential.expiresAtMs<=Date.now())throw new AppError('Desktop token expired; reopen the client to renew login, then recheck',401,'credential_expired');
     return {...credential,principalHash:binding.fingerprint};
+  }
+  async renewOwnedWorkBuddy(account,file,raw,{renew=false}={}) {
+    // Only gateway-owned account snapshots are writable. A native auth file or
+    // an arbitrary user-selected JSON remains read-only, even if it has an RT.
+    const owned=this.config.dataDir&&resolve(file)===resolve(this.config.dataDir,'accounts',account.id,'workbuddy-session.json');
+    const expiry=raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000;
+    if(!owned||!raw.refreshToken||!renew&&(!Number.isFinite(expiry)||expiry>Date.now()+60000))return raw;
+    const stateFile=file+'.refresh-state.json',fingerprint=auth=>hash(JSON.stringify([auth.principal??auth.uid,auth.accessToken??auth.token,auth.refreshToken]));
+    const sourceFingerprint=fingerprint(raw),now=Date.now();let previous;
+    try{previous=await readJson(stateFile);}catch(e){if(e.code!=='ENOENT')throw new AppError('WorkBuddy 续期状态需核验',409,'wb_refresh_state_invalid');}
+    const blocked=state=>state?.sourceFingerprint===sourceFingerprint&&['pending','unconfirmed','rejected','deferred'].includes(state.status)&&(!state.retryAt||now<state.retryAt);
+    const failure=state=>Object.assign(new AppError(state.status==='deferred'?'WorkBuddy 续期暂时限流，等待自动重试':state.status==='rejected'?'WorkBuddy 登录凭据已到期，请重新登录':'WorkBuddy 续期结果待核验，等待本机新登录态',state.status==='deferred'?429:state.status==='rejected'?401:503,state.status==='deferred'?'wb_refresh_rate_limited':state.status==='rejected'?'wb_refresh_login_required':'wb_refresh_unconfirmed'),{retryAt:state.retryAt,loginRequired:state.status==='rejected'});
+    if(blocked(previous)){if(!renew&&expiry>now+5000)return {...raw,refreshPending:true};throw failure(previous);}
+    let lock;try{lock=await open(stateFile+'.lock','wx',0o600);}catch{throw new AppError('WorkBuddy 登录续期正在处理',409,'wb_refresh_pending');}
+    try{
+      const latest=await readJson(file);
+      if(fingerprint(latest)!==sourceFingerprint)return latest; // a fresh capture/login always wins
+      let state;try{state=await readJson(stateFile);}catch(e){if(e.code!=='ENOENT')throw e;}
+      if(blocked(state)){if(!renew&&expiry>now+5000)return {...latest,refreshPending:true};throw failure(state);}
+      await atomicJson(stateFile,{sourceFingerprint,status:'pending',attemptedAt:now});
+      let next;
+      try{next=await (this.workbuddyRefresh??refreshWorkBuddyCredential)(latest,{now});}
+      catch(error){await atomicJson(stateFile,{sourceFingerprint,status:error.loginRequired?'rejected':error.retryable&&error.beforeSubmission?'deferred':'unconfirmed',attemptedAt:now,...(error.retryable&&error.beforeSubmission?{retryAt:error.retryAt}:{})});if(!renew&&expiry>now+5000)return {...latest,refreshPending:true};throw error;}
+      const after=await readJson(file);
+      if(fingerprint(after)!==sourceFingerprint)return after; // do not overwrite a concurrent new login
+      next={...after,...next,managedBy:'ai-credit-gateway',platform:'workbuddy',credentialVersion:1};
+      await atomicJson(file,next);await atomicJson(stateFile,{sourceFingerprint:fingerprint(next),status:'complete',completedAt:Date.now()});
+      return next;
+    }finally{await lock.close();await unlink(stateFile+'.lock').catch(()=>{});}
   }
   async refreshQwen(id) {
     const account=this.account(id);if(account.platform!=='qwenwork')throw new AppError('QwenWork account required',400,'invalid_account');

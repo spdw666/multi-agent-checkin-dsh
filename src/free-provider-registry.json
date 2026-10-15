@@ -1,0 +1,2001 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-13",
+  "referenceCommit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+  "readmeAdvertisedProviders": 34,
+  "sourceRegisteredEntries": 65,
+  "registeredProviders": 64,
+  "websiteObservedProviderCount": 25,
+  "notes": [
+    "Registration is not free-tier eligibility or live verification.",
+    "Missing official capacity stays unverified, never defaults to 32768.",
+    "No reference program code copied; endpoint facts independently adapted."
+  ],
+  "providers": [
+    {
+      "id": "aclide",
+      "name": "ACLIDE",
+      "baseUrl": "https://aclide.com/v1",
+      "protocol": "responses",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/aclide.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      },
+      "streamingMode": "buffered_responses"
+    },
+    {
+      "id": "agnes",
+      "name": "Agnes AI",
+      "baseUrl": "https://apihub.agnes-ai.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "aihorde",
+      "name": "AI Horde",
+      "baseUrl": "https://oai.aihorde.net/v1",
+      "protocol": "horde",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/aihorde.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": true,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "ainative",
+      "name": "AINative Studio",
+      "baseUrl": "https://api.ainative.studio/api/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "aion",
+      "name": "Aion Labs",
+      "baseUrl": "https://api.aionlabs.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "airforce",
+      "name": "Api.Airforce",
+      "baseUrl": "https://api.airforce/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/airforce.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "anyapi",
+      "name": "AnyAPI",
+      "baseUrl": "https://api.anyapi.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "bai",
+      "name": "B.AI",
+      "baseUrl": "https://api.b.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "bazaarlink",
+      "name": "BazaarLink",
+      "baseUrl": "https://bazaarlink.ai/api/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "blaze",
+      "name": "BlazeAPI",
+      "baseUrl": "https://api.blazeapi.org/paid/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/blaze.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "blockrun",
+      "name": "BlockRun",
+      "baseUrl": "https://api.blockrun.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/blockrun.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "clod",
+      "name": "CLōD",
+      "baseUrl": "https://api.clod.io/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/clod.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare Workers AI",
+      "baseUrl": "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1",
+      "protocol": "cloudflare",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/cloudflare.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "daily_allocation",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey",
+        "accountId"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+          "checkedAt": "2026-10-13",
+          "status": "daily_allocation",
+          "note": "官方每日免费额度10000 Neurons；这是政策上限，不是本机剩余额度。"
+        },
+        "note": "官方每日免费额度10000 Neurons；这是政策上限，不是本机剩余额度。"
+      },
+      "catalogPath": "/ai/models/search"
+    },
+    {
+      "id": "cohere",
+      "name": "Cohere",
+      "baseUrl": "https://api.cohere.ai/compatibility/v1",
+      "protocol": "cohere",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/cohere.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "evaluation_tier",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://docs.cohere.com/docs/rate-limits",
+          "checkedAt": "2026-10-13",
+          "status": "evaluation_tier",
+          "note": "评估key共享每月1000 API calls，Chat每模型20次/分钟；生产key收费。"
+        },
+        "note": "评估key共享每月1000 API calls，Chat每模型20次/分钟；生产key收费。"
+      },
+      "catalogUrl": "https://api.cohere.ai/v1/models"
+    },
+    {
+      "id": "custom",
+      "name": "Custom (OpenAI-compatible)",
+      "baseUrl": "",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": false,
+      "availability": "configuration_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "dreamprompting",
+      "name": "DreamPrompting",
+      "baseUrl": "https://dreamprompting.com/api/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/dreamprompting.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "electronhub",
+      "name": "ElectronHub",
+      "baseUrl": "https://api.electronhub.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/electronhub.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "experiential",
+      "name": "Experiential Labs",
+      "baseUrl": "https://api.experientiallabs.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/experiential.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "freeai",
+      "name": "Free.ai",
+      "baseUrl": "https://api.free.ai",
+      "protocol": "audio",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/freeai.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": false,
+      "availability": "non_chat",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "github",
+      "name": "GitHub Models",
+      "baseUrl": "https://models.github.ai/inference",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": false,
+      "availability": "retired",
+      "freeEligibility": "retired",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://docs.github.com/en/github-models",
+          "checkedAt": "2026-10-13",
+          "status": "retired",
+          "note": "官方：GitHub Models于2026-07-30全面退休；不是GitHub Copilot。"
+        },
+        "note": "官方：GitHub Models于2026-07-30全面退休；不是GitHub Copilot。"
+      }
+    },
+    {
+      "id": "gizmo",
+      "name": "Gizmo",
+      "baseUrl": "https://api.gizmoplatforms.com/api/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/gizmo.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "google",
+      "name": "Google AI Studio",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "protocol": "gemini",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/google.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "model_specific_free_tier",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://ai.google.dev/gemini-api/docs/rate-limits",
+          "checkedAt": "2026-10-13",
+          "status": "model_specific_free_tier",
+          "note": "按项目/模型/层级限额；以AI Studio当前项目为准，RPD太平洋时间午夜重置。"
+        },
+        "note": "按项目/模型/层级限额；以AI Studio当前项目为准，RPD太平洋时间午夜重置。"
+      },
+      "catalogUrl": "https://generativelanguage.googleapis.com/v1beta/models",
+      "chatBaseUrl": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "model_specific_free_tier",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://console.groq.com/docs/rate-limits",
+          "checkedAt": "2026-10-13",
+          "status": "model_specific_free_tier",
+          "note": "免费计划按模型限速；HTTP额度头为实际观测，不按模型叠加账户限额。"
+        },
+        "note": "免费计划按模型限速；HTTP额度头为实际观测，不按模型叠加账户限额。"
+      }
+    },
+    {
+      "id": "huggingface",
+      "name": "HuggingFace Router",
+      "baseUrl": "https://router.huggingface.co/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "paid_only",
+      "freeEligibility": "no_free_allocation",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://huggingface.co/docs/inference-providers/en/pricing",
+          "checkedAt": "2026-10-13",
+          "status": "no_free_allocation",
+          "note": "官方当前Free Users无月度credits；旧仓库$0.10/月说法过时。"
+        },
+        "note": "官方当前Free Users无月度credits；旧仓库$0.10/月说法过时。"
+      }
+    },
+    {
+      "id": "inferbase",
+      "name": "Inferbase",
+      "baseUrl": "https://api.inferbase.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/inferbase.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "kilo",
+      "name": "Kilo Gateway",
+      "baseUrl": "https://api.kilo.ai/api/gateway/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "keyless_free_models",
+      "keyless": true,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [
+        {
+          "id": "liquid/lfm-2.5-2.6b:free",
+          "name": "LiquidAI: LFM2.5-2.6B (free)",
+          "contextWindow": 65536,
+          "maxTokens": 8192,
+          "officialMaxTokens": 8192,
+          "tools": true,
+          "vision": false,
+          "callable": true,
+          "importable": true,
+          "chat": true,
+          "category": "chat",
+          "metadataSource": "provider_catalog",
+          "maxTokensSource": "provider_catalog",
+          "metadataStatus": "documented_context",
+          "freeEligibility": "catalog_zero_price",
+          "freeEndpoint": true,
+          "mayTrainOnYourPrompts": true,
+          "source": "https://api.kilo.ai/api/gateway/models",
+          "checkedAt": "2026-10-13T10:18:21.212Z"
+        }
+      ],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://kilo.ai/docs/gateway/usage-and-billing",
+          "checkedAt": "2026-10-13",
+          "status": "keyless_free_models",
+          "note": "匿名或认证free模型按IP共享每小时200请求；只使用实时目录明确零价格项。"
+        },
+        "note": "匿名或认证free模型按IP共享每小时200请求；只使用实时目录明确零价格项。"
+      },
+      "catalogUrl": "https://api.kilo.ai/api/gateway/models",
+      "verification": {
+        "status": "tool_roundtrip_verified",
+        "modelId": "liquid/lfm-2.5-2.6b:free",
+        "checkedAt": "2026-10-13T10:18:21.212Z",
+        "credential": "anonymous",
+        "scope": "one synthetic tool call and result only"
+      }
+    },
+    {
+      "id": "llm7",
+      "name": "LLM7",
+      "baseUrl": "https://api.llm7.io/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "llmtr",
+      "name": "LLMTR",
+      "baseUrl": "https://llmtr.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/llmtr.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "logfare",
+      "name": "Logfare",
+      "baseUrl": "https://logfare.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/logfare.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "longcat",
+      "name": "LongCat",
+      "baseUrl": "https://api.longcat.chat/openai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      },
+      "catalogUrl": "https://api.longcat.chat/v1/models",
+      "protocolOptions": [
+        "openai",
+        "anthropic"
+      ],
+      "protocolSource": "https://longcat.chat/platform/docs/APIDocs.html"
+    },
+    {
+      "id": "lucidity",
+      "name": "Lucidity Composite",
+      "baseUrl": "https://composite.lucidity.sh/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/lucidity.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "modelscope",
+      "name": "ModelScope",
+      "baseUrl": "https://api-inference.modelscope.cn/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/modelscope.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "paid_quota_reported",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "参考源码当前报告魔粒计费，不采用旧每日2000免费调用说法；本账户政策待核验。"
+      }
+    },
+    {
+      "id": "moondream",
+      "name": "Moondream",
+      "baseUrl": "https://api.moondream.ai/v1",
+      "protocol": "moondream",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/moondream.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "nara",
+      "name": "NaraRouter",
+      "baseUrl": "https://router.bynara.id/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "navy",
+      "name": "NavyAI",
+      "baseUrl": "https://api.navy/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA NIM",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": false,
+      "availability": "reuse_existing",
+      "freeEligibility": "reuse_existing",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://build.nvidia.com",
+          "checkedAt": "2026-10-13",
+          "status": "reuse_existing",
+          "note": "复用已有NVIDIA官方适配器与最新限额模块，不重复账号或额度。"
+        },
+        "note": "复用已有NVIDIA官方适配器与最新限额模块，不重复账号或额度。"
+      },
+      "reuseExisting": "nvidia"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama Cloud",
+      "baseUrl": "https://ollama.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode Zen",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "restricted_promotion",
+      "freeEligibility": "limited_promotion",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://docs.opencode.ai/docs/zen/",
+          "checkedAt": "2026-10-13",
+          "status": "limited_promotion",
+          "note": "付费服务与限时free促销分离；参考仓库记录免费款原客户端限定，不伪造客户端身份。"
+        },
+        "note": "付费服务与限时free促销分离；参考仓库记录免费款原客户端限定，不伪造客户端身份。"
+      }
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "orcarouter",
+      "name": "OrcaRouter",
+      "baseUrl": "https://api.orcarouter.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "ovh",
+      "name": "OVH AI Endpoints",
+      "baseUrl": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "anonymous_evaluation",
+      "keyless": true,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started",
+          "checkedAt": "2026-10-13",
+          "status": "anonymous_evaluation",
+          "note": "匿名每IP每模型2次/分钟；认证API存在计费，不能把全部目录标免费。"
+        },
+        "note": "匿名每IP每模型2次/分钟；认证API存在计费，不能把全部目录标免费。"
+      }
+    },
+    {
+      "id": "plugsky",
+      "name": "Plugsky",
+      "baseUrl": "https://plugsky.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/plugsky.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "pollinations",
+      "name": "Pollinations",
+      "baseUrl": "https://gen.pollinations.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/pollinations.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "qianfan",
+      "name": "Baidu Qianfan",
+      "baseUrl": "https://qianfan.baidubce.com/v2",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "radeon",
+      "name": "AMD Radeon Cloud",
+      "baseUrl": "https://developer.amd.com.cn/radeon/api/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "reka",
+      "name": "Reka",
+      "baseUrl": "https://api.reka.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "no_free_allocation_reported",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "参考实现报告新账户需预付；本轮未取得官方FAQ可读正文，按待核验付费风险处理，不默认免费。"
+      }
+    },
+    {
+      "id": "requesty",
+      "name": "Requesty",
+      "baseUrl": "https://router.requesty.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "router9",
+      "name": "Router9",
+      "baseUrl": "https://api.router9.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/router9.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "routeway",
+      "name": "Routeway",
+      "baseUrl": "https://api.routeway.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "sail",
+      "name": "Sail Research",
+      "baseUrl": "https://api.sailresearch.com/v1",
+      "protocol": "responses",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/sail.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "参考实现称需绑定付款方式的月度赠金；官方资格/当前余额待核验，不称无条件免费。"
+      },
+      "streamingMode": "buffered_responses"
+    },
+    {
+      "id": "sealion",
+      "name": "SEA-LION",
+      "baseUrl": "https://api.sea-lion.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "septor",
+      "name": "Septor Labs",
+      "baseUrl": "https://api.septorlabs.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/septor.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "siliconflow",
+      "name": "SiliconFlow",
+      "baseUrl": "https://api.siliconflow.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "simplellm",
+      "name": "SimpleLLM",
+      "baseUrl": "https://api.simplellm.eu/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/simplellm.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "speechify",
+      "name": "Speechify",
+      "baseUrl": "https://api.speechify.ai/v1",
+      "protocol": "audio",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/speechify.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": false,
+      "availability": "non_chat",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "speka",
+      "name": "Speka",
+      "baseUrl": "https://speka.me/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/speka.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "typhoon",
+      "name": "Typhoon",
+      "baseUrl": "https://api.opentyphoon.ai/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/typhoon.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "unorouter",
+      "name": "UnoRouter",
+      "baseUrl": "https://api.unorouter.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "volcengine",
+      "name": "Volcengine Ark",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "waterfall",
+      "name": "Waterfall",
+      "baseUrl": "https://api.getwaterfall.org/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/waterfall.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "xfyun",
+      "name": "iFlytek Spark",
+      "baseUrl": "https://spark-api-open.xf-yun.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "xkiro",
+      "name": "xKiro",
+      "baseUrl": "https://api.xkiro.com/v1",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/index.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": true,
+      "availability": "credential_required",
+      "freeEligibility": "unverified",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": null,
+        "note": "目录和传输支持不等于免费额度；需本账号与当前模型政策确认。"
+      }
+    },
+    {
+      "id": "zhipu",
+      "name": "Zhipu AI",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "protocol": "openai",
+      "reference": {
+        "repository": "https://github.com/tashfeenahmed/freellmapi",
+        "commit": "986b2118226f5c2d1a0348e14d151a7005c1924e",
+        "url": "https://github.com/tashfeenahmed/freellmapi/blob/986b2118226f5c2d1a0348e14d151a7005c1924e/server/src/providers/zhipu.ts",
+        "checkedAt": "2026-10-13"
+      },
+      "transportSupported": false,
+      "availability": "reuse_existing",
+      "freeEligibility": "reuse_existing",
+      "keyless": false,
+      "credentialFields": [
+        "apiKey"
+      ],
+      "models": [],
+      "quota": {
+        "value": null,
+        "remaining": null,
+        "unit": null,
+        "source": "not_observed",
+        "checkedAt": null,
+        "policy": {
+          "source": "https://open.bigmodel.cn",
+          "checkedAt": "2026-10-13",
+          "status": "reuse_existing",
+          "note": "复用已有BigModel；国际Z.ai与国内key命名空间不同，不自动跨域发送。"
+        },
+        "note": "复用已有BigModel；国际Z.ai与国内key命名空间不同，不自动跨域发送。"
+      },
+      "reuseExisting": "bigmodel"
+    }
+  ]
+}

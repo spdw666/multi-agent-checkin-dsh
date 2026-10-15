@@ -1,4 +1,6 @@
 import {desktopProviderKinds} from './provider-registry.mjs';
+import {relayDefaults,validateRelay} from './model-relay.mjs';
+import {getFreeProvider} from './free-providers.mjs';
 import {dirname, join} from 'node:path';
 import {readFile, copyFile, mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -15,19 +17,23 @@ export function validateConfig(c) {
       ids.add(item.id);
     }
   }
-  for(const a of c.accounts)if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia',...desktopProviderKinds].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');
+  for(const a of c.accounts){if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');if(a.platform==='freeapi')getFreeProvider(a.freeProviderId);}
   for(const u of c.upstreams){
-    if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia',...desktopProviderKinds].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
+    if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
+    if(u.kind==='freeapi'&&['baseUrl','url','endpoint','proxyUrl'].some(k=>u[k]!==undefined))throw new AppError('Free providers use registered fixed endpoints',400,'invalid_free_provider_endpoint');
     if(u.kind==='antigravity')antigravityBase(u);
     if(u.kind==='nvidia'&&['baseUrl','sidecarBaseUrl','url','endpoint','proxyUrl'].some(k=>u[k]!==undefined))throw new AppError('NVIDIA uses its dedicated official endpoint; keep local proxy settings in its credential file',400,'invalid_nvidia_endpoint');
     if(u.kind==='nvidia'&&u.localLimits!==undefined){const l=u.localLimits;if(!l||!Number.isInteger(l.maxConcurrent)||l.maxConcurrent<1||l.maxConcurrent>8||!Number.isInteger(l.minIntervalMs)||l.minIntervalMs<0||l.minIntervalMs>60000)throw new AppError('NVIDIA localLimits needs maxConcurrent 1-8 and minIntervalMs 0-60000',400,'invalid_nvidia_local_limits');}
     if(!c.accounts.some(a=>a.id===u.accountId&&a.platform===u.kind))throw new AppError(`Upstream ${u.id}: account/platform mismatch`,400,'invalid_config');
   }
   for(const r of c.routes){
+    if(r.relay!==undefined&&typeof r.relay!=='boolean')throw new AppError('Route relay must be boolean',400,'invalid_config');
     if(!Array.isArray(r.targets)||!r.targets.length||r.targets.some(t=>typeof t.model!=='string'||!t.model||!c.upstreams.some(u=>u.id===t.upstreamId)))throw new AppError(`Route ${r.id}: invalid targets`,400,'invalid_config');
     const pool=r.accountPool;
     if(pool&&(!Array.isArray(pool.accountIds)||!pool.accountIds.length||new Set(pool.accountIds).size!==pool.accountIds.length||pool.accountIds.some(id=>!c.accounts.some(a=>a.id===id&&a.platform==='workbuddy'))||c.upstreams.find(u=>u.id===r.targets[0].upstreamId)?.kind!=='workbuddy'||pool.cooldownSeconds!==undefined&&(!Number.isInteger(pool.cooldownSeconds)||pool.cooldownSeconds<60||pool.cooldownSeconds>86400)))throw new AppError(`Route ${r.id}: invalid WorkBuddy account pool`,400,'invalid_config');
   }
+  if(c.modelRelay!==undefined)validateRelay({...relayDefaults,...c.modelRelay});
+  if(c.workbuddy!==undefined&&(!c.workbuddy||typeof c.workbuddy!=='object'||Array.isArray(c.workbuddy)||Object.entries(c.workbuddy).some(([k,v])=>!['autoMigrateSessions','autoTasks'].includes(k)||typeof v!=='boolean')))throw new AppError('Invalid WorkBuddy settings',400,'invalid_config');
   if(!c.server||!Number.isInteger(c.server.port)||c.server.port<0||c.server.port>65535)throw new AppError('Invalid server port',400,'invalid_config');
   if(c.server.requestTimeoutMs!==undefined&&(!Number.isInteger(c.server.requestTimeoutMs)||c.server.requestTimeoutMs<1000||c.server.requestTimeoutMs>1200000))throw new AppError('server.requestTimeoutMs must be integer milliseconds 1000..1200000',400,'invalid_config');
   if(c.server.modelRequestTimeouts!==undefined){const map=c.server.modelRequestTimeouts;if(!map||typeof map!=='object'||Array.isArray(map)||Object.keys(map).length>500||Object.entries(map).some(([id,v])=>!id||id.length>512||!Number.isInteger(v)||v<1000||v>1200000))throw new AppError('server.modelRequestTimeouts must map route IDs to integer milliseconds 1000..1200000',400,'invalid_config');}

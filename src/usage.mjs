@@ -2,6 +2,7 @@
 import {randomUUID} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
 import {errorView} from './util.mjs';
+import {captureRequestContext} from './activity-context.mjs';
 const number=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:null;
 export function usageCounters(u={}) {
   const promptTokens=number(u.prompt_tokens??u.input_tokens),completionTokens=number(u.completion_tokens??u.output_tokens);
@@ -11,7 +12,7 @@ export class UsageAttempt {
   constructor(ledger,config,request,target,{requestId=randomUUID(),attempt=1,source='api'}={}) {
     this.ledger=ledger;this.clock=performance.now();this.firstTokenMs=null;this.usage={};
     const upstream=(config.upstreams??[]).find(u=>u.id===target.upstreamId),account=config.accounts?.find(a=>a.id===upstream?.accountId);
-    this.row={requestId,attempt,source,startedAt:new Date().toISOString(),routeId:request.model,model:target.model,upstreamId:target.upstreamId,accountId:upstream?.accountId??'',accountLabel:account?.label??account?.id??'',platform:upstream?.kind??'',stream:request.stream===true,hasTools:!!request.tools?.length,...usageCounters()};
+    this.row={requestId,attempt,source,startedAt:new Date().toISOString(),routeId:request.model,model:target.model,upstreamId:target.upstreamId,accountId:upstream?.accountId??'',accountLabel:account?.label??account?.id??'',platform:upstream?.kind??'',stream:request.stream===true,hasTools:!!request.tools?.length,context:captureRequestContext(request),...usageCounters()};
     try{this.id=ledger?.beginUsage?.(this.row)}catch(e){console.error('usage_record_write_failed',e.code??'storage_error');}
   }
   chunk(chunk){if(this.firstTokenMs===null&&(chunk.choices??[]).some(c=>c.delta?.content||c.delta?.tool_calls?.length))this.firstTokenMs=Math.round(performance.now()-this.clock);if(chunk.usage)for(const [key,value] of Object.entries(usageCounters(chunk.usage)))if(value!==null)this.usage[key]=value;}

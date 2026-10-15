@@ -14,7 +14,11 @@ WorkBuddy 上游的 DSML 模块包含对 [hawklithm/workbuddy2api](https://githu
 
 所有被分发的上游源码保留文件头部声明。两个 DSH 上游的完整 MIT LICENSE 与 THIRD_PARTY_NOTICES 随包保存在对应 vendor 目录。
 
+Trae SOLO bridge 本地新增仅 `deepseek-v4.1-flash` 的 reasoning-only stop 有界恢复：无可见正文或工具片段时同请求最多一次重试，共享取消与截止预算，累计真实用量；不将思考当最终答案、不重放工具。详见 `docs/trae-reasoning-only.md`，上游 MIT 归属保持。
+
 ## 读取并参考，未复制其程序
+
+同款供给组、免费平台注册及故障接力参考 [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi)（MIT）；原生活动洞察的信息组织参考 [bowenliang123/dsh-context](https://github.com/bowenliang123/dsh-context)（Apache-2.0）。未复制代码或素材，免费政策另以官方当前资料核对，来源见 `docs/free-providers.md` 与 `docs/model-relay.md`。
 
 | 项目 | 许可证 | 使用决定 |
 |---|---|---|
@@ -47,11 +51,11 @@ wangmingdong/workbuddy-signin（MIT）的积分卡片布局与用户截图；本
 linguo2625469/workbuddy2api-panel，MIT，commit d66384d9e3d69655f799d7d8f2e5fba1946e00ab；原作者 Sliverkiss，增强分支 linguo2625469。参考账号池、硬额度/软限流分类、成功账号粘性和冷却恢复；本工程独立实现 Node 多账号签到及同模型切换，未移植其自动成长任务或 Go 服务器。完整 MIT 文本保留 vendor/LICENSE.workbuddy2api-panel。
 
 ## 公共源码包
-不包含原生/Web前端、客户端程序、WASM、凭据、数据库或会话档案。千问协议助手 vendor/qwenwork_ref 参考 wicm84266964/Buddy2api（MIT），完整许可证在该目录；编码器边界/UTF-8和上游映射由本网关实现。Galaxy/HTMLrev 仅作为本机桌面设计参考，公共包未分发其UI。
+包含本网关独立实现的 Windows 原生桌面源码及 `desktop/build.ps1`，不包含个人安装二进制/runtime、第三方客户端程序、凭据、数据库或会话档案。千问协议助手 vendor/qwenwork_ref 参考 wicm84266964/Buddy2api（MIT），完整许可证在该目录；编码器边界/UTF-8和上游映射由本网关实现。Galaxy/HTMLrev 仅作为桌面设计参考，未分发其 UI 代码或素材。
 
 ## 智谱官方适配（2026-10-09）
 
-智谱 BigModel 官方 OpenAI 兼容文档用于核对模型调用契约；官方控制台的实际响应用于核对资源包字段。本工程独立实现 `src/bigmodel.mjs`，不复制或分发产品客户端/控制台源码。另参考 hucuyuu/zhipu-balance（MIT）的现金余额查询端点线索，未复制其程序；此处与原有参考项目一并致谢。README 展示图为用户提供的本机截图，不包含前端实现。
+智谱 BigModel 官方 OpenAI 兼容文档用于核对模型调用契约；官方控制台的实际响应用于核对资源包字段。本工程独立实现 `src/bigmodel.mjs`，不复制或分发产品客户端/控制台源码。另参考 hucuyuu/zhipu-balance（MIT）的现金余额查询端点线索，未复制其程序；此处与原有参考项目一并致谢。历史展示图为用户提供的本机截图，不代表第三方客户端代码随仓库分发。
 
 ## Antigravity 独立协议桥与 Hermes 接入
 
@@ -79,3 +83,15 @@ Loomy 旧测试环境的登录失效结论已纠正；小浣熊 Electron Cookie 
 - [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model/tree/ddb451c2f24bac0b0f8b03b2473efbb1f0aefb68)，MIT：核对 CodeArts 与小浣熊的官方续期和积分协议、恢复性错误与日额度语义；本网关保持自己的 Node provider/私有缓存与原生界面，不复制其匿名渠道或整包代码。逐项协议与本机回执见对应 provider 文档。
 - [BeUI](https://beui.dev/)、[shadcn/ui](https://ui.shadcn.com/)、[Rare UI](https://www.rareui.com/)、[Transitions](https://transitions.dev/)：卡片层级、简短入场/退出过渡、hover/focus与减少动效偏好的视觉和交互参考。本网关原生 WinForms 控件独立实现；本公开仓库未打包这些 React 组件。Beautiful UI 地址也已检索，未获取到可用源码，未列为代码复用。
 - 本机平台图标从用户已安装客户端与快捷方式提取，属于各平台商标资源，仅用于本机识别与桌面部署，不作为本公开后端包的原创素材分发。
+
+## WB 账号管理、详细积分包与任务协议参照
+
+| 来源 | 固定参照 | 本项目使用方式 |
+|---|---|---|
+| [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) | `22b318c1f44b335c2222e444abcc2d0f74e160f7`，MIT，Copyright (c) 2026 wb-switch | 官方授权/登录格式、本机会话加法复制、账号身份和积分包组织参照；独立适配 Node 管理 API 与 WinForms |
+| [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | `6b31db6d045e985042620c819c3a938002e7b0b1`，MIT，Copyright (c) 2026 Sliverkiss / linguo2625469 | 官方任务协议、任务状态及账号卡信息组织参照；不移植其 Go 服务与 Web UI |
+| [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) | `ac4c55ef5e0833bf0138846a7c5255ecbc14a07c`，MIT | CodeArts/小浣熊续期、错误分类与额度协议对照；不移植匿名渠道或整包代码 |
+
+WB 两个参考项目的完整 MIT 声明与固定提交记录保留在 [src/workbuddy-reference-license.mjs](src/workbuddy-reference-license.mjs)。本工程没有运行第三方安装脚本，不复制用户数据，不将上述项目的所有功能描述为本项目已实现功能。
+
+身份、封禁来源、全部积分包分页、任务描述/奖励/进度/回执由本工程统一管理契约与原生详情窗口呈现。认证 401/403 不独自证明封禁；本机人工标记与官方事实分开。真实任务执行仍按本网关实际注册执行器判断，未接入的自动化/应用/专家使用任务保留待操作。功能边界见 [docs/wb-account-pool.md](docs/wb-account-pool.md)。

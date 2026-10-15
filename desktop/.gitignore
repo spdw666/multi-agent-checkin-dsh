@@ -1,0 +1,9 @@
+dist/
+core/
+runtime/
+platform-icons/
+*.exe
+*.pdb
+desktop.local.json
+*.log
+build/

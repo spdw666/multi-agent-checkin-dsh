@@ -2,9 +2,14 @@
 import {AppError,atomicJson,hash} from './util.mjs';
 import {CredentialManager} from './credentials.mjs';
 import {join} from 'node:path';
+import {readFile,writeFile,rm} from 'node:fs/promises';
+import {syncWorkBuddyPools} from './workbuddy-management.mjs';
+import {workBuddyEdition} from './workbuddy-auth.mjs';
+import {isWorkBuddyBlocked} from './workbuddy-status.mjs';
 
 export function isCreditExhausted(error) {
   const status=Number(error.status);
+  if(/context_length|context_window|prompt_too_long|input_token_limit/i.test(String(error.code??''))||/context (?:window|length)|prompt (?:is )?too long|maximum context|input tokens? .*limit/i.test(String(error.message??'')))return false;
   // Rate limiting, authentication and bad model parameters are not empty wallets.
   if([401,429].includes(status))return false;
   if(status===402)return true;
@@ -14,12 +19,13 @@ export class WorkBuddyPool {
   constructor(config,ledger){Object.assign(this,{config,ledger});this.memory=new Map();}
   get(key){return this.ledger?.get(key)??this.memory.get(key);}
   set(key,value){if(this.ledger)this.ledger.set(key,value);else this.memory.set(key,value);}
-  candidates(route,{ignoreCooldown=false}={}) {
-    if(!route.accountPool?.enabled)return route.targets;
+  candidates(route,{ignoreCooldown=false,includeBlocked=false}={}) {
+    if(!route.accountPool?.enabled)return route.targets.filter(t=>{const u=(this.config.value.upstreams??[]).find(u=>u.id===t.upstreamId);return includeBlocked||u?.kind!=='workbuddy'||!isWorkBuddyBlocked(this,u.accountId);});
     const base=route.targets[0],primary=this.config.value.upstreams.find(u=>u.id===base.upstreamId);
     if(primary?.kind!=='workbuddy')throw new AppError('WorkBuddy account pool requires a WorkBuddy primary target',400,'invalid_account_pool');
     const targets=route.accountPool.accountIds.map(accountId=>{
-      const account=this.config.value.accounts.find(a=>a.id===accountId&&a.enabled!==false&&a.platform==='workbuddy');
+      const primaryAccount=this.config.value.accounts.find(a=>a.id===primary.accountId);
+      const account=this.config.value.accounts.find(a=>a.id===accountId&&a.enabled!==false&&a.platform==='workbuddy'&&workBuddyEdition(a)===workBuddyEdition(primaryAccount)&&(includeBlocked||!isWorkBuddyBlocked(this,a.id)));
       const u=account&&this.config.value.upstreams.find(u=>u.kind==='workbuddy'&&u.accountId===accountId&&u.enabled!==false);
       return u?{upstreamId:u.id,model:base.model,accountId}:undefined;
     }).filter(Boolean);
@@ -44,14 +50,16 @@ export class WorkBuddyPool {
     this.set('wb-pool-route:'+route.id,{preferredAccountId:accountId,manualVersion:this.version(route)+1,updatedAt:new Date().toISOString()});return {selected:true,routeId:route.id,accountId,effective:'next_request'};
   }
   revive(accountId){this.set('wb-pool-cooldown:'+accountId,{until:0,reason:'balance_restored'});}
-  status(route){return {routeId:route.id,enabled:route.accountPool?.enabled===true,preferredAccountId:this.get('wb-pool-route:'+route.id)?.preferredAccountId??null,accounts:this.candidates(route,{ignoreCooldown:true}).map(t=>{const accountId=t.accountId??this.config.value.upstreams.find(u=>u.id===t.upstreamId)?.accountId;return {...t,accountId,...this.get('wb-pool-cooldown:'+accountId),available:(this.get('wb-pool-cooldown:'+accountId)?.until??0)<=Date.now()};})};}
+  status(route){return {routeId:route.id,enabled:route.accountPool?.enabled===true,preferredAccountId:this.get('wb-pool-route:'+route.id)?.preferredAccountId??null,accounts:this.candidates(route,{ignoreCooldown:true,includeBlocked:true}).map(t=>{const accountId=t.accountId??this.config.value.upstreams.find(u=>u.id===t.upstreamId)?.accountId,blocked=isWorkBuddyBlocked(this,accountId);return {...t,accountId,...this.get('wb-pool-cooldown:'+accountId),banned:blocked,available:!blocked&&(this.get('wb-pool-cooldown:'+accountId)?.until??0)<=Date.now()};})};}
 }
 export async function configureWorkBuddyPool(service,{routeId,accountIds,enabled=true,cooldownSeconds=3600}) {
   const value=structuredClone(service.config.value),route=value.routes.find(r=>r.id===routeId);
   if(!route)throw new AppError('Unknown route',404,'model_not_found');
   const primary=value.upstreams.find(u=>u.id===route.targets[0].upstreamId);
   if(primary?.kind!=='workbuddy')throw new AppError('Select a WorkBuddy model route',400,'invalid_account_pool');
+  const edition=workBuddyEdition(value.accounts.find(a=>a.id===primary.accountId));
   if(!Array.isArray(accountIds)||!accountIds.length||new Set(accountIds).size!==accountIds.length||accountIds.some(id=>!value.accounts.some(a=>a.id===id&&a.platform==='workbuddy'&&a.enabled!==false)))throw new AppError('Select distinct enabled WorkBuddy accounts',400,'invalid_pool_accounts');
+  if(accountIds.some(id=>workBuddyEdition(value.accounts.find(a=>a.id===id))!==edition))throw new AppError('WB 帐号池按国内版与国际版分别接力',400,'invalid_pool_edition');
   if(!Number.isInteger(cooldownSeconds)||cooldownSeconds<60||cooldownSeconds>86400)throw new AppError('Cooldown must be 60–86400 seconds',400,'invalid_pool_cooldown');
   for(const id of accountIds)if(!value.upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===id&&u.enabled!==false))throw new AppError('Account needs an enabled WorkBuddy upstream: '+id,400,'pool_upstream_missing');
   route.accountPool={enabled:enabled!==false,accountIds,cooldownSeconds};
@@ -61,14 +69,18 @@ export async function captureWorkBuddyAccount(service,{id,label},{readCurrent}={
   if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id??''))throw new AppError('Use a unique account ID (letters, numbers, hyphen)',400,'invalid_account_id');
   const current=readCurrent?await readCurrent():await new CredentialManager(service.config,{bind:(_id,platform,principal)=>({ok:true,fingerprint:hash(platform+'\0'+principal)})}).read({id:'capture-current',platform:'workbuddy',enabled:true,credentials:{kind:'desktop',file:'auto'}});
   const principalHash=hash('workbuddy\0'+current.principal),value=structuredClone(service.config.value);
-  const same=value.accounts.find(a=>a.platform==='workbuddy'&&service.ledger.principalHash(a.id)===principalHash);
+  const same=value.accounts.find(a=>a.platform==='workbuddy'&&workBuddyEdition(a)===workBuddyEdition(current)&&service.ledger.principalHash(a.id)===principalHash);
   const accountId=same?.id??id,prior=value.accounts.find(a=>a.id===accountId);
   if(prior&&!same)throw new AppError('Account ID already belongs to another account',409,'account_id_conflict');
   const file=join(service.config.dataDir,'accounts',accountId,'workbuddy-session.json');
-  await atomicJson(file,{accessToken:current.accessToken,uid:current.uid??current.principal,principal:current.principal,domain:current.domain,expiresAtMs:current.expiresAtMs});
-  const account={...(prior??{id:accountId,label:label||accountId,platform:'workbuddy',enabled:true,tasks:[{id:'daily-checkin',enabled:true}]}),credentials:{kind:'file',file}};
+  let original;try{original=await readFile(file);}catch(e){if(e.code!=='ENOENT')throw e;}
+  const old=original?JSON.parse(original):{},edition=workBuddyEdition(current),snapshot={...old,managedBy:'ai-credit-gateway',credentialVersion:1,platform:'workbuddy',accessToken:current.accessToken,uid:current.uid??current.principal,principal:current.principal,domain:current.domain,edition,expiresAtMs:current.expiresAtMs,...(current.refreshToken?{refreshToken:current.refreshToken}:{}),...(current.refreshExpiresAtMs?{refreshExpiresAtMs:current.refreshExpiresAtMs}:{}),...(current.profileRaw?{profileRaw:current.profileRaw}:{}),updatedAt:new Date().toISOString()};
+  await atomicJson(file,snapshot);
+  const account={...(prior??{id:accountId,label:label||accountId,platform:'workbuddy',enabled:true,tasks:[{id:'daily-checkin',enabled:true}]}),edition,credentials:{kind:'file',file}};
   if(prior)value.accounts[value.accounts.indexOf(prior)]=account;else value.accounts.push(account);
   if(!value.upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===accountId))value.upstreams.push({id:'wb-'+accountId,kind:'workbuddy',accountId,enabled:true});
-  await service.config.save(value);service.ledger.bind(accountId,'workbuddy',current.principal);service.credentials.cache.delete(accountId);
+  syncWorkBuddyPools(value);
+  try{await service.config.save(value);}catch(e){if(original)await writeFile(file,original,{mode:0o600});else await rm(file,{force:true});throw e;}
+  service.ledger.bind(accountId,'workbuddy',current.principal);service.credentials.cache.delete(accountId);
   return {saved:true,accountId,reusedExisting:!!same,credentialFile:file,tokenReturned:false};
 }

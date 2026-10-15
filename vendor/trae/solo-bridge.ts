@@ -36,6 +36,7 @@ interface TraeFailure {
 const TRAE_ERROR_HINTS: Readonly<Record<number, string>> = {
   1005: 'Trae requires a paid plan for this model; the current account\'s plan does not cover it',
   4001: 'Trae does not serve this model under the SOLO function the request used (config_name rejected)',
+  4008: 'Trae quota is exhausted for the current account',
   4011: 'Trae refused this model under the SOLO function the request used',
 }
 
@@ -68,11 +69,12 @@ export function describeTraeFailure(failure: TraeFailure): string {
  * HTTP status + error kind for an in-stream failure, so the loopback shim can
  * answer with a real error instead of a truncated 200 stream.
  *
- * `1005` is a subscription gate: 402 is what makes clients stop rather than
- * retry, and it is truthful. Everything else is a client-side rejection.
+ * `1005` is a subscription gate; `4008` is exhausted quota (verified against
+ * the account's 1700/1700 usage on 2026-10-13). 402 makes callers stop rather
+ * than retry. Other codes keep their existing client-rejection classification.
  */
 function classifyTraeFailure(failure: TraeFailure): { status: number; kind: TraeUpstreamErrorKind } {
-  return failure.code === 1005 ? { status: 402, kind: 'hard_credit' } : { status: 400, kind: 'client' }
+  return failure.code === 1005 || failure.code === 4008 ? { status: 402, kind: 'hard_credit' } : { status: 400, kind: 'client' }
 }
 
 /** Recognise an in-stream failure event, or return undefined for anything else. */
@@ -121,7 +123,7 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
 }
 
 /** {@link bridgeTraeSoloStream} over an already-opened byte stream. */
-function bridgeTraeSource(source: ReadableStream<Uint8Array>, model: string): Response {
+function bridgeTraeSource(source: ReadableStream<Uint8Array>, model: string, discardedUsage: Record<string, number> = {}, attempts = 1): Response {
   const id = `chatcmpl-${randomUUID().replaceAll('-', '').slice(0, 24)}`
   const created = Math.floor(Date.now() / 1000)
   const decoder = new TextDecoder()
@@ -134,7 +136,12 @@ function bridgeTraeSource(source: ReadableStream<Uint8Array>, model: string): Re
   // OpenAI-shaped usage object. It is mostly flat counters, but
   // `prompt_tokens_details` nests the cache breakdown, so the value type is
   // widened beyond `number` rather than narrowing the cache fields away.
-  let usage: Record<string, number | Record<string, number>> | undefined
+  let usage: Record<string, number | Record<string, number>> | undefined = Object.keys(discardedUsage).length ? {
+    ...Object.fromEntries(['prompt_tokens', 'completion_tokens', 'total_tokens'].filter(k => discardedUsage[k] !== undefined).map(k => [k, discardedUsage[k]])),
+    prompt_tokens_details: Object.fromEntries(['cached_tokens', 'cache_write_tokens'].filter(k => discardedUsage[k] !== undefined).map(k => [k, discardedUsage[k]])),
+    ...(discardedUsage['reasoning_tokens'] === undefined ? {} : { completion_tokens_details: { reasoning_tokens: discardedUsage['reasoning_tokens'] } }),
+    trae_attempts: attempts,
+  } : undefined
 
   const chunk = (delta: Record<string, unknown>, finishReason: string | null = null): Uint8Array => encoder.encode(`data: ${JSON.stringify({
     id,
@@ -197,6 +204,16 @@ function bridgeTraeSource(source: ReadableStream<Uint8Array>, model: string): Re
             // instead of gaining `prompt_tokens_details: {}`.
             ...Object.keys(details).length === 0 ? {} : { prompt_tokens_details: details },
           }
+          if (attempts > 1) usage['trae_attempts'] = attempts
+          for (const field of ['prompt_tokens', 'completion_tokens', 'total_tokens']) {
+            if (discardedUsage[field] !== undefined) usage[field] = (typeof usage[field] === 'number' ? usage[field] as number : 0) + discardedUsage[field]
+          }
+          if (discardedUsage['cached_tokens'] !== undefined || discardedUsage['cache_write_tokens'] !== undefined) {
+            const details = (usage['prompt_tokens_details'] ?? {}) as Record<string, number>
+            for (const field of ['cached_tokens', 'cache_write_tokens']) if (discardedUsage[field] !== undefined) details[field] = (details[field] ?? 0) + discardedUsage[field]
+            usage['prompt_tokens_details'] = details
+          }
+          if (decoded.reasoningTokens !== undefined || discardedUsage['reasoning_tokens'] !== undefined) usage['completion_tokens_details'] = { reasoning_tokens: (decoded.reasoningTokens ?? 0) + (discardedUsage['reasoning_tokens'] ?? 0) }
         } else if (decoded.type === 'done') {
           upstreamEnded = true
           // Trae may send both `event: done` and a trailing `[DONE]`. Emit one
@@ -344,6 +361,63 @@ export async function bridgeTraeSoloStreamOrFail(response: Response, model: stri
 }
 
 /**
+ * Observed DeepSeek V4.1 native responses can finish with reasoning only.
+ * Hold only the pre-answer prefix: once text or any tool delta appears, never
+ * replay the request. The original signal spans both attempts; no new budget.
+ */
+async function openTraeAnswer(response: Response, signal?: AbortSignal): Promise<
+  { ok: true; source: ReadableStream<Uint8Array> } |
+  { ok: false; status: number; kind: TraeUpstreamErrorKind; message: string; reasoningOnly?: boolean; discardedUsage?: Record<string, number> }
+> {
+  if (response.body === null) return { ok: false, status: 502, kind: 'server', message: 'Trae upstream returned no response body' }
+  const reader = response.body.getReader(), decoder = new TextDecoder(), sse = new SseDecoder()
+  const buffered: Uint8Array[] = []
+  const discardedUsage: Record<string, number> = {}
+  let bytes = 0, reasoning = false, visible = false, terminal = false, finishReason = '', ended = false
+  const failure = (message: string, reasoningOnly = false) => ({ ok: false as const, status: 502, kind: 'server' as const, message, reasoningOnly, discardedUsage })
+  const release = async () => { await reader.cancel().catch(() => {}); reader.releaseLock() }
+  const abort = () => { void reader.cancel(signal?.reason).catch(() => {}) }
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    for (;;) {
+      if (signal?.aborted) throw signal.reason
+      const next = await reader.read()
+      if (signal?.aborted) throw signal.reason
+      let events: ReturnType<SseDecoder['push']>
+      if (next.done) { ended = true; events = [...sse.push(decoder.decode()), ...sse.finish()] }
+      else {
+        bytes += next.value.byteLength
+        if (bytes > 4 * 1024 * 1024 || buffered.length >= 4096) { await release(); return failure('Trae pre-answer prefix exceeds the 4 MiB / 4096 chunk bound') }
+        buffered.push(next.value); events = sse.push(decoder.decode(next.value, { stream: true }))
+      }
+      for (const event of events) {
+        const decoded = decodeTraeEvent(event), rejected = traeFailureOf(decoded)
+        if (rejected) { await release(); return { ok: false, ...classifyTraeFailure(rejected), message: describeTraeFailure(rejected) } }
+        if (decoded.type === 'delta') {
+          reasoning ||= !!decoded.reasoning?.length
+          // Any tool fragment prevents replay, even if it is later invalid.
+          visible ||= !!decoded.text.trim() || (Array.isArray(decoded.toolCalls) && decoded.toolCalls.length > 0)
+        } else if (decoded.type === 'usage') {
+          const counters = { prompt_tokens: decoded.inputTokens, completion_tokens: decoded.outputTokens, total_tokens: decoded.totalTokens, cached_tokens: decoded.cacheReadTokens, cache_write_tokens: decoded.cacheWriteTokens, reasoning_tokens: decoded.reasoningTokens }
+          for (const [key, value] of Object.entries(counters)) if (typeof value === 'number' && Number.isFinite(value) && value >= 0) discardedUsage[key] = value
+        } else if (decoded.type === 'done') { terminal = true; finishReason = decoded.finishReason }
+      }
+      if (visible) return { ok: true, source: replayTraeSource(buffered, reader, ended) }
+      if (terminal || ended) {
+        await release()
+        const retryable = terminal && finishReason === 'stop' && reasoning
+        return failure(retryable ? 'Trae reasoning-only stop: no visible answer or tool calls' : 'Trae stream ended without a visible answer or tool calls', retryable)
+      }
+    }
+  } catch (error) {
+    await release()
+    return signal?.aborted
+      ? { ok: false, status: 499, kind: 'client', message: 'Trae request cancelled before a usable answer' }
+      : { ok: false, status: 502, kind: 'server', message: 'Trae pre-answer stream read failed' }
+  } finally { signal?.removeEventListener('abort', abort) }
+}
+
+/**
  * One resolved wire target: the `config_name` `llm_utils_chat` accepts, plus
  * the directory function that listed it. Trae's roster is split across several
  * SOLO-mode functions and a model is only callable through the one listing it
@@ -416,8 +490,27 @@ export class TraeSoloBridge implements TraeUpstreamClient {
     } catch {
       return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' }
     }
-    const result = await this.upstream.chatStream(prepared, signal)
-    if (!result.ok) return result
-    return await bridgeTraeSoloStreamOrFail(result.response, model)
+    if (model !== 'deepseek-v4.1-flash') {
+      const result = await this.upstream.chatStream(prepared, signal)
+      if (!result.ok) return result
+      return await bridgeTraeSoloStreamOrFail(result.response, model)
+    }
+    const attemptSignal = signal ?? AbortSignal.timeout(120_000)
+    let discardedUsage: Record<string, number> = {}
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (attemptSignal.aborted) return { ok: false, status: 499, kind: 'client', message: 'Trae request cancelled before retry' }
+      const result = await this.upstream.chatStream(prepared, attemptSignal)
+      if (!result.ok) return result
+      const opened = await openTraeAnswer(result.response, attemptSignal)
+      if (opened.ok) {
+        const response = bridgeTraeSource(opened.source, model, discardedUsage, attempt)
+        response.headers.set('x-ai-credit-trae-attempts', String(attempt))
+        if (attempt > 1) response.headers.set('x-ai-credit-trae-retry-reason', 'reasoning_only_stop')
+        return { ok: true, response }
+      }
+      if (!opened.reasoningOnly || attempt === 2) return { ...opened, message: opened.message + ' (attempts=' + attempt + ')' }
+      discardedUsage = opened.discardedUsage ?? {}
+    }
+    return { ok: false, status: 502, kind: 'server', message: 'Trae empty answer retry exhausted' }
   }
 }

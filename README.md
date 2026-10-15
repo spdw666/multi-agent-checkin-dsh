@@ -1,257 +1,606 @@
-<h1 align="center">AI网关</h1>
+<h1 align="center">AI积分网关</h1>
 
 <p align="center">
-  <b>把多平台桌面账号的每日权益、余额与模型调用，收拢成一个本机 OpenAI 兼容网关</b><br>
-  多账号签到 · 积分耗尽切号 · 模型目录与真实体检 · SSE · 工具调用 · DSH · Hermes · 任意 OpenAI 兼容客户端
+  <b>桌面账号、每日权益、详细 WB 帐号池与统一模型入口</b><br>
+  Windows 原生桌面 · Node.js 本机服务 · OpenAI 兼容 API · DSH · Hermes
 </p>
 
 <p align="center">
   <a href="package.json"><img alt="Node.js 24+" src="https://img.shields.io/badge/Node.js-24%2B-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
-  <img alt="DSH Bundle" src="https://img.shields.io/badge/DSH-Bundle-285BE7">
 </p>
 
-AI网关（AI gateway）是一个**本机运行的独立服务**：一边读取本机已登录桌面客户端的登录态，完成每日签到与免费额度领取；一边把这些平台的原生协议映射成 OpenAI 兼容接口，让 DSH、Hermes、FleshOut 等调用端经同一入口使用模型。
+**AI积分网关**把本机桌面客户端账号的登录态、每日领取、余额与模型调用收拢到一个入口。可以在 Windows 原生界面管理账号，也可以只运行 Node.js 服务，通过 CLI、管理 API 或 OpenAI 兼容客户端使用同一后端。
 
-> **分发形式：本公开仓库只包含后端、CLI、平台适配器、DSH 插件、测试与文档。原生桌面前端实现与安装包不公开。** 克隆仓库得到的是可运行的无界面服务，可按管理 API 自建前端。
->
-> **兼容 ID：** npm 包 `dsh-ai-credit-gateway`、CLI `ai-credit`、Provider `ai-credit` 沿用历史命名，不随产品更名改变；仓库路径保留 `https://github.com/spdw666/multi-agent-checkin-dsh`。
+WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封禁依据、积分包、任务内容与任务状态；顶部突出显示 **积分剩余 / 总额**。其他平台继续使用“积分总览”，其中不重复展示 WorkBuddy 积分。
 
-![AI网关：多账号余额、签到与已启用模型总览](docs/images/platform-balances.png)
+> 兼容名称：npm 包仍为 `dsh-ai-credit-gateway`，CLI 与 DSH Provider 仍为 `ai-credit`，历史仓库地址保持不变。Windows 正式入口为 **`AI积分网关.exe`**。
 
-*用户提供的本机界面原图（文档资产；仓库不含该前端实现）。图中账号数、已启用模型、签到时间与余额为截图时的个人配置，不是新部署默认值或额度承诺。*
+## 目录
 
-## 产品定位
+- [产品定位与架构](#产品定位与架构)
+- [快速开始](#快速开始)
+- [Windows 原生桌面](#windows-原生桌面)
+- [七个页面](#七个页面)
+- [wb帐号池详解](#wb帐号池详解)
+- [同模型自动接力](#同模型自动接力)
+- [支持的平台与能力边界](#支持的平台与能力边界)
+- [OpenAI 兼容客户端接入](#openai-兼容客户端接入)
+- [DSH 与 Hermes 接入](#dsh-与-hermes-接入)
+- [上下文、工具、推理与超时](#上下文工具推理与超时)
+- [每日签到与自动刷新](#每日签到与自动刷新)
+- [配置参考](#配置参考)
+- [本机数据、备份与回滚](#本机数据备份与回滚)
+- [诊断与常见问题](#诊断与常见问题)
+- [测试、发布与贡献](#测试发布与贡献)
+- [文档导航](#文档导航)
+- [许可与致谢](#许可与致谢)
 
-两件事：
+## 产品定位与架构
 
-1. **每日权益与余额**：读取本机客户端登录态，按账号签到、检查每日免费额度或领取免费套餐，结果写入 SQLite 幂等账本；余额按账号分别核验。
-2. **统一模型入口**：把各上游协议映射为 OpenAI 兼容接口，调用端只认一条 `/v1`；工具由**调用端**执行，网关只做协议映射。
+### 本项目做什么
 
-- **不是第三方 API 中转站**：只对接本项目实现的上游类型；Antigravity 走本机专用协议桥，只接受 `127.0.0.1`，不恢复任意中转站 URL 或 relay 配置。
-- **不做跨平台统一积分**：积分、Token、现金与资源包单位不同，分项展示，**不相加成总余额**。
-- **不做凭据托管**：平台 token / Cookie 只留在本机账号文件里，配置只存引用，不进仓库、日志或聊天。
-- **不把未验收当已完成**：图片输入与跨平台统一余额未验收；缺失数据显示为未知，不用 `0` 或绿色填充。
+1. **管理权益**：按账号读取本机登录态、检查余额、执行已实现的真实签到或领取流程，并保留服务端回执与本机幂等账本。
+2. **统一调用**：把不同上游协议映射为 `/v1/models` 与 `/v1/chat/completions`，供 DSH、Hermes、FleshOut 等客户端使用。
+3. **组织账号池**：让同款模型在兼容供给间接力；WB 与非 WB 隔离，登录失败、限流、能力不足和真实额度耗尽分别处理。
+4. **保留可诊断性**：目录声明、离线测试、真实调用、客户端工具闭环与云同步确认分别记录，不用一个绿色图标代替这些证据。
 
-## 关键功能
+```text
+Windows 原生桌面 ── adminKey ──┐
+CLI / 本机管理 API ───────────┤
+                             ▼
+                       Node.js 本机服务
+                    配置 / SQLite / 调度器
+                             ▲
+DSH / Hermes / 其他客户端 ─ apiKey ─ /v1
+                             │
+                    路由 / 同模型接力 / 适配器
+                             │
+                  本机已登录账号 / 官方 API
+```
 
-| 能力 | 实现 |
+- **界面与服务分离**：WinForms 负责交互；Node 负责凭据、签到、余额、任务、模型与账本。界面重连不应取消正在进行的模型请求。
+- **工具由调用端执行**：网关转换和传递 `tool_calls`，不会把一段工具调用 JSON 当成真实文件操作已完成。
+- **不同计费单位分别展示**：积分、Token、现金和资源包不相加；WB 汇总只统计该池同单位的已知结果。
+- **本机凭据不进配置**：配置保存文件引用；令牌、Cookie、运行密钥和数据库留在本机，不随源码分发。
+
+### 仓库结构
+
+| 路径 | 内容 |
 |---|---|
-| 每日权益 | 多平台签到、免费套餐领取、每日额度核验；启动检查 + 每日排程 + 随机延迟 + 失败重试 |
-| 多账号隔离 | 每账号独立本机凭据与稳定身份绑定；幂等账本按身份 + 任务 + 日期（或活动窗口）去重并保留回执 |
-| 账号池 | 同模型可配备用账号，积分耗尽且尚未输出内容时切号；管理 API 可指定下一请求账号，不轮询、不迁移正在输出的请求 |
-| 模型目录与体检 | 目录发现、真实请求体检、导入发布三者分离；全量 / 已导入 / 定向复测 / 勾选选测四种范围 |
-| OpenAI 兼容 | `GET /v1/models`、`POST /v1/chat/completions`，普通与 SSE 共用映射层，按 `targets` 顺序回退 |
-| 工具调用 | 结构化 `tool_calls` 与结果回传；已输出 SSE 后不重放整段请求，避免重复工具动作 |
-| 余额与用量 | 区分真实零 / 未知 / 带核验时间的缓存值；按实际上游尝试记账，回退尝试共享 `requestId` |
-| 接入方式 | DSH bundle、Hermes 命名 Provider、任意 OpenAI 兼容客户端；模型 API 与管理 API 分离 |
+| `desktop/AiCreditDesktop.cs` | Windows WinForms 桌面源码、七页导航与 WB 详情 |
+| `desktop/build.ps1` | Windows 本机编译入口 |
+| `bin/ai-credit.mjs` | CLI 与前台/后台服务入口 |
+| `src/` | 服务、路由、适配器、任务、账号池与会话迁移 |
+| `vendor/` | 保留来源、版权与许可证的复用模块 |
+| `bundle/`、`cordis.patch.yml` | DSH bundle 入口与插件声明 |
+| `scripts/` | 构建、DSH 安装、诊断与 Hermes helper |
+| `tests/` | 协议、状态、分页、任务、文档与原生源码检查 |
+| `docs/` | API、平台来源、接入与行为说明 |
 
-### 支持反代的 Agent 与平台（完整清单）
+公开仓库包含原生桌面源码与构建入口，不包含个人安装目录、登录数据、数据库或聊天。本机已有 EXE/Node runtime 不等于仓库发行附件；下载二进制以实际 Releases 附件为准。
 
-下表列出全部 **16 种已实现的上游适配类型**，即把这些 Agent／平台的模型反代给调用端。国内与国际版分别使用自己的登录态。
+## 快速开始
 
-| Agent／平台 | 网关类型 | Agent／平台 | 网关类型 |
-|---|---|---|---|
-| WorkBuddy | `workbuddy` | Qoder、Qoder CN（国际／国内） | `qoder` |
-| Trae（国内／国际） | `trae` | CodeBuddy、CodeBuddy CN（国际／国内） | `codebuddy` |
-| 千问办公 | `qwenwork` | WorkBuddy AI | `workbuddyai` |
-| MiniMax Code | `minimax` | Cline | `cline` |
-| ZCode | `zcode` | CodeArts Agent | `codearts` |
-| 智谱 BigModel（官方 API） | `bigmodel` | LobsterAI | `lobster` |
-| Antigravity | `antigravity` | 商汤小浣熊 Raccoon | `raccoon` |
-| NVIDIA NIM（官方 API） | `nvidia` | Loomy | `loomy` |
+### 环境
 
-**支持适配不等于每个模型、账号或地区均已实测通过**；具体模型以实时目录、已启用路由及体检结果为准。逐平台登录态来源见 [docs/desktop-platforms.md](docs/desktop-platforms.md)。
+- Node.js **24+**：服务使用内置 SQLite；npm 构建使用 esbuild。
+- Git：拉取源码与更新。
+- Windows 原生界面另需本机 C# 编译环境，由 `desktop/build.ps1` 检测。
+- 使用桌面账号的平台先在官方客户端登录；各平台地区、套餐、目录与能力并不相同。
 
-**调用端另行区分：** DSH、Hermes、FleshOut 已有接入说明；其他支持自定义 OpenAI 兼容端点的 Agent／客户端可经 `/v1` 接入，但不列为已逐一验收的软件。
+### 从源码启动后端
 
-### 与原生前端本地分发的区别
-
-| 维度 | 原生桌面前端（不随包分发） | 公开源码包（本仓库） |
-|---|---|---|
-| 交付物 | 独立界面：签到、余额、模型、体检、用量页 | headless 服务 + CLI + 管理 API |
-| 使用方式 | 图形界面操作 | `node bin/ai-credit.mjs ...` 或自建前端调管理 API |
-
-两者共用同一配置、账本与数据目录，**源码包不是"阉割的界面"，而是同一后端服务的无界面形态**：界面上能看到的内容都能通过 CLI 与管理 API 获取；`ai-credit ui` 在源码包里只返回明确提示，不安装也不打开界面。
-
-## 快速开始（Node.js 24+）
+以 `C:\Gateway` 为自选安装目录示例，不要复制别人的私有配置与数据目录。
 
 ```powershell
-git clone https://github.com/spdw666/multi-agent-checkin-dsh.git
-cd multi-agent-checkin-dsh
+git clone https://github.com/spdw666/multi-agent-checkin-dsh.git C:\Gateway
+Set-Location C:\Gateway
 npm ci
-npm run build                      # 用 esbuild 打包 vendor 适配层
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 -NoStart
-notepad config.local.json          # 先启用本机已登录的平台
-node bin/ai-credit.mjs doctor      # 本机凭据形状与身份
-node bin/ai-credit.mjs start       # 后台启动，日志在数据目录 service.log
+npm run build
+node bin/ai-credit.mjs init --config C:\Gateway\config.local.json
+notepad C:\Gateway\config.local.json
+node bin/ai-credit.mjs doctor --config C:\Gateway\config.local.json
+node bin/ai-credit.mjs serve --config C:\Gateway\config.local.json
+```
+
+首次用 `serve` 在前台看启动错误，成功会打印 `GATEWAY_READY`。另开终端检查：
+
+```powershell
 Invoke-RestMethod http://127.0.0.1:19421/health
 ```
 
-```bash
-# Linux / macOS
-npm ci && npm run build && bash scripts/install.sh --no-start
-node bin/ai-credit.mjs doctor && node bin/ai-credit.mjs start && curl http://127.0.0.1:19421/health
+稳定后改后台启动；同一配置只保留一个服务实例。
+
+```powershell
+node bin/ai-credit.mjs start --config C:\Gateway\config.local.json
+node bin/ai-credit.mjs stop --config C:\Gateway\config.local.json
 ```
 
-- 需要 **Node.js 24+**（内置 SQLite）与 npm（构建依赖 esbuild）；`npm run check` = 构建 + 完整离线回归。
-- 常用命令：`init` / `serve`（前台，便于看启动错误）/ `start` / `stop` / `doctor` / `health` / `claim` / `models` / `records`；用 `--config <绝对路径>` 或 `AI_CREDIT_CONFIG` 指定别的配置。Windows 可直接写 `C:\...` 路径；数据目录默认 `./data`，相对配置文件所在目录解析。
+Linux/macOS 可运行同一 Node 后端，使用自己的绝对路径；平台凭据读取取决于客户端与系统，WinForms 桌面不在这两个系统运行。长期服务见 [Linux 部署](docs/linux.md)。
 
-## 配置与凭据
+### 常用 CLI
 
-配置分三层，模板见 [config.example.json](config.example.json)：`accounts`（账号与登录态来源）→ `upstreams`（上游适配器）→ `routes`（对外路由 ID 与目标模型）。
+```powershell
+node bin/ai-credit.mjs doctor --config C:\Gateway\config.local.json
+node bin/ai-credit.mjs health --account ACCOUNT --config C:\Gateway\config.local.json
+node bin/ai-credit.mjs claim --account ACCOUNT --task daily-checkin --config C:\Gateway\config.local.json
+node bin/ai-credit.mjs models --config C:\Gateway\config.local.json
+node bin/ai-credit.mjs records --config C:\Gateway\config.local.json
+```
+
+`ACCOUNT` 换成配置账号 ID。批量领取用 `POST /admin/claim` 并省略 `accountId`，不把 CLI 未实现的参数当批量开关。配置可由 `--config` 或 `AI_CREDIT_CONFIG` 指定。
+
+## Windows 原生桌面
+
+### 构建与启动
+
+```powershell
+Set-Location C:\Gateway
+powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1
+```
+
+默认仅编译到 `desktop/dist/AI积分网关.exe`。若需要可单独放置的桌面目录，同时打包后端与指定 Node runtime：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
+  -BundleCore -NodeExecutable (Get-Command node.exe).Source
+```
+
+`-OutputDirectory` 可指定输出目录，`-CoreDirectory` 可指定后端源码根目录。脚本默认定位 Windows .NET Framework 64 位 C# 编译器，找不到时查找 PATH 中的 `csc.exe`。需要先在根目录完成 `npm ci` / `npm run build`；打包输出包含 `core/` 与 `runtime/`，不复制个人配置/数据。程序入口为 **AI积分网关.exe**，首次运行按该目录初始化自己的配置。
+
+仓库只分发自有 app-logo 素材。`platform-icons/` 是可选本机图标目录，不参与编译依赖；没有平台图标时使用原生占位显示。本机已有的官方客户端图标不上传公共仓库。
+
+### 重连与更新
+
+页面轮询、后台进程和模型长连接是不同生命周期。短暂 GET 失败采用有界重试与退避；领取、删除、切号等写操作不因重连自动重放。手动暂停后台后，不应被自动恢复立即拉起。
+
+升级先停止旧实例，备份实际配置与数据目录，再部署程序和后端；不要只换界面却保留不兼容 API，不要覆盖用户配置、密钥和历史。回退见[本机数据、备份与回滚](#本机数据备份与回滚)。
+
+## 七个页面
+
+| 页面 | 用途 | 关键语义 |
+|---|---|---|
+| 积分总览 | 非 WB 平台余额、每日领取和核验 | **排除 WorkBuddy**；不同单位不相加；未知不填零 |
+| 账号管理 | 平台账号、启停、登录与删除 | 稳定身份绑定，换主体明确重绑 |
+| 模型路由 | 模型导入、启停、目标与接力分区 | 目录发现、体检与发布分离 |
+| 领取记录 | 签到、领取、重复与失败回执 | `success`、`already`、`observed` 分开 |
+| 偏好设置 | 每日排程、随机延迟与后台偏好 | 保存配置不等于官方任务已完成 |
+| 活动洞察 | 请求、上下文组成、供给尝试与原因 | 字符估算不冒充官方 Token，只观察本网关流量 |
+| wb帐号池 | 身份、封禁、积分包、完整任务与会话管理 | 封禁、认证失效、停用账号仍保留展示 |
+
+“积分总览”排除 WB 是展示分工，不是从配置、账本或管理 API 删除 WB。管理工具需要全部平台时仍可使用原有未筛选余额接口。
+
+## wb帐号池详解
+
+完整字段与管理协议见 [WB 帐号池手册](docs/wb-account-pool.md)。
+
+### 汇总与账号卡
+
+- 顶部独立区域以大字号展示启用且非封禁账号的 **积分剩余 / 总额**，并给全部账号数、封禁数、已知数与待获取数。
+- 每账号单独一张卡；停用、认证拒绝或封禁账号不因过滤而消失。
+- 卡片给身份、状态、积分、最近核验与操作入口，账号详情完整展开更多字段。
+- 相同 WB 模型按精确型号只展示一次，不按账号重复铺开。
+- 部分余额未知时写“已知积分剩余 / 总额”，不把未知账号当零纳入汇总。
+
+### 身份与登录信息
+
+| 字段 | 含义 |
+|---|---|
+| 账号 ID / `accountId` | 网关配置槽位，用于 API 与引用 |
+| UID / `uid` | 上游主体标识，缺失保留未知 |
+| 用户 ID / `userId` | 上游用户 ID，是否与 UID 相同以实际数据为准 |
+| 昵称、用户名、邮箱、域/版本 | 已返回资料及国内/国际版归属 |
+| 凭据状态与有效期 | Access/Refresh 状态、有效期与来源；**不展示令牌值** |
+| 核验时间与来源 | 官方结果、缓存或人工本机标记分别说明 |
+
+“添加登录”打开官方授权，国内与国际版分别处理。“保存客户端当前账号”捕获官方客户端当前登录并保存独立快照；同主体再次保存时合并，不无限产生重复账号。
+
+多账号常驻指保存多个独立登录快照，不代表一个官方登录文件同时承载多个主体。后续切换复用保存状态；官方撤销、过期或策略变化按实际结果提示新登录。
+
+### 封禁、认证拒绝与删除
+
+- **已封禁**：有官方明确封禁/blocked 证据，或用户主动做了本地封禁标记；详情保留来源与原因。
+- **认证拒绝 / `auth_rejected`**：会话撤销、登录失效或凭据被拒；HTTP 401/403 单独出现不等于官方封禁。
+- **未知**：本次查询证据不足；保留最近成功数据与失败原因，不猜测为正常或封禁。
+- **手动标记封禁**：本机整理功能，可清除；标记后退出 WB 接力候选，不自动删聊天。
+- **删除账号**：确认后清理账号、上游、池与失效路由引用；保留聊天、历史及私密回滚备份，与“停用”不同。
+
+核对账号 ID、UID 与封禁来源后再删除。封禁卡保留是为了识别整理，不让它继续参与调用。
+
+### 积分与积分包
+
+详情包含**官方该查询范围返回的全部积分包**，保留其中已耗尽/过期行：包 ID、名称、编码、原始总额、剩余、已用、创建/到期/刷新时间及状态，以实际上游字段为准。查询起点为 `2000-01-01`，保留官方协议状态筛选 `[0,3]`；`queryScope` 返回起止时间和状态范围，`complete` 只代表此范围分页齐全，不保证任意状态的全部历史均可获取。
+
+“总额”是当前官方积分包/余额体系的可核验总额，不是历史累计充值或每天承诺发放量；缺失显示待获取。最近成功、最近失败、缓存时间与错误码同时保留，帮助区分“还有积分却用不了”的具体层次。
+
+正余额不保证任意模型、地区、套餐或工具均可用。工具不兼容、上下文超限、限流、认证与真实耗尽分别记录，不把所有错误都归为积分不足。
+
+### 任务内容、状态与自动任务
+
+完整任务列表给出 ID/编码、标题、说明、类型、适用端、目标与当前进度、积分/Buddy 等奖励、接受/达标/领取/锁定状态、查询时间和最近执行回执。
+
+当前真实自动流程覆盖：
+
+1. 查询官方任务，接受可接受任务。
+2. 执行已实现的真实每日签到。
+3. 领取服务端已达标且可领取任务的奖励。
+4. 重新查询任务/余额，核对结果并持久去重。
+
+**创建自动化、应用体验、专家使用等任务的真实执行器未注册时，显示 `manual_action_required` / 待操作。** 展示全部任务不等于每个任务都有“一键完成”执行器；不伪造功能使用事件，不把领奖提交成功当任务已完成。
+
+“自动任务”由后台约每 30 分钟检查，同账号互斥。默认关闭，关闭后停止后续自动流程。查询、接受、执行与领取分别有状态，以官方回查为准。
+
+### 切号与聊天迁移
+
+- **切换此号**：写官方客户端登录文件并切网关后续请求的池偏好，正在输出的请求不迁移。
+- **只切网关**：API 的 `switchClient:false` 只改后续请求，不写客户端登录文件。
+- **一键合并聊天**：把已保存账号的本机可读 JSONL/SQLite 会话以新 ID 加法复制到目标账号，保留来源和幂等映射。
+- **切号自动迁移聊天**：开启后在切号前执行同样的本机复制；默认关闭。
+
+先关闭 WorkBuddy，再切换/迁移。写入前备份与校验，失败恢复客户端登录和网关选择，不强行关闭正在执行的用户任务。
+
+`cloudSyncConfirmed:false` 表示只完成本机处理，云端归属和同步需官方客户端下次启动确认。源会话保留；结构未适配或正文不全时返回待处理状态，不用调用账本冒充聊天正文。
+
+## 同模型自动接力
 
 ```json
 {
-  "accounts": [{"id": "workbuddy-main", "platform": "workbuddy", "enabled": true,
-    "credentials": {"kind": "desktop", "file": "auto"}, "tasks": [{"id": "daily-checkin", "enabled": true}]}],
-  "upstreams": [{"id": "workbuddy", "kind": "workbuddy", "accountId": "workbuddy-main", "enabled": true}],
-  "routes": [{"id": "workbuddy/deepseek-v4.1-flash", "enabled": true,
-    "targets": [{"upstreamId": "workbuddy", "model": "deepseek-v4.1-flash"}]}]
+  "modelRelay": {
+    "enabled": true,
+    "reservePercent": 10,
+    "reserveCredits": 100,
+    "partitions": { "workbuddy": true, "other": true }
+  }
 }
 ```
 
-此段只说明三层关系，**不是可独立使用的完整文件**；模型 ID 需换成当前目录里的真实值。
+- **WB 分区**：WB 模型只接 WB 账号。
+- **其他分区**：非 WB 供应之间按同款同版本接力，排除 WB。
+- 全局开关、分区开关与单路由 `relay:false` 分别生效。
+- 精确型号/版本匹配，Flash、Pro 和其他版本不互换。
+- 保留客户端模型 ID、消息历史、工具定义/回执和输出预算，不删历史制造成功。
+- 未知余额不填零，积分阈值不与现金比较；停用账号、封禁账号与停用路由不自动恢复。
 
-- **凭据本机录入，绝不写进配置**：配置解析会拒绝任何内联密钥字段（`apiKey` / `token` / `cookie` / `secret` 等），只接受指向本机账号文件的引用；平台登录请在官方客户端里正常完成。
-- **网关自己的两把密钥**：初始化生成 `data/api-keys.json`，`apiKey` 用于模型调用、`adminKey` 用于管理操作，两者不可互相替代，内容不要贴到聊天或工单里。
-- **示例默认只启用一条 WorkBuddy 路由**，其余账号多为停用，别照界面截图推断平台已配置好；`enabled: false` 表示保留配置但停用，停用路由从 `/v1/models` 隐藏。登录态过期、换账号或设备身份变化时先用 `doctor` 核对，明确要重绑再调 `POST /admin/rebind`。
+额度低/耗尽、限流、认证拒绝、目录缺失和通道故障分别分类。候选需满足实际上下文、工具、图片与输出能力；能力不兼容不应写成硬额度耗尽。主供应能力广播与备用筛选分开，备用窗口较小不应压低主供应声明。
 
-## 界面功能对应的命令与接口
+直接 SSE 已交付内容后不重放请求。接力模式采用有界完整响应缓冲，所以首批可见输出可能晚于上游首包；正文、推理和工具增量刷新进度计时。取消优先，已交付后不重放。见 [接力说明](docs/model-relay.md) 与 [API 契约](docs/api.md)。
 
-| 页面 | 用途 | CLI / 管理 API |
-|---|---|---|
-| 签到 | 逐账号签到与领取结果 | `ai-credit claim --all` · `POST /admin/claim` · `GET /admin/records` |
-| 余额 | 各平台余额、分项与核验时间 | `GET /admin/balances`（`?refresh=1` 强刷） |
-| 模型目录 | 发现各上游当前可用模型 | `GET /admin/model-directory`、`POST /admin/catalog`、`POST /admin/model-import` |
-| 选测体检 | 勾选模型做真实请求验证 | `POST /admin/model-tests`（`scope: selected`）+ 轮询 `GET /admin/model-tests` |
-| 用量 | 请求明细、Token、计费与余额变化 | `GET /admin/usage` |
+## 支持的平台与能力边界
 
-**签到看逐账号结果，不看 HTTP 状态码**：`200` 不等于权益已发放；`already` 是此前已签到或已领取，不是又发一次。千问办公个人版的每日额度由服务端**自动重置**，本项目只做观察（`observed`）——**"官方每日自动额度"不等于"主动签到成功"**。批量命令的退出码也不能替代逐项检查。
+16 种专用上游适配如下；`freeapi` 另用于固定官方平台注册表，不接受任意中转站 URL。
 
-**余额三态必须区分**：数值（含真实 `0`）、`value: null`（未知）、带 `checkedAt` 的缓存值（`stale: true`，本次核验失败的旧结果）。界面与自建前端都不要给未知状态"假绿"。
+| 平台 | 类型 | 平台 | 类型 |
+|---|---|---|---|
+| WorkBuddy | `workbuddy` | Qoder / Qoder CN | `qoder` |
+| Trae 国内/国际 | `trae` | CodeBuddy 国内/国际 | `codebuddy` |
+| 千问办公 | `qwenwork` | WorkBuddy AI | `workbuddyai` |
+| MiniMax Code | `minimax` | Cline | `cline` |
+| ZCode | `zcode` | CodeArts Agent | `codearts` |
+| 智谱 BigModel 官方 API | `bigmodel` | LobsterAI | `lobster` |
+| Antigravity 本机桥 | `antigravity` | 小浣熊 Raccoon | `raccoon` |
+| NVIDIA NIM 官方 API | `nvidia` | Loomy | `loomy` |
 
-**Token 预算按模型上限设置**：客户端默认输出上限常高于个别上游允许值，会被明确拒绝（例如 `nvidia_max_tokens_invalid`），网关不做静默截断，按每条路由的实际上限配置即可。**NVIDIA 的公示上限不等于实时剩余额度**：官方策略（`source: official_policy`）只说明配额制度，反映当前窗口的是官方响应头观测（`source: official_response_headers`），本机统计只是本机调用量；`dailyLimit` 与 `remaining` 恒为 `null`（官方已取消积分制），凭据缺失或验证失败时清空历史额度而不伪造数字。详见 [docs/nvidia-source-notes.md](docs/nvidia-source-notes.md) 与 [docs/openai-clients.md](docs/openai-clients.md)。
+“适配已实现”不等于每个账号、地区、模型、套餐和工具组合都通过真实调用；登录、目录、余额、签到、推理、工具与流式分别核验。
 
-## 接入 DSH
+- 国内/国际版使用各自登录态。
+- CodeArts/小浣熊检测到新有效官方登录后恢复读取，未知结果不盲目重放旧旋转令牌。
+- 千问办公个人版额度由服务端自动重置，不虚构手动签到。
+- NVIDIA 官方策略上限、响应头观测和本机统计分开，不用公示上限当实时剩余。
+- Antigravity 使用独立 CLIProxyAPI 本机桥，只连接明确 loopback 地址，不打包该桥及凭据。
 
-本项目同时是 DSH bundle，peers 范围为 `>=0.1.7-rc.1 <0.3.0-0`，接入基于具体 DSH Desktop / runtime 版本与 `desktop` profile。
+见 [平台登录态](docs/desktop-platforms.md)、[适配归属](docs/provider-attributions.md) 与 [免费平台](docs/free-providers.md)。
+
+## OpenAI 兼容客户端接入
+
+| 字段 | 值 |
+|---|---|
+| Base URL | `http://127.0.0.1:19421/v1`，包含 `/v1` |
+| API Key | 本机 `api-keys.json` 的 `apiKey` |
+| Model | `/v1/models` 返回的启用路由 ID，含斜杠原样填写 |
+
+`TOKEN` 是占位符，实际密钥从本机读取，不提交源码/反馈日志。
 
 ```powershell
-$env:AI_CREDIT_NODE = (Get-Command node).Source
-node scripts/install-dsh.mjs --config /ABSOLUTE/PATH/config.local.json
+$Headers = @{ Authorization = 'Bearer TOKEN' }
+Invoke-RestMethod 'http://127.0.0.1:19421/v1/models' -Headers $Headers
+$Body = @{
+  model = 'UPSTREAM/MODEL'
+  messages = @(@{role='user'; content='只回复连接正常'})
+  stream = $false
+} | ConvertTo-Json -Depth 20
+Invoke-RestMethod 'http://127.0.0.1:19421/v1/chat/completions' `
+  -Method Post -Headers $Headers -ContentType 'application/json' -Body $Body
 ```
 
-安装脚本定位 Desktop CLI、备份 profile、添加 bundle 并同步代码，记录写在数据目录的 `dsh-install/`；**不自动重启 DSH**。worker 使用独立 Node 24，不把 Electron / 桌面可执行文件当 Node。流程、插件配置与其他安装方式见 [docs/dsh.md](docs/dsh.md)，首包等待与输出预算见 [docs/dsh-request-policy.md](docs/dsh-request-policy.md)。
+换成真实路由。模型调用用 `apiKey`，管理面用 `adminKey`，二者不互换。验证顺序：健康 → 目录 → 普通请求 → SSE → 工具请求/结果回传 → 客户端真实任务。目录可见或“测试连接”成功不等于工具闭环。
 
-## 接入 Hermes
+FleshOut 等支持自定义 OpenAI 端点的客户端无需修改程序。同步客户端数据库时先备份整库并保留原默认模型。见 [OpenAI 客户端](docs/openai-clients.md) 与 [FleshOut 同步](docs/fleshout-sync.md)。
 
-Hermes 用命名自定义 Provider 直连本机网关，不需要 DSH 插件：
+## DSH 与 Hermes 接入
+
+### DSH bundle
+
+```powershell
+Set-Location C:\Gateway
+$env:AI_CREDIT_NODE = (Get-Command node).Source
+node scripts/install-dsh.mjs --config C:\Gateway\config.local.json
+```
+
+脚本定位 Desktop CLI，备份实际 `desktop` profile，添加 bundle 并同步代码，记录在数据目录 `dsh-install/`。不自动重启 DSH；worker 用独立 Node 24，不将 Electron 当 Node。
+
+peers 范围见 [package.json](package.json)，安装/回滚见 [DSH](docs/dsh.md)，预算与重试见 [DSH 请求策略](docs/dsh-request-policy.md)。保留已有 profile、默认模型与其他插件。
+
+### Hermes 命名 Provider
 
 ```yaml
 providers:
   ai-credit:
-    name: AI网关
+    name: AI积分网关
     base_url: http://127.0.0.1:19421/v1
     api_mode: chat_completions
     discover_models: true
-    key_cmd: '"/ABSOLUTE/PATH/node" "/ABSOLUTE/PATH/scripts/hermes-key.mjs" "/ABSOLUTE/PATH/data/api-keys.json"'
+    key_cmd: '"C:/Tools/node/node.exe" "C:/Gateway/scripts/hermes-key.mjs" "C:/Gateway/data/api-keys.json"'
     extra_body:
       reasoning_effort: null
 ```
 
-- `key_cmd` 每次只读 `apiKey`，经标准输出交付，不写入 YAML、`.env` 或日志；缺文件、非法 JSON 或空密钥只输出固定错误并返回非零退出码。
-- `reasoning_effort: null` 把统一档位交还给网关与上游的默认策略；`discover_models: true` 从 `/v1/models` 获取启用路由，不写死清单，也不恢复已停用项。
+换成实际 Node、脚本和数据目录。`key_cmd` 只读取 `apiKey`，通过标准输出交 Hermes，不写 YAML；不要把 helper 输出复制到日志。
 
-完整 YAML、分层验证与回滚见 [docs/hermes.md](docs/hermes.md)。网关需保持运行，工具执行仍由 Hermes 完成。
+`discover_models:true` 获取启用路由。示例 `extra_body.reasoning_effort:null` 清除 Hermes 统一档位，由网关/上游默认处理，不等于逐平台透传全部菜单档位。显式档位需核对最终序列化请求，避免 `extra_body` 覆盖预期值。Hermes 无需 DSH 插件。见 [Hermes 配置/回滚](docs/hermes.md)。
 
-## 接入 FleshOut 与其他 OpenAI 兼容客户端
+## 上下文、工具、推理与超时
 
-网关对外只有一条 OpenAI 兼容入口，**任何支持自定义 OpenAI 端点的客户端都能接入，本仓库不需要为它写适配器**：
+保留消息历史、工具 schema、调用 ID/回执、客户端模型 ID 与显式输出预算。能力不匹配时给具体错误或跳过候选，不静默删工具/历史/输出预算。声明窗口、实际输入 Token、请求体字节与最大输出 Token 是不同指标。
 
-```text
-第三方客户端 → http://127.0.0.1:19421/v1 → 已启用的平台路由
+### 工具闭环
+
+1. 客户端发送工具定义与消息。
+2. 模型返回结构化 `tool_calls`。
+3. 客户端实际执行工具。
+4. 客户端以原 `tool_call_id` 回传结果。
+5. 模型依据结果完成回答。
+
+五步完成才算闭环。活动洞察的“携带工具/文件上下文”不冒充已执行操作。
+
+### 三类时间预算
+
+| 层 | 作用 |
+|---|---|
+| 调用端 | DSH/Hermes/客户端首包、整轮、取消与重试 |
+| 网关 HTTP | `server.requestTimeoutMs` 或精确路由 `modelRequestTimeouts` |
+| 供给有效进展 | 默认约 30 秒无进展超时，正文/推理/工具增量刷新计时 |
+
+HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较晚不等于上游没进展；延长客户端超时不会修复认证、能力或额度错误。
+
+```json
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 19421,
+    "requestTimeoutMs": 180000,
+    "modelRequestTimeouts": { "UPSTREAM/MODEL": 600000 },
+    "bodyLimitBytes": 67108864
+  }
+}
 ```
 
-| 字段 | 取值 |
-|---|---|
-| Base URL | `http://127.0.0.1:19421/v1`（含 `/v1`） |
-| API Key | `data/api-keys.json` 的 `apiKey`（`adminKey` 只管管理 API） |
-| Model | `GET /v1/models` 返回的路由 ID，原样使用，**包含斜杠** |
+这是字段片段，不是完整配置。映射键精确匹配路由；改名同步改键。聊天正文默认 64 MiB，管理正文固定 4 MiB；体积超限与模型上下文超限分开。见 [API](docs/api.md)。
 
-- 方向只有一个：**客户端填本网关地址**。网关不反向代理、不抓取、不注入任何客户端进程，不需要改客户端的可执行文件或前端资源；模型 ID 形如 `上游ID/模型名`，若客户端会对它做路径或 URL 编码处理，先确认能原样传输。
-- FleshOut（Tauri 桌面写作软件）是本机实测案例：模型存在它自己的 SQLite 里，新建 `Custom` 连接填上面三要素即可；字段与输出上限见 [docs/openai-clients.md](docs/openai-clients.md)，带整库备份、冲突检测和默认预览的目录同步工具见 [docs/fleshout-sync.md](docs/fleshout-sync.md)。
-- 客户端界面缺少自定义选项时，也可把同样的行写入客户端自己的模型存储，但必须先关闭该客户端（或确认数据库为 WAL 且允许并发写）、先备份整库并记录校验值、只新增行与改默认模型字段、写完重启确认。
-- 网关需保持运行，客户端不会自动拉起它。统一验证顺序：`/v1/models` → 客户端"测试连接" → 普通短请求 → 真实任务（长文 / 多轮 / 客户端自身流式路径）。
+## 每日签到与自动刷新
+
+| 展示/状态 | 含义 |
+|---|---|
+| 每日签到领取 | 需要真实签到/领取，刷新余额不代替领取 |
+| 今日签到额度已到账 | 同日有效官方账单确认；旧账单或正余额不算今日已领 |
+| 官方每日自动额度 | 服务端自动重置，网关只观察 |
+| 自动刷新 | 重新查询状态/余额，查询本身不加积分 |
+| `success` | 按平台契约成功，结合回执与确认字段 |
+| `already` | 此前已完成，不是又发一次 |
+| `observed` | 观察到官方状态，不冒充主动领取 |
+| `action_required` | 需要真实操作、登录或未接入执行器 |
+
+排程含启动检查、每日时间、随机延迟与失败重试。幂等按稳定主体、任务、日期/活动窗口去重；HTTP 200 不代表每账号都领到了。完整状态见 [API](docs/api.md)。
+
+## 配置参考
+
+完整模板见 [config.example.json](config.example.json)。三层关系：`accounts` 账号 → `upstreams.accountId` 适配器 → `routes.targets` 对外路由。
+
+### 服务与排程
+
+| 字段 | 用途 |
+|---|---|
+| `schemaVersion` | 当前 `1` |
+| `dataDir` | 相对路径基于配置所在目录，不基于终端 cwd |
+| `server.host` / `port` | 默认 `127.0.0.1:19421` |
+| `server.allowRemote` | 非 loopback 需显式开启，默认关闭 |
+| `server.requestTimeoutMs` | HTTP 通用截止，默认 180000ms |
+| `server.modelRequestTimeouts` | 精确路由覆盖，最多 500 项 |
+| `server.bodyLimitBytes` | 聊天字节上限 1024–67108864 |
+| `scheduler.enabled` / `startup` | 排程与启动检查 |
+| `scheduler.timezone` / `hour` / `minute` | 每日时区与时间 |
+| `scheduler.jitterSeconds` / `retryMinutes` | 随机延迟与失败重试 |
+
+### 账号、上游与路由
+
+| 字段 | 用途 |
+|---|---|
+| `accounts[].id` / `platform` / `label` / `enabled` | 稳定槽位、平台、名称、启停 |
+| `accounts[].edition` | 支持地区/版本的平台选择 |
+| `accounts[].credentials.kind` / `file` | 本机读取方式/文件引用，`auto` 由适配器定位 |
+| `credentials.executable` / `autoLaunch` | 部分客户端短期凭据选项 |
+| `accounts[].tasks[].id` / `enabled` | 平台已实现的领取任务 |
+| `accounts[].personalTeamId` | 千问办公个人团队选择 |
+| `upstreams[].id` / `kind` / `accountId` / `enabled` | 上游与账号引用 |
+| `upstreams[].localLimits` | NVIDIA 本机并发/间隔，不冒充官方配额 |
+| `routes[].id` / `enabled` | 稳定客户端模型 ID 与是否发布 |
+| `routes[].targets[].upstreamId` / `model` | 精确目标与上游模型 |
+| `routes[].relay` | `false` 单独停接力 |
+| `routes[].accountPool.accountIds` / `cooldownSeconds` | WB 候选与冷却 |
+
+各类 ID 唯一，引用完整，账号平台与上游类型一致。停用路由保留配置/历史但从 `/v1/models` 隐藏。
+
+### WB 与接力
+
+| 字段 | 用途 |
+|---|---|
+| `workbuddy.autoMigrateSessions` | 切号迁移本机会话副本，默认关闭 |
+| `workbuddy.autoTasks` | 周期执行已实现真实任务，默认关闭 |
+| `modelRelay.enabled` | 自动接力总开关 |
+| `modelRelay.partitions.workbuddy` / `other` | 两分区开关 |
+| `modelRelay.reserveCredits` | 已知积分预留，默认 100 |
+| `modelRelay.reservePercent` | 已知总额预留，默认 10%，范围 0–50 |
+| `modelRelay.balanceMaxAgeSeconds` | 余额新鲜度，默认 60 秒，范围 5–600 |
+
+内联 `apiKey`、`refreshToken`、`cookie` 等凭据会被配置校验拒绝。官方 API Key 也放账号专属本机文件，由配置引用。
+
+## 本机数据、备份与回滚
+
+| 文件/目录 | 内容 |
+|---|---|
+| `config.local.json` | 私有账号、上游与路由，不提交 |
+| `data/api-keys.json` | 自动生成 `apiKey` 与 `adminKey` |
+| `data/runtime.json` | 当前进程与地址 |
+| `data/service.log` | 后台日志 |
+| 数据目录 SQLite | 领取账本、用量、池状态与幂等 |
+| `data/account-deletion-backups/` | 删号前私密配置备份 |
+| WB 快照/迁移备份 | 独立凭据、原数据库/文件与迁移映射 |
+
+`data/` 指实际 `dataDir`，不保证在仓库。备份覆盖配置、整个数据目录和涉及的客户端登录/会话文件。活跃 SQLite 用一致性备份或停服务后复制，不能只复制主 DB 漏掉 WAL。
+
+### 更新步骤
+
+1. 记录版本、配置、实际 Node 与服务地址。
+2. 停桌面/后端，备份程序、配置、数据并记录 SHA-256。
+3. 拉取源码，运行 `npm ci` 与 `npm run check`，需要界面时重建 `desktop/build.ps1`。
+4. 部署程序/后端，保留私有配置/数据，不用示例覆盖。
+5. 核对 `/health`、主体、余额、启停路由和真实工具闭环。
+
+### 回滚步骤
+
+先在独立副本验证旧程序及对应配置/数据，确认恢复旧行为再应用安装。恢复前再次备份当前状态，保留升级后新增历史；不要随意混配新旧 DB、配置与程序。
+
+DSH profile 用 [DSH 回滚](docs/dsh.md) 和 `scripts/rollback-dsh.mjs`；删号、迁移、客户端模型同步分别用各自备份。删号不删聊天，所以账号配置回滚与聊天回滚不同。
 
 ## 诊断与常见问题
 
+### 健康正常，模型失败
+
+`/health` 只说明服务运行。继续查认证、目录/导入、能力与真实调用，记录路由/错误码/普通或 SSE/工具阶段，以及失败发生在生成前、中还是回传后。
+
+### 有积分却用不了
+
+查详情的最近成功/失败与积分包，再看分类：`tools_not_supported`、上下文超限、401、429、`same_model_credits_exhausted` 分别是能力、容量、认证、限流与额度，不是一回事。
+
+### 等很久才开始输出
+
+核对接力完整响应缓冲、调用端重试和首包预算。活动洞察可区分尝试与交付。有推理/正文/工具进展不按固定短时限杀掉；无进展、取消或整轮截止仍会终止。
+
+### 新登录仍显示旧状态
+
+用 `doctor` 核对官方主体与槽位绑定；新有效登录优先于旧缓存。换主体需明确重绑，不把两个主体历史静默合并；未知续期不重复使用旧旋转令牌。
+
+### 封禁与认证拒绝混淆
+
+所有保存账号包括停用/封禁项都保留。核对官方证据、本机标记、`auth_rejected` 和未知；401/403 不独立证明封禁。删号前核对 ID/UID。
+
+### 汇总、积分包与任务不一致
+
+核对时间、单位、全部分页与缓存；“已知积分”只统计有结果账号，未知不填零。过期包、奖励预告和当前余额不同；接受、执行、达标、领奖分别查回执，未接入执行器保留待操作。
+
+### 413 / 上下文超限
+
+413 是 `server.bodyLimitBytes` 字节上限，模型 Token 上限另查上游。网关不静默剪历史；调用端采用明确上下文管理策略或选择兼容供给。
+
+### 401 / Host / Origin
+
+模型面 `apiKey`、管理面 `adminKey`。Host/Origin 满足实际监听契约；远程监听、代理与客户端地址要一起配置。见 [API](docs/api.md)。
+
+### 界面断连，请求仍运行
+
+区分轮询、进程与模型长连接。先查健康、日志与请求状态，避免重复提交已受理的领取/删除/切号。GET 重连不重放写操作，手动暂停按用户操作恢复。
+
+### 如何反馈
+
+给版本、平台、客户端版本、路由、错误码、时间、请求模式、工具阶段与去密日志。不提交 token、Cookie、密钥、登录快照、个人 DB 或完整聊天。以错误分类和源码证据为准，不仅凭截图猜测。
+
+## 测试、发布与贡献
+
 ```powershell
-node bin/ai-credit.mjs doctor
-node bin/ai-credit.mjs health --account workbuddy-main
-node bin/ai-credit.mjs claim --all
-```
-
-- **413 / 请求体超限**：聊天请求受 `server.bodyLimitBytes` 约束（默认 64 MiB），管理请求固定 4 MiB 上限。超限报错含实际字节数与上限，并说明**消息历史未被裁剪**；上游另报的上下文长度限制属另一层，由调用端压缩处理。
-- **打开首页没有管理面板**：这是无界面源码分发，`ui` 不安装或打开面板，请用 CLI、管理 API 或自建前端。
-- **签到没成功 / 余额显示未知**：确认账号与任务已启用、客户端登录有效，逐账号看状态与原因；`already` 是此前已完成，不是失败；未知表示本次核验没有可用结果，先看错误码与缓存时间，不要当作零。
-- **认证失败或跨主机被拒**：`apiKey` 与 `adminKey` 用途不同，管理面不接受模型密钥；`Host` / `Origin` 校验会拒绝非本机来源，远程访问需同时调整监听配置并自行管理网络入口。
-- **目录里有、客户端里没有**：发现与导入发布分离，先看模型目录再导入；目录条目带 `verification: unverified` 的（如 Antigravity）按实例实测状态使用。
-
-反馈问题时给出平台、客户端版本、路由 ID、错误码、普通或流式、工具调用阶段与去密日志；**不要提交 token、Cookie、运行密钥、账号快照或个人数据库**。
-
-## 测试与贡献
-
-```bash
 npm ci
-npm run check                              # 构建 + 完整离线回归（模拟上游，不接触真实账号）
-node --test tests/http.test.mjs            # 真实 HTTP 面：鉴权、隔离、普通 / SSE / 工具、取消与体积校验
-node --test tests/docs-contract.test.mjs   # 文档契约：管理契约段、链接、致谢集合、超时示例
+npm run check
+node --test tests/docs-contract.test.mjs
+node --test tests/http.test.mjs
 ```
 
-离线回归覆盖普通 / SSE / 工具调用与结果回传、跨进程幂等、账号池与手动切换、余额超时与缓存标记、用量账本与回退 / 取消、分页筛选与管理认证、本机桥地址约束。**离线回归通过不等于每个账号、地区或模型已实测通过**；实例验收请用自己的登录态执行 `doctor` / `health` / 模型体检并记录结果。新增平台能力时说明清楚"目录声明 / 模拟测试 / 真实调用"三类证据；改接口或任务行为时同步更新配置示例与文档。
+`npm run check` 构建 vendor 后执行完整离线回归，不对真实账号领奖。覆盖 OpenAI 普通/SSE/工具、取消、体积、鉴权、身份、池、额度/限流、账本、分页、任务、会话副本与文档。
+
+文档契约检查必要章节、有效相对链接、API、完整致谢与凭据占位符，不用固定 README 行数代替完整性。Windows 构建在 Windows 验证；跨平台 CI 不代替真实登录或工具闭环。
+
+### 真实验收与发布
+
+按“基线 → 修改 → 独立副本回滚”记录命令、输入、输出、退出码、SHA 与行为。真实请求会使用账号额度，按目的分层测试；零余额或官方拒绝先保留状态，不循环发送付费生成。
+
+正常提交/推送，保留历史与无关并发修改。发布前跑测试、链接/凭据检查；发布后核对远端提交、CI 与实际 Release 附件。本机安装、Git push、CI 与二进制发行分别验收。
+
+### 贡献约定
+
+- 新平台给来源/许可证、凭据形状、能力矩阵和离线测试。
+- 改 API 同步调用方/文档；任务明确真实执行、达标与领奖回查，不伪造完成。
+- 保留模型 ID、上下文、工具 ID/结果与输出预算，回退核对兼容性。
+- 不提交凭据、完整设备标识、DB、聊天或本机安装二进制。
+- UI 检查缩放、滚动、长字段、未知/失败状态与减少动效。
 
 ## 文档导航
 
 | 文档 | 内容 |
 |---|---|
-| [docs/api.md](docs/api.md) | 管理契约：鉴权分离、Host / Origin、请求体上限、端点点表、体检与领取状态语义 |
-| [docs/usage.md](docs/usage.md) | 用量字段、分页、计费与余额变化语义 |
-| [docs/dsh.md](docs/dsh.md) · [docs/dsh-request-policy.md](docs/dsh-request-policy.md) | DSH 挂载、profile 与插件配置；首包等待与显式输出预算 |
-| [docs/hermes.md](docs/hermes.md) · [docs/openai-clients.md](docs/openai-clients.md) | Hermes Provider 与凭据 helper；任意 OpenAI 兼容客户端接入与输出上限分档 |
-| [docs/model-retry.md](docs/model-retry.md) · [docs/desktop-platforms.md](docs/desktop-platforms.md) | 定向复测未通过模型；各桌面平台登录态来源与配置 |
-| [docs/antigravity.md](docs/antigravity.md) · [docs/nvidia-source-notes.md](docs/nvidia-source-notes.md) | Antigravity 本机协议桥；NVIDIA 官方策略与限流观测 |
-| [docs/bigmodel.md](docs/bigmodel.md) · [docs/provider-attributions.md](docs/provider-attributions.md) | 智谱官方模型与资源包查询；各平台适配的来源与提交归属 |
-| [docs/client-updates.md](docs/client-updates.md) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 客户端自动升级调研（尚未实现）；第三方模块来源与许可证 |
+| [WB 帐号池](docs/wb-account-pool.md) | 身份、封禁、积分包、任务、迁移与 API |
+| [API](docs/api.md) / [用量](docs/usage.md) | 管理契约、状态、分页与记账 |
+| [同模型接力](docs/model-relay.md) | 候选、缓冲、活动与免费平台 |
+| [DSH](docs/dsh.md) / [请求策略](docs/dsh-request-policy.md) | bundle、profile、预算与回滚 |
+| [Hermes](docs/hermes.md) / [OpenAI 客户端](docs/openai-clients.md) | Provider、helper 与接入 |
+| [FleshOut](docs/fleshout-sync.md) | 同步、整库备份与冲突检测 |
+| [平台登录态](docs/desktop-platforms.md) / [模型复测](docs/model-retry.md) | 凭据与定向体检 |
+| [CodeArts](docs/provider-codearts.md) / [小浣熊](docs/provider-raccoon.md) | 认证、额度与错误 |
+| [Antigravity](docs/antigravity.md) / [NVIDIA](docs/nvidia-source-notes.md) | 本机桥、策略与限流 |
+| [BigModel](docs/bigmodel.md) / [免费平台](docs/free-providers.md) | 资源包与固定官方平台 |
+| [归属](docs/provider-attributions.md) / [第三方声明](THIRD_PARTY_NOTICES.md) | 固定来源与复用边界 |
+| [客户端更新调研](docs/client-updates.md) | 调研不等于已实现自动升级 |
 
 ## 许可与致谢
 
-原创实现采用 [MIT](LICENSE)；第三方模块保留各自版权头、完整许可证与来源，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `vendor/`。下表区分**代码复用**、**独立外部组件**与**设计 / 协议 / 体验参考**；列入致谢不表示相关项目代码被打包到本仓库。
+原创实现采用 [MIT](LICENSE)。第三方保留版权头、完整许可证、固定来源与修改说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。代码复用、独立组件与设计/协议参照分开记录，不把上游整项目功能当成本项目功能。
 
 | 项目 | 使用方式 |
 |---|---|
-| [dingminhua/dsh-connect-workbuddy](https://github.com/dingminhua/dsh-connect-workbuddy) / [hawklithm/workbuddy2api](https://github.com/hawklithm/workbuddy2api) | 复用 WorkBuddy 上游 bridge 与 DSML 相关模块，保留 MIT 与来源记录；DSML 解析器源自 workbuddy2api |
-| [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) | 复用设备身份、目录、区域、SOLO bridge 与签到相关模块；统一输出层由本网关实现 |
-| [spirodelazz/ide-daily-checkin](https://github.com/spirodelazz/ide-daily-checkin) / [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin) | 复用 WorkBuddy 凭据读取助手，不执行其成长任务或抽奖流程 |
-| [ZlaxeyX/workbuddy-auto-checkin](https://github.com/ZlaxeyX/workbuddy-auto-checkin) | 参考按天幂等与 Windows 计划任务组织方式，未照搬其旧接口调用 |
-| [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | 复用三个上下文模块，来源与改动见 `vendor/zcode-context/NOTICE.md` |
-| [wicm84266964/Buddy2api](https://github.com/wicm84266964/Buddy2api) | 千问协议助手参照，完整许可证随 `vendor/qwenwork_ref/` 保留 |
-| [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | 参考账号池、额度耗尽与限流分类、冷却恢复及本文档的信息组织；未移植其 Go 服务与 Web UI |
-| [wangmingdong/workbuddy-signin](https://github.com/wangmingdong/workbuddy-signin) | 参考 MiniMax Code 签到协议与界面信息组织，本网关独立实现 Node 适配 |
-| [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign) | 参考 ZCode 登录态形状与官方验证流程 |
-| [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | 参照官方模型目录、Mavis Messages 与 Matrix 余额协议，独立实现 OpenAI 映射 |
-| [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | 对照 bundle / provider / PiAiAdapter 宿主契约 |
-| [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) / [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | Antigravity 使用的独立本机协议桥；Hermes 作为独立调用端互操作接入，两者源码与实现均未被打包 |
-| [hucuyuu/zhipu-balance](https://github.com/hucuyuu/zhipu-balance) | 参考智谱现金余额查询端点线索，本网关独立实现请求与字段归一化 |
-| [cmochance/codex-app-transfer](https://github.com/cmochance/codex-app-transfer) / [0xgetz/minimax-agent-automation](https://github.com/0xgetz/minimax-agent-automation) | 参考 WorkBuddy 模型目录线索与持久化浏览器状态观察；未复制其源码，批量注册类流程未纳入本工程 |
-| [jsongo/buddy-proxy](https://github.com/jsongo/buddy-proxy) | Qoder COSY 签名 / 信封与端点协议移植为 Node 实现，许可证见 `vendor/provider-buddy-proxy.LICENSE` |
-| [xxhhlk/raccoon2api](https://github.com/xxhhlk/raccoon2api) / [Patrick130306/loomy2api](https://github.com/Patrick130306/loomy2api) | 商汤小浣熊与 Loomy 接入的协议交叉参考，本工程按官方客户端与服务端实测独立实现 |
-| [rockswang/wild-work](https://github.com/rockswang/wild-work) | 仅作协议交叉参考，未复制其代码 |
-| [RobbsLuo/Coding2API](https://github.com/RobbsLuo/Coding2API) / [Jasery/opencode-lobster-auth](https://github.com/Jasery/opencode-lobster-auth) | CodeArts签名移植与Lobster协议参考，完整许可与复用边界见来源文档 |
-| [netease-youdao/LobsterAI](https://github.com/netease-youdao/LobsterAI) | 官方桌面协议核对，客户端独立安装，不随仓库分发 |
-| [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) | 作为 DSH 免费模型插件的**协议与体验参考**；核对CodeArts/小浣熊官方续期与额度协议，本网关保持独立实现，不声称整仓复制 |
-| [denysvitali/llm-proxy](https://github.com/denysvitali/llm-proxy) | 查阅 ZCode / MiniMax Code 接入说明；该仓库未声明清晰许可证，本工程未复制其代码 |
-| [BeUI](https://beui.dev/) / [shadcn/ui](https://ui.shadcn.com/) / [Rare UI](https://www.rareui.com/) / [Transitions](https://transitions.dev/) / Galaxy / HTMLrev | 仅作界面与动效的**设计参考**；**未复制实现**，本仓库不含其代码或组件 |
+| [dingminhua/dsh-connect-workbuddy](https://github.com/dingminhua/dsh-connect-workbuddy) / [hawklithm/workbuddy2api](https://github.com/hawklithm/workbuddy2api) | WorkBuddy bridge / DSML 复用，保留 MIT 与解析器来源 |
+| [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) | 身份、目录、区域、SOLO bridge 与签到模块 |
+| [spirodelazz/ide-daily-checkin](https://github.com/spirodelazz/ide-daily-checkin) / [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin) | 本机凭据助手，不直接执行其成长/抽奖 |
+| [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) | 登录格式、会话复制与详细身份参照；独立适配 Node/WinForms，不冒称其全部客户端切换/悬浮窗/自动更新 |
+| [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | 池、额度/限流、任务协议与卡片组织，未移植 Go/Web UI |
+| [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) | CodeArts/小浣熊续期、额度与分类参照，不复制匿名渠道或整仓承诺 |
+| [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) / [bowenliang123/dsh-context](https://github.com/bowenliang123/dsh-context) | 同款供给、免费平台与活动组织，未复制程序/素材 |
+| [ZlaxeyX/workbuddy-auto-checkin](https://github.com/ZlaxeyX/workbuddy-auto-checkin) | 每日幂等/计划任务参照，未照搬旧端点 |
+| [wangmingdong/workbuddy-signin](https://github.com/wangmingdong/workbuddy-signin) | MiniMax 签到与积分卡片组织 |
+| [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign) | ZCode 登录形状与验证流程 |
+| [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | 复用三个上下文模块，保留 vendor NOTICE |
+| [wicm84266964/Buddy2api](https://github.com/wicm84266964/Buddy2api) | 千问协议助手与完整许可 |
+| [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | 官方目录/Mavis/Matrix 核对，独立统一映射 |
+| [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | bundle / Provider / PiAiAdapter 契约 |
+| [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) | 独立 Antigravity 本机桥，不打包 |
+| [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 独立调用端互操作，未打包其实现 |
+| [hucuyuu/zhipu-balance](https://github.com/hucuyuu/zhipu-balance) | 智谱余额端点线索 |
+| [cmochance/codex-app-transfer](https://github.com/cmochance/codex-app-transfer) / [0xgetz/minimax-agent-automation](https://github.com/0xgetz/minimax-agent-automation) | 目录/持久化登录观察，未纳入批量注册 |
+| [jsongo/buddy-proxy](https://github.com/jsongo/buddy-proxy) | Qoder COSY 签名/信封/端点移植，完整许可 |
+| [xxhhlk/raccoon2api](https://github.com/xxhhlk/raccoon2api) / [Patrick130306/loomy2api](https://github.com/Patrick130306/loomy2api) | 小浣熊/Loomy 交叉参考，独立实现 |
+| [rockswang/wild-work](https://github.com/rockswang/wild-work) | 协议交叉参照，未复制 |
+| [RobbsLuo/Coding2API](https://github.com/RobbsLuo/Coding2API) / [Jasery/opencode-lobster-auth](https://github.com/Jasery/opencode-lobster-auth) | CodeArts 签名移植/Lobster 协议，归属见平台来源 |
+| [netease-youdao/LobsterAI](https://github.com/netease-youdao/LobsterAI) | 官方协议核对，客户端独立安装 |
+| [denysvitali/llm-proxy](https://github.com/denysvitali/llm-proxy) | 查阅说明，许可不明确，未复制 |
+| [BeUI](https://beui.dev/) / [shadcn/ui](https://ui.shadcn.com/) / [Rare UI](https://www.rareui.com/) / [Transitions](https://transitions.dev/) / Galaxy / HTMLrev | 视觉/动效参照，**未复制实现**，不打包其 React 组件 |
 
-感谢上述项目作者与贡献者。本仓库借鉴功能分组、部署步骤与 FAQ 的文档结构，不复制其他项目的功能承诺；上游代码、平台服务与本项目分别维护，具体能力以本仓库实现与实际回执为准。
+WB 完整 MIT 文本及固定提交另见 [参考声明模块](src/workbuddy-reference-license.mjs)。平台图标属于各平台商标资源，不视为本项目原创品牌资产。
+
+感谢以上作者与贡献者。上游项目、平台服务和本项目独立维护；具体能力以本仓库实现、账号资格和实际服务端回执为准。

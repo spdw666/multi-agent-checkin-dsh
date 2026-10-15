@@ -1,6 +1,8 @@
 node_modules/
 data/
+*.local.json
 config.local.json
+*.tgz
 *.log
 .env*
 vendor/qwen-python/

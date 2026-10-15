@@ -238,10 +238,16 @@ export async function refreshCodeArtsAuth(auth,{fetchImpl=fetch,now=Date.now(),s
   headers:{DPoP:codeartsDpop(auth,now),'Content-Type':'application/x-www-form-urlencoded'},
   body:new URLSearchParams({client_id:'codearts-agent',code_verifier:verifier,grant_type:'refresh_token',refresh_token:auth.refresh_token}).toString()});}
  catch {throw new AppError('CodeArts 续期请求未确认；未自动重试',503,'codearts_refresh_unconfirmed');}
+ // A gateway rate limiter can return HTML/plain text. Its explicit rejection did
+ // not issue credentials, and must not become a permanent unknown-rotation marker.
+ if(response.status===429){await response.body?.cancel().catch(()=>{});const raw=response.headers.get('retry-after'),seconds=raw?Number(raw):NaN,at=Number.isFinite(seconds)&&seconds>=0?now+seconds*1000:Date.parse(raw);throw Object.assign(new AppError('CodeArts 续期暂时限流',429,'codearts_refresh_failed'),{retryable:true,retryAt:Math.max(now+1000,Math.min(Number.isFinite(at)?at:now+600000,now+3600000))});}
  const text=await readBoundedText(response,signal);let data;try{data=JSON.parse(text)}catch{throw new AppError('CodeArts 续期响应格式错误',502,'codearts_refresh_invalid');}
  if(!response.ok){const error=new AppError('CodeArts 官方续期失败',response.status,'codearts_refresh_failed');error.upstreamCode=typeof data?.error_code==='string'&&/^[A-Za-z0-9_.-]{1,80}$/.test(data.error_code)?data.error_code:null;
-  const terminal=data?.error==='invalid_grant'||/ExpiredRefreshToken/.test(error.upstreamCode??'');
-  if(!terminal&&(response.status===429||/InvalidDPoPHeader/.test(error.upstreamCode??''))){error.retryable=true;error.retryAt=now+600000;}
+  // The shipped Huawei authentication extension maps STS5.1806 to an invalid
+  // refresh token and STS5.1804 to a rejected DPoP proof (no token was issued).
+  const terminal=[401,403].includes(response.status)||data?.error==='invalid_grant'||/ExpiredRefreshToken|STS5\.1806/.test(error.upstreamCode??'');
+  error.loginRequired=terminal;
+  if(!terminal&&(response.status===429||/InvalidDPoPHeader|STS5\.1804/.test(error.upstreamCode??''))){error.retryable=true;error.retryAt=now+600000;}
   throw error;}
  const c=data?.credentials;
  if(!c||![c.access_key_id,c.secret_access_key,c.security_token,data.refresh_token].every(v=>typeof v==='string'&&v.length>0)||!(Date.parse(c.expiration)>now))
@@ -267,9 +273,10 @@ async function decryptCodeArtsAuth(stored,localState) {
 function credentialFromCodeArtsAuth(base,auth,source) {
  if(![auth?.accessKey,auth?.secretKey,auth?.securitytoken].every(v=>typeof v==='string'&&v))throw new AppError('CodeArts 凭据格式错误',401,'codearts_refresh_invalid');
  for(const s of [auth.accessKey,auth.secretKey,auth.securitytoken])rememberSecret(s);
- return {...base,accessKey:auth.accessKey,secretKey:auth.secretKey,securityToken:auth.securitytoken,accessToken:auth.securitytoken,expiresAt:auth.expires_at,source};
+ return {...base,accessKey:auth.accessKey,secretKey:auth.secretKey,securityToken:auth.securitytoken,accessToken:auth.securitytoken,expiresAt:auth.expires_at,expiresAtMs:Date.parse(auth.expires_at),source};
 }
 async function publishCodeArtsCache(file,data){const temp=file+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify(data),{mode:0o600});await rename(temp,file);}
+function codeartsBlockedRefresh(cached){const pending=cached?.loginRequired===false||/(?:unconfirmed|invalid|pending)$/.test(cached?.refreshFailure??'');return Object.assign(new AppError(pending?'CodeArts 续期结果待核验；检测到新本机登录态后自动恢复':'CodeArts 上次续期未确认；等待本机登录态更新',pending?503:401,'codearts_refresh_needs_login'),{loginRequired:!pending,refreshPending:pending});}
 async function resolveCodeArtsFresh(base,file,options={}) {
  const stored=await nativeCodeArtsStored(file);if(!stored)return base;
  const cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??dirname(file),'AI Credit Gateway','private-cache','codearts-'+sha256Hex(Buffer.from(file)).slice(0,16)+'.json');
@@ -281,8 +288,13 @@ async function resolveCodeArtsFresh(base,file,options={}) {
  let cached;
  try{cached=JSON.parse(await readFile(cacheFile,'utf8'));if(!matches(cached))cached=null;}catch(error){if(error.code==='ENOENT')cached=null;else throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}
  if(Date.parse(original.expires_at)>now+60000&&cached?.auth?.accessKey!==original.accessKey)return credentialFromCodeArtsAuth(base,original,'ide_secret_storage');
+ // An uncertain early renewal does not revoke an access credential that is
+ // still valid. Keep it usable while waiting for native login synchronization.
+ const current=cached?.auth??original;
+ if(options.refresh===false)return credentialFromCodeArtsAuth(base,current,cached?.auth?'gateway_private_refresh_cache':'ide_secret_storage');
+ if(cached?.refreshFailure&&Date.parse(current.expires_at)>now+5000)return {...credentialFromCodeArtsAuth(base,current,cached?.auth?'gateway_private_refresh_cache':'ide_secret_storage'),refreshPending:true};
  if(cached?.retryAt&&now<cached.retryAt)throw Object.assign(new AppError('CodeArts 续期暂缓，稍后自动重试',429,'codearts_refresh_deferred'),{retryAt:cached.retryAt});
- if(cached?.refreshFailure&&(!cached.retryAt||now<cached.retryAt))throw new AppError('CodeArts 上次续期未确认；等待本机登录态更新',401,'codearts_refresh_needs_login');
+ if(cached?.refreshFailure&&(!cached.retryAt||now<cached.retryAt))throw codeartsBlockedRefresh(cached);
  if(cached?.auth && Date.parse(cached.auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,cached.auth,'gateway_private_refresh_cache');
  let auth=cached?.auth??original;
  if(Date.parse(auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,auth,'ide_secret_storage');
@@ -294,7 +306,7 @@ async function resolveCodeArtsFresh(base,file,options={}) {
   let latest;try{latest=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}
   if(matches(latest)){
    if(latest.retryAt&&now<latest.retryAt)throw Object.assign(new AppError('CodeArts 续期暂缓，稍后自动重试',429,'codearts_refresh_deferred'),{retryAt:latest.retryAt});
-   if(latest.refreshFailure&&(!latest.retryAt||now<latest.retryAt))throw new AppError('CodeArts 上次续期未确认；等待本机登录态更新',401,'codearts_refresh_needs_login');
+   if(latest.refreshFailure&&(!latest.retryAt||now<latest.retryAt))throw codeartsBlockedRefresh(latest);
    if(latest.auth)auth=latest.auth;
    if(Date.parse(auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,auth,'gateway_private_refresh_cache');
   }
@@ -303,7 +315,9 @@ async function resolveCodeArtsFresh(base,file,options={}) {
   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:'codearts_refresh_pending'});
   try{refreshed=await refreshCodeArtsAuth(auth,options);}catch(error){
    // Keep a marker tied to the source login so polling does not replay a rotating token.
-   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:error.code??'codearts_refresh_unconfirmed',...(error.retryable?{retryAt:error.retryAt}:{})});throw error;
+   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:error.code??'codearts_refresh_unconfirmed',failedAt:now,loginRequired:error.loginRequired===true,...(error.retryable?{retryAt:error.retryAt}:{})});
+   if(Date.parse(auth.expires_at)>now+5000)return {...credentialFromCodeArtsAuth(base,auth,'gateway_private_refresh_cache'),refreshPending:true};
+   throw error;
   }
   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth:refreshed});
   return credentialFromCodeArtsAuth(base,refreshed,'gateway_private_refresh_cache');

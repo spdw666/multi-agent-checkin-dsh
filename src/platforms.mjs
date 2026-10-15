@@ -1,4 +1,5 @@
 import {desktopProvider,desktopProviderKinds,providerCapabilities} from './provider-registry.mjs';
+import {freeProviderModels,freeProviderHealth,freeProviderChat} from './free-providers.mjs';
 import {nvidiaAuthState} from './nvidia-auth.mjs';
 import {nvidiaPolicy} from './nvidia-policy.mjs';
 import {controlledNvidiaChat} from './nvidia-controls.mjs';
@@ -10,8 +11,9 @@ import {zcodeModels,zcodeChat} from './zcode-models.mjs';
 import {qwenWorkModels,qwenWorkChat} from './qwenwork-models.mjs';
 import {miniMaxModels,miniMaxChat} from './minimax-models.mjs';
 import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor/workbuddy-core.mjs';
+import {fetchWorkBuddyCreditDetails} from './workbuddy-resources.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
-import {AppError,jsonFetch,dayIn} from './util.mjs';
+import {AppError,jsonFetch,dayIn,errorView} from './util.mjs';
 import {restoreLoomyDailyQuota} from './daily-quota-receipt.mjs';
 import {qwenWorkContext} from './qwenwork.mjs';
 import {zcodePreview,zcodeStatus,zcodeClaim} from './zcode.mjs';
@@ -46,7 +48,8 @@ export class Platforms {
     if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind),rows=await p.models(await this.credentials.resolve(u.accountId),{refresh,force:refresh,signal,upstream:u,account:this.account(u.accountId)});if(!Array.isArray(rows))throw new AppError('模型目录格式错误',502,'provider_catalog_schema');const normalized=rows.map(m=>({...m,callable:m.callable!==false&&typeof p.chat==='function'&&Number.isSafeInteger(m.contextWindow)&&m.contextWindow>0&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0}));this.catalogs.set(upstreamId,normalized);return normalized;}
     if(!refresh&&cached)return cached;
     let list;
-    if(u.kind==='workbuddy'){list=(await this.wb.fetchModels(await this.credentials.resolve(u.accountId),signal)).map(m=>({...m,multimodal:m.supportsImages===true,tools:m.supportsToolCall===true}));}
+    if(u.kind==='freeapi'){list=await freeProviderModels(await this.credentials.resolve(u.accountId),{refresh,signal});}
+    else if(u.kind==='workbuddy'){list=(await this.wb.fetchModels(await this.credentials.resolve(u.accountId),signal)).map(m=>({...m,multimodal:m.supportsImages===true,tools:m.supportsToolCall===true}));}
     else if(u.kind==='trae') {
       const stack=this.traeStack(u.accountId);const wire=await stack.solo.fetchModels(signal??AbortSignal.timeout(60000));
       const remote=await stack.remote.fetchModels(signal).catch(()=>[]);
@@ -60,6 +63,7 @@ export class Platforms {
   }
   async health(id) {
     const a=this.account(id);
+    if(a.platform==='freeapi')return freeProviderHealth(await this.credentials.resolve(id));
     if(desktopProviderKinds.has(a.platform)){
       const p=await desktopProvider(a.platform),c=await this.credentials.resolve(id);let h=await p.health(c,{account:a});
       if(a.platform==='loomy'&&c.principalHash&&this.credentials.ledger?.claimReceipt){
@@ -73,7 +77,11 @@ export class Platforms {
     }
     if(a.platform==='nvidia'){let credential;try{credential=await this.credentials.resolve(id,{force:true});const [health,policy]=await Promise.all([nvidiaHealth(credential),nvidiaPolicy(credential)]);const authRecord=nvidiaAuthState(this.credentials.ledger,id,credential,health.quota?.credentialStatus==='rejected'?'rejected':undefined);return {...health,policy,authRecord};}catch(e){if(e.code==='nvidia_auth_failed'&&credential)nvidiaAuthState(this.credentials.ledger,id,credential,'rejected');if(e.code==='nvidia_credential_missing')return {status:'credential_missing',models:[],quota:{credentialStatus:'missing'}};throw e;}}
     const credential=await this.credentials.resolve(id,{force:true});
-    if(a.platform==='workbuddy'){const [checkin,credits]=await Promise.all([this.wb.fetchCheckinStatus(credential),this.wb.fetchCredits(credential)]);return {status:'authenticated',checkin,credits};}
+    if(a.platform==='workbuddy'){
+      const [checkin,credits]=await Promise.allSettled([this.wb.fetchCheckinStatus(credential),fetchWorkBuddyCreditDetails(credential,{signal:AbortSignal.timeout(20000)})]);
+      if(credits.status==='rejected')throw credits.reason;
+      return {status:'authenticated',credits:credits.value,checkin:checkin.status==='fulfilled'?checkin.value:{supported:false,todayCheckedIn:null},...(checkin.status==='rejected'?{checkinError:errorView(checkin.reason)}:{})};
+    }
     if(a.platform==='trae') {
       const usage=this.traeStack(id).usage;
       if(regionOfCredential(credential)!=='cn')return {status:'authenticated',subscription:await usage.payStatus(),checkin:{supported:false}};
@@ -121,11 +129,12 @@ export class Platforms {
   }
   async chat(target,request,signal) {
     const u=this.upstream(target.upstreamId);const input={...request,model:target.model,stream:true};
-    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');return p.chat(u,await this.credentials.resolve(u.accountId),input,signal);}
+    if(u.kind==='freeapi')return freeProviderChat(u,await this.credentials.resolve(u.accountId),input,signal);
+    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');const c=await this.credentials.resolve(u.accountId);try{return await p.chat(u,c,input,signal);}catch(error){if(error.status!==401)throw error;const newer=await this.credentials.resolve(u.accountId,{force:true});if(newer.accessToken===c.accessToken)throw error;return p.chat(u,newer,input,signal);}}
     if(u.kind==='workbuddy') {
       const body=prepareChatBody(JSON.stringify(input));const tools=declaredTools(body);
       let c=await this.credentials.resolve(u.accountId);let result=await this.wb.chatStream(c,body,signal);
-      if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true});if(newer.accessToken!==c.accessToken)result=await this.wb.chatStream(newer,body,signal);}
+      if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken)result=await this.wb.chatStream(newer,body,signal);}
       if(!result.ok)throw new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
       return {response:result.response,recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
     }

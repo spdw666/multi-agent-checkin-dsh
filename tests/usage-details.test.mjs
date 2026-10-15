@@ -9,7 +9,7 @@ import {usageCounters} from '../src/usage.mjs';
 import {collectChat} from '../src/openai.mjs';
 import {startServer} from '../src/server.mjs';
 import {rememberSecret,AppError} from '../src/util.mjs';
-const config={value:{accounts:[{id:'a',label:'Account A'},{id:'b',label:'Account B'}],upstreams:[{id:'u',kind:'workbuddy',accountId:'a'},{id:'v',kind:'trae',accountId:'b'}],routes:[{id:'route',targets:[{upstreamId:'u',model:'real-model'},{upstreamId:'v',model:'fallback-model'}]}],server:{host:'127.0.0.1',port:0}}};
+const config={value:{accounts:[{id:'a',label:'Account A'},{id:'b',label:'Account B'}],upstreams:[{id:'u',kind:'codebuddy',accountId:'a'},{id:'v',kind:'trae',accountId:'b'}],routes:[{id:'route',targets:[{upstreamId:'u',model:'real-model'},{upstreamId:'v',model:'fallback-model'}]}],server:{host:'127.0.0.1',port:0}}};
 const request={model:'route',messages:[{role:'user',content:'PRIVATE_PROMPT_NOT_FOR_LOG'}]};
 const json=usage=>new Response(JSON.stringify({choices:[{message:{role:'assistant',content:'OK'},finish_reason:'stop'}],...(usage?{usage}:{})}),{headers:{'Content-Type':'application/json'}});
 const platforms=(chat)=>({models:async id=>[{id:id==='u'?'real-model':'fallback-model',tools:true}],chat});

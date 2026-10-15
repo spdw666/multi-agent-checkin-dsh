@@ -23,13 +23,16 @@ const unwrap=v=>v&&typeof v.get==='function'?v.get():v;
 async function diagnostic(message){try{const dir=join(process.env.LOCALAPPDATA??homedir(),'AiCreditGateway');await mkdir(dir,{recursive:true});await appendFile(join(dir,'dsh-bundle.log'),new Date().toISOString()+' '+message+'\n')}catch{}}
 export function createGatewayAdapter({runtime,models,resolveAttachments}) {
   let current=models,modelFingerprint=JSON.stringify(models);
+  // A gateway request already owns the bounded complete same-model relay pool.
+  // Five additional harness retries multiplied an exhausted pool's latency.
+  const retryPolicy=()=>resolveRetryPolicy(current.some(m=>m.modelRelay?.deliveryMode==='verified_request_buffer')?{mode:'normal',maxRetries:1}:undefined,'ai-credit retry policy');
   const buildModels=()=>current.map(m=>({id:m.id,name:m.name,api:'openai-completions',provider:providerId,baseUrl:runtime.baseUrl+'/v1',input:m.capabilities.multimodal?['text','image']:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:m.contextWindow,maxTokens:m.maxTokens,...thinkingMetadata(m)}));
   const base=createProvider({id:providerId,name:'AI网关',auth:{apiKey:{name:'Private gateway shim',async resolve({credential}){return credential?.key?{auth:{apiKey:credential.key},source:'loopback'}:undefined}}},models:buildModels(),api:openAICompletionsApi()});
   const provider={...base,getModels:buildModels};
-  const profile={provider:providerId,displayName:'AI网关',...gatewayRequestPolicy(runtime,current),retryPolicy:resolveRetryPolicy(undefined,'ai-credit retry policy'),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
+  const profile={provider:providerId,displayName:'AI网关',...gatewayRequestPolicy(runtime,current),retryPolicy:retryPolicy(),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
   let profiles=new Map([[providerId,profile]]);
   const adapter=new PiAiAdapter({profiles:()=>profiles,auth:inertAuth,resolveApiKey:async()=>runtime.key,...(resolveAttachments?{resolveAttachments}:{})});
-  return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;current=models;modelFingerprint=next;Object.assign(profile,gatewayRequestPolicy(runtime,current));profiles=new Map([[providerId,profile]]);return true}};
+  return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;current=models;modelFingerprint=next;Object.assign(profile,gatewayRequestPolicy(runtime,current),{retryPolicy:retryPolicy()});profiles=new Map([[providerId,profile]]);return true}};
 }
 export async function createBundleRuntime(configFile,_options={}) {
   // ELECTRON_RUN_AS_NODE can hide process.versions.electron. Never fork execPath

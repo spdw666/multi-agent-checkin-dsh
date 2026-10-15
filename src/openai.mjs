@@ -1,6 +1,34 @@
 import {randomUUID} from 'node:crypto';
 import {DsmlStreamBuffer} from '../vendor/workbuddy-core.mjs';
 import {AppError} from './util.mjs';
+// Context pressure is request-specific, not a wallet or authentication failure.
+// Prefer structured codes and exclude explicit rate limits before text matching.
+export function isContextWindowError(error={}) {
+  if(Number(error.status)===429)return false;
+  const code=String(error.code??error.type??error.error?.code??'');
+  if(/^(?:context_length_exceeded|context_window_exceeded|model_context_window_exceeded|request_too_large|relay_context_incompatible)$/i.test(code))return true;
+  const message=String(error.message??error.error?.message??'');
+  if(/rate limit|too many requests|throttl/i.test(message))return false;
+  return /context (?:window|length).*(?:exceed|overflow|limit)|(?:exceed|overflow).*(?:context window|context length)|prompt (?:is )?too long|input(?: token count| length)?.*(?:exceed|longer than|too (?:long|large))|maximum (?:context|prompt) length|请求.*上下文.*(?:超|溢)|上下文.*(?:超限|溢出)/i.test(message);
+}
+function upstreamError(source,fallbackCode){
+  const detail=source.error??source,message=detail.message??source.msg??source.message??`Upstream code ${source.code??'none'}`;
+  const original={message,code:detail.code??detail.type??source.code,status:detail.status??source.status};
+  if(isContextWindowError(original))return new AppError(message,400,'context_length_exceeded');
+  return new AppError(message,502,fallbackCode);
+}
+// Some compatible gateways return SSE with application/json. Inspect only the
+// leading framing bytes and replay them unchanged; never consume/drop a token.
+async function responseFraming(response,declared){
+  if(!response.body)return {response,type:declared};
+  const reader=response.body.getReader(),prefix=[],decoder=new TextDecoder();let text='',ended=false,type=declared,released=false;
+  const release=()=>{if(!released){released=true;reader.releaseLock();}};
+  try{
+    while(text.length<1024){const next=await reader.read();if(next.done){ended=true;break;}prefix.push(next.value);text+=decoder.decode(next.value,{stream:true});const lead=text.trimStart();if(/^(?:data:|event:|:)/.test(lead)){type='text/event-stream';break;}if(/^[\[{]/.test(lead)){type='application/json';break;}if(lead&&!['data:','event:'].some(p=>p.startsWith(lead))){break;}}
+    let i=0;const body=new ReadableStream({async pull(controller){try{if(i<prefix.length){controller.enqueue(prefix[i++]);return;}if(ended){release();controller.close();return;}const next=await reader.read();if(next.done){ended=true;release();controller.close();}else controller.enqueue(next.value);}catch(error){release();controller.error(error);}},async cancel(reason){try{await reader.cancel(reason);}finally{release();}}});
+    return {response:new Response(body,{status:response.status,headers:response.headers}),type};
+  }catch(error){try{await reader.cancel(error);}finally{release();}throw error;}
+}
 export async function* sseEvents(body,{eventLimit=1048576}={}) {
   if(!body)throw new AppError('Upstream response has no body',502,'empty_response');
   const reader=body.getReader();const decoder=new TextDecoder();let buffer='',event='',data=[];
@@ -24,9 +52,10 @@ function meaningful(chunk) {return chunk.choices?.some(c=>c.finish_reason||c.del
 export async function* normalizeChat(response,{model,recovery}={}) {
   const id='chatcmpl-'+randomUUID(),created=Math.floor(Date.now()/1000);
   const chunk=choices=>({id,object:'chat.completion.chunk',created,model,choices});
-  const type=response.headers.get('content-type')??'';
+  let type=response.headers.get('content-type')??'';
+  if(type.includes('application/json')||type.includes('text/event-stream'))({response,type}=await responseFraming(response,type));
   if(type.includes('application/json')) {
-    const json=await response.json();if(json.error||json.code&&json.code!==0||!Array.isArray(json.choices)||!json.choices.length)throw new AppError(json.error?.message??`Invalid upstream JSON (code ${json.code??'none'})`,502,'upstream_business_error');
+    const json=await response.json();if(json.error||json.code&&json.code!==0||!Array.isArray(json.choices)||!json.choices.length)throw upstreamError(json,'upstream_business_error');
     for(const c of json.choices){const msg=c.message??c.delta;if(!msg)throw new AppError('JSON choice lacks message',502,'invalid_upstream_response');yield chunk([{index:c.index??0,delta:msg,finish_reason:null}]);yield chunk([{index:c.index??0,delta:{},finish_reason:c.finish_reason??(msg.tool_calls?.length?'tool_calls':'stop')}]);}
     if(json.usage)yield {...chunk([]),usage:json.usage};return;
   }
@@ -53,7 +82,7 @@ export async function* normalizeChat(response,{model,recovery}={}) {
   for await(const event of sseEvents(response.body)) {
     if(event.data==='[DONE]'){done=true;break;}
     let source;try{source=JSON.parse(event.data)}catch{throw new AppError('Malformed upstream SSE JSON',502,'malformed_sse')}
-    if(event.event==='error'||source.error||source.code!==undefined&&![0,'0'].includes(source.code))throw new AppError(source.error?.message??source.msg??source.message??`Upstream SSE code ${source.code}`,502,'upstream_stream_error');
+    if(event.event==='error'||source.error||source.code!==undefined&&![0,'0'].includes(source.code))throw upstreamError(source,'upstream_stream_error');
     if(!Array.isArray(source.choices)) {if(source.usage)source.choices=[];else throw new AppError('SSE event lacks choices',502,'invalid_sse_event');}
     const c=transform(source);seen=true;
     // Do not expose a role-only prelude before the upstream commits a usable result.

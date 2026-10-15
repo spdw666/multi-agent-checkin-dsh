@@ -15,5 +15,7 @@ export async function createService(file,{schedule=false}={}) {
   if(typeof keys.adminKey!=='string'||typeof keys.apiKey!=='string'||keys.adminKey.length<24||keys.apiKey.length<24)throw new Error('Gateway keys must be at least 24 characters');
   rememberSecret(keys.adminKey);rememberSecret(keys.apiKey);
   let closing;const service={config,ledger,credentials,platforms,claims,router,scheduler,keys,keysFile,close(){return closing??=(async()=>{await scheduler.stop();ledger.close();})();}};
+  scheduler.service=service;
+  router.relay.balanceSource=()=>service.balanceCache;
   if(schedule)scheduler.start();return service;
 }

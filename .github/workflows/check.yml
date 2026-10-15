@@ -19,3 +19,11 @@ jobs:
         env:
           SQLITE_STRESS_ROUNDS: 25
         run: node --test --test-name-pattern="cold-start" tests/sqlite-concurrency.test.mjs
+      - name: Compile native Windows desktop
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/build.ps1 -OutputDirectory "$env:RUNNER_TEMP/AiCreditDesktop"
+      - name: Verify native WB details with synthetic accounts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/tests/Run-WbDetailsFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/AiCreditDesktopTests"
