@@ -11,6 +11,7 @@ import {workBuddySummary,workBuddyAccountDetails,setWorkBuddyInference,saveWorkB
 import {markWorkBuddyStatus} from './workbuddy-status.mjs';
 import {mergeWorkBuddySessions} from './workbuddy-sessions.mjs';
 import {queryWorkBuddyTasks,runWorkBuddyTasks} from './workbuddy-tasks.mjs';
+import {startWorkBuddyTaskJob,workBuddyTaskJob,activeWorkBuddyTaskJob,cancelWorkBuddyTaskJob} from './workbuddy-task-jobs.mjs';
 import {startWorkBuddyLogin,pollWorkBuddyLogin,cancelWorkBuddyLogin} from './workbuddy-login.mjs';
 import {projectRoot} from './config.mjs';
 import {workBuddyRotationStatus,saveWorkBuddyRotation,evaluateWorkBuddyRotation} from './workbuddy-rotation.mjs';
@@ -106,6 +107,11 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='POST'&&url.pathname==='/admin/workbuddy/sessions/merge'){const b=await readBody(req,4194304,{allowEmpty:true});return json(res,200,await mergeWorkBuddySessions(service,b));}
         const deleteAccount=/^\/admin\/accounts\/([^/]+)$/.exec(url.pathname);
         if(req.method==='DELETE'&&deleteAccount){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>deleteGatewayAccount(service,decodeURIComponent(deleteAccount[1]),b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/task-jobs')return json(res,202,startWorkBuddyTaskJob(service,await readBody(req)));
+        if(req.method==='GET'&&url.pathname==='/admin/workbuddy/task-jobs')return json(res,200,activeWorkBuddyTaskJob(service,url.searchParams.get('accountId')??undefined));
+        const taskJob=url.pathname.match(/^\/admin\/workbuddy\/task-jobs\/([a-f0-9-]{36})(\/cancel)?$/);
+        if(taskJob&&req.method==='GET'&&!taskJob[2])return json(res,200,workBuddyTaskJob(service,taskJob[1]));
+        if(taskJob&&req.method==='POST'&&taskJob[2]){await readBody(req,1024,{allowEmpty:true});return json(res,202,cancelWorkBuddyTaskJob(service,taskJob[1]));}
         if(req.method==='GET'&&url.pathname==='/admin/workbuddy/tasks')return json(res,200,await queryWorkBuddyTasks(service,{accountId:url.searchParams.get('accountId')??service.ledger.get('wb-management-current')?.accountId}));
         if(req.method==='POST'&&url.pathname==='/admin/workbuddy/tasks')return json(res,200,await runWorkBuddyTasks(service,await readBody(req)));
         if(req.method==='POST'&&url.pathname==='/admin/workbuddy/capture'){const body=await readBody(req);return json(res,200,await withConfigMutation(service,()=>captureWorkBuddyAccount(service,body)));}

@@ -16,7 +16,7 @@ export async function createService(file,{schedule=false,workbuddyRuntime={}}={}
   try{keys=await readJson(keysFile)}catch(e){if(e.code!=='ENOENT'){ledger.close();throw e;}keys={adminKey:secret(),apiKey:secret()};await atomicJson(keysFile,keys);}
   if(typeof keys.adminKey!=='string'||typeof keys.apiKey!=='string'||keys.adminKey.length<24||keys.apiKey.length<24)throw new Error('Gateway keys must be at least 24 characters');
   rememberSecret(keys.adminKey);rememberSecret(keys.apiKey);
-  let closing;const service={config,ledger,credentials,platforms,claims,router,scheduler,keys,keysFile,workbuddyRuntime,close(){return closing??=(async()=>{service.workbuddyExecutorController?.abort(new Error('WB executor service shutdown'));await scheduler.stop();await Promise.allSettled([...(service.workbuddyTaskFlights??[]),workBuddyRotationFlight(service)]);ledger.close();})();}};
+  let closing;const service={config,ledger,credentials,platforms,claims,router,scheduler,keys,keysFile,workbuddyRuntime,close(){return closing??=(async()=>{service.workbuddyTaskJobsClosing=true;service.workbuddyExecutorController?.abort(new Error('WB executor service shutdown'));await scheduler.stop();await Promise.allSettled([...(service.workbuddyTaskFlights??[]),...(service.workbuddyTaskJobFlights??[]),workBuddyRotationFlight(service)]);ledger.close();})();}};
   service.workbuddyExecutorController=new AbortController();registerWorkBuddyTaskExecutors(service);
   scheduler.service=service;
   router.relay.balanceSource=()=>service.balanceCache;

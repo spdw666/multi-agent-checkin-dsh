@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -114,19 +114,25 @@ namespace AiCreditDesktop {
                 if(Json.Get(health,"service")!="ai-credit-gateway")throw new Exception("端口上运行的不是积分网关服务。");
             } finally { connectionGate.Release(); }
         }
-        private static async Task<Dictionary<string,object>> Send(HttpClient connection,string method,string path,object body,int seconds) {
-            using(var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(seconds)))
+        private static async Task<Dictionary<string,object>> Send(HttpClient connection,string method,string path,object body,int seconds,CancellationToken cancellation=default(CancellationToken)) {
+            using(var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             using(var req=new HttpRequestMessage(new HttpMethod(method),path)) {
+                timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
                 if(body!=null)req.Content=new StringContent(Json.Text(body),Encoding.UTF8,"application/json");
                 using(var res=await connection.SendAsync(req,timeout.Token)) {
                     var value=Json.Object(await res.Content.ReadAsStringAsync());
                     if(!res.IsSuccessStatusCode) {
                         var error=value.ContainsKey("error")?value["error"] as Dictionary<string,object>:null;
-                        throw new InvalidOperationException(error==null?"本机接口返回 HTTP "+(int)res.StatusCode:Json.Get(error,"message"));
+                        var failure=new InvalidOperationException(error==null?"本机接口返回 HTTP "+(int)res.StatusCode:Json.Get(error,"message"));failure.Data["httpStatus"]=(int)res.StatusCode;throw failure;
                     }
                     return value;
                 }
             }
+        }
+        // Jobs submit once; polling is explicitly read-only. A closed window cancels only its own wait.
+        internal Task<Dictionary<string,object>> TaskRequest(string method,string path,object body,CancellationToken cancellation) {
+            var connection=client;if(connection==null)throw new InvalidOperationException("请先启动后台服务。");
+            return Send(connection,method,path,body,8,cancellation);
         }
         internal async Task<Dictionary<string,object>> Request(string method,string path,object body=null) {
             var connection=client;if(connection==null)throw new Exception("请先启动后台服务。");
@@ -1686,12 +1692,13 @@ namespace AiCreditDesktop {
         internal Dictionary<string,object> LastSummary;internal int PageIndex {get{return index;}}internal int PageCount {get{return filtered.Count;}}internal string CurrentAccountId {get{return filtered.Count==0?null:Id(filtered[index]);}}internal int TotalAccountCount {get{return accounts.Length;}}
         internal WbPoolBoard(Gateway backend,Func<Task> reload){this.backend=backend;this.reload=reload;BackColor=Theme.Background;Padding=new Padding(12);Font=Theme.Body;Controls.Add(cards);Controls.Add(models);Controls.Add(note);Controls.Add(totals);Controls.Add(aggregateNote);Controls.Add(toolbar);Controls.Add(navigation);models.Visible=false;models.AccessibleName="WB 模型列表，每型号仅一行";
             var operations=Theme.Button("账号池操作");operations.AutoSize=false;operations.MinimumSize=new Size(105,Theme.ButtonHeight);operations.Size=new Size(105,Theme.ButtonHeight);operations.Margin=new Padding(0,0,4,0);operations.Click+=(s,e)=>globalMenu.Show(operations,new Point(0,operations.Height));toolbar.Controls.Add(operations);
-            AddGlobal("添加登录",Login);AddGlobal("保存客户端当前账号",CaptureSession);AddGlobal("刷新全部积分",()=>Task.FromResult(0),true);AddGlobal("一键合并聊天",async()=>{if(MessageBox.Show(FindForm(),"将所有已保存账号的本机会话以新副本合并到当前账号，保留来源记录；云同步由官方客户端下次启动确认。请先关闭 WorkBuddy 客户端。继续？","合并聊天",MessageBoxButtons.YesNo)!=DialogResult.Yes){CancelOperation();return;}ShowResult(await backend.Request("POST","/admin/workbuddy/sessions/merge",new {confirm=true}));});AddGlobal("全部接受任务",async()=>ShowResult(await backend.Request("POST","/admin/workbuddy/tasks",new {action="accept"})));AddGlobal("执行可自动任务",async()=>ShowResult(await backend.Request("POST","/admin/workbuddy/tasks",new {action="run"})));
+            AddGlobal("添加登录",Login);AddGlobal("保存客户端当前账号",CaptureSession);AddGlobal("刷新全部积分",()=>Task.FromResult(0),true);AddGlobal("一键合并聊天",async()=>{if(MessageBox.Show(FindForm(),"将所有已保存账号的本机会话以新副本合并到当前账号，保留来源记录；云同步由官方客户端下次启动确认。请先关闭 WorkBuddy 客户端。继续？","合并聊天",MessageBoxButtons.YesNo)!=DialogResult.Yes){CancelOperation();return;}ShowResult(await backend.Request("POST","/admin/workbuddy/sessions/merge",new {confirm=true}));});AddGlobal("全部接受任务",OpenGlobalTasks);AddGlobal("执行可自动任务",OpenGlobalTasks);
             var refresh=Theme.Button("刷新积分");refresh.AutoSize=false;refresh.MinimumSize=new Size(84,Theme.ButtonHeight);refresh.Size=new Size(84,Theme.ButtonHeight);refresh.Margin=new Padding(0,0,4,0);refresh.Click+=async(s,e)=>await Execute(()=>Task.FromResult(0),true);toolbar.Controls.Add(refresh);toolbar.Controls.Add(autoMigrate);toolbar.Controls.Add(autoTasks);modelToggle.AutoSize=false;modelToggle.MinimumSize=new Size(70,Theme.ButtonHeight);modelToggle.Size=new Size(70,Theme.ButtonHeight);modelToggle.Margin=new Padding(0,0,4,0);modelToggle.Click+=(s,e)=>{modelsExpanded=!modelsExpanded;PresentModelPage();LayoutBoard();};toolbar.Controls.Add(modelToggle);autoMigrateMenu.Click+=(s,e)=>autoMigrate.Checked=autoMigrateMenu.Checked;autoTasksMenu.Click+=(s,e)=>autoTasks.Checked=autoTasksMenu.Checked;globalMenu.Items.Add(new ToolStripSeparator());globalMenu.Items.Add(autoMigrateMenu);globalMenu.Items.Add(autoTasksMenu);foreach(var entry in new[]{"导入账号","导出账号","轮换设置"}){string action=entry;var b=Theme.Button(action);b.AutoSize=false;b.MinimumSize=new Size(WbTransferUi.ActionWidth,Theme.ButtonHeight);b.Size=new Size(WbTransferUi.ActionWidth,Theme.ButtonHeight);b.Margin=new Padding(0,0,4,0);b.Click+=async(s,e)=>await Execute(()=>action=="导入账号"?ImportAccounts():action=="导出账号"?ExportAccounts(null):RotationSettings());toolbar.Controls.Add(b);}
             autoMigrate.CheckedChanged+=async(s,e)=>{if(!binding)await Execute(SaveSettings);};autoTasks.CheckedChanged+=async(s,e)=>{if(!binding)await Execute(SaveSettings);};
             search.HandleCreated+=(s,e)=>SendMessage(search.Handle,0x1501,(IntPtr)1,"搜索 名称 / ID / UID");navigation.Controls.Add(search);navigation.Controls.Add(accountPicker);navigation.Controls.Add(pageCount);foreach(var b in new[]{first,previous,next,last}){b.AutoSize=false;b.MinimumSize=new Size(58,30);b.Size=new Size(58,30);b.Margin=Padding.Empty;navigation.Controls.Add(b);}first.Click+=(s,e)=>NavigateAccount(0);previous.Click+=(s,e)=>NavigateAccount(index-1);next.Click+=(s,e)=>NavigateAccount(index+1);last.Click+=(s,e)=>NavigateAccount(filtered.Count-1);search.TextChanged+=(s,e)=>{if(!binding)Filter(CurrentAccountId,index);};accountPicker.SelectedIndexChanged+=(s,e)=>{if(!binding&&accountPicker.SelectedIndex>=0)NavigateAccount(accountPicker.SelectedIndex);};SizeChanged+=(s,e)=>LayoutBoard();note.Text="翻页仅浏览账号；“切换此号”才改变登录。资料按页显示。";LayoutBoard();
         }
         private static string Id(IDictionary<string,object> row){return Json.Get(row,"accountId",Json.Get(row,"id"));}
+        private Task OpenGlobalTasks(){using(var form=new WbTasksForm(backend,null,new Dictionary<string,object>()))form.ShowDialog(FindForm());return Task.FromResult(0);}
         private void AddGlobal(string text,Func<Task> action,bool refresh=false){var item=new ToolStripMenuItem(text);item.Click+=async(s,e)=>await Execute(action,refresh);globalMenu.Items.Add(item);}
         private async Task Execute(Func<Task> action,bool refresh=false){if(operating||!CanPresent)return;operating=true;operationCancelled=false;toolbar.Enabled=false;cards.Enabled=false;navigation.Enabled=false;SetNote(ProcessingNote,Theme.Muted);bool completed=false;string result=null;
             try{await action();if(!CanPresent)return;if(operationCancelled){SetNote("操作已取消；账号、积分与自动任务设置保持原样。",Theme.Muted);return;}completed=true;result=note.Text==ProcessingNote?"操作已完成；账号资料已刷新。":note.Text;await LoadAsync(refresh);if(!CanPresent)return;if(reload!=null)await reload();if(CanPresent)SetNote(result,Theme.Success);}
@@ -1730,7 +1737,7 @@ namespace AiCreditDesktop {
         private async Task RotationSettings(){var data=await backend.Request("GET","/admin/workbuddy/rotation");if(!CanPresent)return;using(var d=new WbRotationForm(backend,data))d.ShowDialog(FindForm());SetNote("轮换设置已关闭；自动轮换仅按已保存设置执行，不中断正在进行的请求。",Theme.Success);}
         private async Task CaptureSession(){using(var d=new JsonDialog("保存客户端当前登录",new Dictionary<string,object>{{"id","wb-"+DateTime.Now.ToString("MMddHHmmss")},{"label","WorkBuddy 账号"}})){if(d.ShowDialog(FindForm())!=DialogResult.OK){CancelOperation();return;}await backend.Request("POST","/admin/workbuddy/capture",d.Value);SetNote("当前登录已独立保存",Theme.Success);}}
         private async Task Login(){using(var d=new WbLoginForm(backend))d.ShowDialog(FindForm());await LoadAsync();}
-        private async Task Tasks(string id){var data=await backend.Request("GET","/admin/workbuddy/tasks?accountId="+Uri.EscapeDataString(id));if(!CanPresent)return;using(var d=new WbTasksForm(backend,id,data))d.ShowDialog(FindForm());}
+        private Task Tasks(string id){if(!CanPresent)return Task.FromResult(0);var row=accounts.FirstOrDefault(a=>Id(a)==id);var data=row==null?new Dictionary<string,object>():new Dictionary<string,object>(NvidiaPresentation.Object(row,"tasks"));if(!data.ContainsKey("tasks")&&data.ContainsKey("items"))data["tasks"]=data["items"];using(var d=new WbTasksForm(backend,id,data))d.ShowDialog(FindForm());return Task.FromResult(0);}
         protected override void Dispose(bool disposing){if(disposing){globalMenu.Dispose();models.Dispose();}base.Dispose(disposing);}
     }
     internal static class WbTransferUi {
@@ -1794,38 +1801,90 @@ namespace AiCreditDesktop {
         private async Task Begin(){start.Enabled=false;try{var r=await backend.Request("POST","/admin/workbuddy/login/start",new {edition=edition.SelectedIndex==1?"global":"cn",label=label.Text});loginId=Json.Get(r,"loginId");authorizationUrl=Json.Get(r,"authorizationUrl");link.Text="重新打开官方登录页";status.Text="正在等待官方登录确认…";OpenAuthorization();timer.Start();}catch(Exception e){status.Text="登录未启动："+e.Message;start.Enabled=true;}}
         private async Task Poll(){if(polling||closing||loginId==null)return;polling=true;try{var r=await backend.Request("POST","/admin/workbuddy/login/poll",new {loginId=loginId});if(closing||IsDisposed)return;string state=Json.Get(r,"status");if(state=="complete"){timer.Stop();loginId=null;DialogResult=DialogResult.OK;}else if(state=="expired"){timer.Stop();start.Enabled=true;status.Text="本次登录等待已过期，点击按钮重新登录";}}catch(Exception e){if(!closing&&!IsDisposed)status.Text="登录确认暂未完成："+e.Message;}finally{polling=false;}}
     }
+    internal static class WbTaskUiMetrics {
+        internal const int HintHeight=92, HeadingHeight=58, PollMilliseconds=800, RetryMilliseconds=1600, MinimumRowHeight=108;
+    }
     internal sealed class WbTasksForm : ProductForm {
         private readonly Gateway backend;private readonly string accountId;
         private readonly DataGridView grid=Theme.Grid("任务名称 / 代码","任务内容 / 执行条件","进度 / 奖励","接受 / 达标 / 领取","最近操作回执");
-        private readonly Label hint=new Label {Dock=DockStyle.Bottom,Height=70,ForeColor=Theme.Muted,Padding=new Padding(0,8,0,0)};
-        private readonly Label heading=new Label {Dock=DockStyle.Top,Height=58,Font=WbPoolUi.HeadingFont,ForeColor=Theme.Ink};
+        private readonly Label hint=new Label {Dock=DockStyle.Bottom,Height=WbTaskUiMetrics.HintHeight,ForeColor=Theme.Muted,Padding=new Padding(0,8,0,0),AccessibleName="任务执行阶段与耗时"};
+        private readonly Label heading=new Label {Dock=DockStyle.Top,Height=WbTaskUiMetrics.HeadingHeight,Font=WbPoolUi.HeadingFont,ForeColor=Theme.Ink};
         private readonly FlowLayoutPanel footer=new FlowLayoutPanel {Dock=DockStyle.Bottom,AutoSize=true,WrapContents=true};
-        private Dictionary<string,object> lastData;private bool operating;
-        internal WbTasksForm(Gateway backend,string accountId,Dictionary<string,object> data){this.backend=backend;this.accountId=accountId;Text="WB 积分任务 · "+accountId;Size=new Size(1240,840);MinimumSize=new Size(760,560);Font=Theme.Body;BackColor=Theme.Background;Padding=new Padding(UiMetrics.Inset);StartPosition=FormStartPosition.CenterParent;
+        private readonly Button stop=Theme.Button("停止后续任务"),close=Theme.Button("关闭"),query=Theme.Button("重新查询");
+        private readonly List<Button> actions=new List<Button>();private readonly CancellationTokenSource lifetime=new CancellationTokenSource();
+        private readonly System.Windows.Forms.Timer clock=new System.Windows.Forms.Timer {Interval=1000};
+        private Dictionary<string,object> lastData;private bool operating,closing,stopPending,uncertainSubmission,globalJob;private string activeJobId="",activeAction="",progressText="",activeStatus="";private DateTime elapsedSince=DateTime.UtcNow;private double elapsedBase;private int operationVersion;private bool resourcesDisposed;
+        internal WbTasksForm(Gateway backend,string accountId,Dictionary<string,object> data){this.backend=backend;this.accountId=accountId;Text="WB 积分任务 · "+(string.IsNullOrEmpty(accountId)?"全部 WB 账号":accountId);Size=new Size(1240,840);MinimumSize=new Size(760,560);Font=Theme.Body;BackColor=Theme.Background;Padding=new Padding(UiMetrics.Inset);StartPosition=FormStartPosition.CenterParent;
             grid.AccessibleName="逐项任务内容、进度、接受达标领取状态和服务端回执";grid.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.None;grid.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.AllCells;grid.DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.AllowUserToResizeRows=true;grid.AllowUserToResizeColumns=true;grid.ScrollBars=ScrollBars.Both;
             int[] widths={180,230,130,160,170};for(int i=0;i<widths.Length;i++){grid.Columns[i].Width=widths[i];grid.Columns[i].MinimumWidth=90;grid.Columns[i].SortMode=DataGridViewColumnSortMode.NotSortable;}
             foreach(string verb in new[]{"accept","run","claim"}){var column=new DataGridViewButtonColumn {Name=verb,HeaderText=verb=="accept"?"接受任务":verb=="run"?"真实执行":"领取奖励",Width=90,MinimumWidth=90,FlatStyle=FlatStyle.Flat,SortMode=DataGridViewColumnSortMode.NotSortable};grid.Columns.Add(column);}
-            foreach(DataGridViewColumn column in grid.Columns)column.DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.RowTemplate.MinimumHeight=108;
-            Shown+=(s,e)=>{grid.DefaultCellStyle.WrapMode=DataGridViewTriState.True;foreach(DataGridViewColumn column in grid.Columns)column.DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells);};
-            grid.CellContentClick+=async(s,e)=>{if(e.RowIndex<0||e.ColumnIndex<5||operating)return;var task=grid.Rows[e.RowIndex].Tag as Dictionary<string,object>;if(task==null)return;string verb=grid.Columns[e.ColumnIndex].Name;if(!CanAct(task,verb))return;await Operate(verb,Json.Get(task,"taskCode",Json.Get(task,"code")));};
+            foreach(DataGridViewColumn column in grid.Columns)column.DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.DefaultCellStyle.WrapMode=DataGridViewTriState.True;grid.RowTemplate.MinimumHeight=WbTaskUiMetrics.MinimumRowHeight;
+            Shown+=async(s,e)=>{grid.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells);await ResumeActive(false);};
+            grid.CellContentClick+=async(s,e)=>{if(e.RowIndex<0||e.ColumnIndex<5||operating||uncertainSubmission||string.IsNullOrEmpty(accountId))return;var task=grid.Rows[e.RowIndex].Tag as Dictionary<string,object>;if(task==null)return;string verb=grid.Columns[e.ColumnIndex].Name;if(!CanAct(task,verb))return;await Operate(verb,Json.Get(task,"taskCode",Json.Get(task,"code")));};
             Controls.Add(grid);Controls.Add(hint);Controls.Add(footer);Controls.Add(heading);
-            foreach(string action in new[]{"accept","run","claim","query"}){string verb=action;var b=Theme.Button(action=="accept"?"全部接受":action=="run"?"执行可自动任务":action=="claim"?"领取已达标奖励":"重新查询");b.Click+=async(s,e)=>await Operate(verb,null);footer.Controls.Add(b);}var close=Theme.Button("关闭");close.Click+=(s,e)=>Close();footer.Controls.Add(close);Present(data);
+            foreach(string action in new[]{"accept","run","claim"}){string verb=action;var b=Theme.Button(action=="accept"?"全部接受":action=="run"?"执行可自动任务":"领取已达标奖励");b.Click+=async(s,e)=>await Operate(verb,null);actions.Add(b);footer.Controls.Add(b);}
+            query.Click+=async(s,e)=>{if(uncertainSubmission)await ResumeActive(true);else await Operate("query",null);};footer.Controls.Add(query);
+            stop.AccessibleDescription="请求停止后续任务；当前已经提交的动作仍需等待服务端确认，不重放动作。";stop.Click+=async(s,e)=>await StopAsync();footer.Controls.Add(stop);
+            close.AccessibleDescription="仅关闭窗口并结束本窗口等待；后台任务和已经提交的动作继续保留。";close.Click+=(s,e)=>Close();footer.Controls.Add(close);CancelButton=close;
+            clock.Tick+=(s,e)=>RefreshProgress();Present(data);SetBusy(false);
         }
         internal static bool CanAct(Dictionary<string,object> task,string verb){if(WbPoolUi.Flag(task,"claimed")||WbPoolUi.Flag(task,"locked"))return false;if(verb=="claim")return WbPoolUi.Flag(task,"claimable")||WbPoolUi.Flag(task,"qualified");if(verb=="run")return WbPoolUi.Flag(task,"automaticExecution");if(verb=="accept")return !WbPoolUi.Flag(task,"accepted")&&new[]{"","not_accepted"}.Contains(Json.Get(task,"acceptStatus",Json.Get(task,"status")));return false;}
-        private async Task Operate(string verb,string code){if(operating)return;operating=true;footer.Enabled=false;grid.Enabled=false;hint.ForeColor=Theme.Muted;hint.Text="正在逐项查询服务端状态；本次操作完成前保留已有任务列表…";
-            try{var body=new Dictionary<string,object>{{"accountId",accountId},{"action",verb}};if(!string.IsNullOrEmpty(code))body["taskCode"]=code;var result=verb=="query"?await backend.Request("GET","/admin/workbuddy/tasks?accountId="+Uri.EscapeDataString(accountId)):await backend.Request("POST","/admin/workbuddy/tasks",body);if(!IsDisposed){Present(result);hint.Text="已取得服务端回执；任务达标与奖励到账分别核验，待确认项保持待确认。";}}
-            catch(Exception x){if(!IsDisposed){hint.ForeColor=Theme.Warning;hint.Text="任务操作未完成："+x.Message+"；上次任务列表已保留，点击重新查询重试。";}}
-            finally{if(!IsDisposed){footer.Enabled=true;grid.Enabled=true;}operating=false;}
+        private bool Alive {get{return !closing&&!IsDisposed&&!Disposing;}}
+        private void SetBusy(bool value){operating=value;if(!Alive)return;foreach(var button in actions)button.Enabled=!value&&!uncertainSubmission;query.Enabled=!value;query.Text=uncertainSubmission?"重新连接（只读）":"重新查询";grid.Enabled=true;stop.Enabled=value&&!string.IsNullOrEmpty(activeJobId)&&!stopPending;close.Enabled=true;if(value)clock.Start();else clock.Stop();}
+        private void SetProgress(string text,bool warning=false){if(!Alive)return;progressText=text;hint.ForeColor=warning?Theme.Warning:Theme.Muted;RefreshProgress();}
+        private void RefreshProgress(){if(!Alive||!operating||string.IsNullOrEmpty(progressText))return;int seconds=Math.Max(0,(int)(elapsedBase+(DateTime.UtcNow-elapsedSince).TotalSeconds));hint.Text=progressText+"\n已用时 "+(seconds/60)+" 分 "+(seconds%60)+" 秒 · 关闭只结束本窗口等待，后台任务保留。";}
+        private void Terminal(string message,bool warning=false){if(!Alive)return;SetBusy(false);hint.ForeColor=warning?Theme.Warning:Theme.Success;hint.Text=message;activeJobId="";stopPending=false;}
+        private async Task Operate(string verb,string code){if(operating||!Alive)return;if(uncertainSubmission){await ResumeActive(true);return;}operationVersion++;activeAction=verb;elapsedBase=0;elapsedSince=DateTime.UtcNow;SetBusy(true);SetProgress("正在提交后台任务；已有任务列表保留，窗口可继续滚动和关闭。");
+            try{var body=new Dictionary<string,object>{{"action",verb}};if(!string.IsNullOrEmpty(accountId))body["accountId"]=accountId;if(!string.IsNullOrEmpty(code))body["taskCode"]=code;
+                Dictionary<string,object> job=null;bool unconfirmed=false;
+                try{job=await backend.TaskRequest("POST","/admin/workbuddy/task-jobs",body,lifetime.Token);}
+                catch(Exception){if(!Alive)return;unconfirmed=true;}
+                if(unconfirmed){uncertainSubmission=true;SetProgress("提交回执尚未确认；只读查找已启动任务，不重复执行。",true);job=await FindActive();if(job.Count==0){SetBusy(false);hint.ForeColor=Theme.Warning;hint.Text="提交回执未确认；当前未发现活跃任务。上次任务列表已保留，点击重新连接仅核对状态，不重复提交。";return;}}
+                await Follow(job);
+            }catch(OperationCanceledException){if(Alive)Terminal("本窗口等待已结束；后台结果尚待确认，上次任务列表已保留。",true);}
+            catch(Exception x){if(Alive){uncertainSubmission=true;SetBusy(false);hint.ForeColor=Theme.Warning;hint.Text="任务回执查询暂未完成："+x.Message+"；上次任务列表已保留，点击重新连接只读核对，不重复执行。";}}
         }
+        private async Task<Dictionary<string,object>> FindActive(){var data=await backend.TaskRequest("GET","/admin/workbuddy/task-jobs"+(string.IsNullOrEmpty(accountId)?"":"?accountId="+Uri.EscapeDataString(accountId)),null,lifetime.Token);return NvidiaPresentation.Object(data,"job");}
+        private async Task ResumeActive(bool explicitReconnect){if(operating||!Alive)return;operationVersion++;SetBusy(true);elapsedBase=0;elapsedSince=DateTime.UtcNow;if(explicitReconnect)SetProgress("正在只读查找后台任务；不会重新提交执行动作。");
+            try{var job=await FindActive();if(!Alive)return;if(job.Count==0){bool wasUncertain=uncertainSubmission;uncertainSubmission=false;SetBusy(false);if(explicitReconnect||wasUncertain){hint.ForeColor=Theme.Warning;hint.Text="当前未发现活跃任务；上次任务列表已保留。可重新查询官方状态，先核对回执再决定是否执行。";}return;}await Follow(job);}
+            catch(OperationCanceledException){if(Alive)SetBusy(false);}
+            catch(Exception x){if(Alive){uncertainSubmission=true;SetBusy(false);hint.ForeColor=Theme.Warning;hint.Text="后台任务状态暂未取得："+x.Message+"；上次任务列表已保留，点击重新连接只读恢复。";}}
+        }
+        private static string Phase(string value){switch(value){case "queued":return "后台已排队";case "init":case "starting":return "准备任务";case "query":case "querying":return "查询官方任务";case "accept":case "accepting":return "接受任务";case "execution":case "run":case "executing":case "running":return "执行真实任务";case "claim":case "claiming":return "领取达标奖励";case "progress_poll":case "refresh":case "refreshing":return "核对官方状态";case "finished":return "任务收尾";case "cancelling":return "等待当前已提交动作确认";case "waiting_confirmation":return "等待当前已提交动作确认";default:return string.IsNullOrEmpty(value)?"后台处理中":value;}}
+        private bool ApplyJob(Dictionary<string,object> job){string id=Json.Get(job,"jobId");if(string.IsNullOrEmpty(id)||(!string.IsNullOrEmpty(accountId)&&!string.IsNullOrEmpty(Json.Get(job,"accountId"))&&Json.Get(job,"accountId")!=accountId))throw new InvalidOperationException("服务端任务回执与当前账号不一致。");activeJobId=id;globalJob=string.IsNullOrEmpty(Json.Get(job,"accountId"));stop.Text=globalJob?"停止整个批次":"停止后续任务";stop.AccessibleDescription=globalJob?"请求停止本批次全部账号后续任务；当前已提交动作仍需等待服务端确认。":"请求停止此账号后续任务；当前已提交动作仍需等待服务端确认。";activeAction=Json.Get(job,"action",activeAction);uncertainSubmission=false;
+            var snapshot=NvidiaPresentation.Object(job,"snapshot");if(snapshot.Count>0)Present(snapshot);var progress=NvidiaPresentation.Object(job,"progress");double ms;elapsedBase=Math.Max(elapsedBase+(DateTime.UtcNow-elapsedSince).TotalSeconds,double.TryParse(Json.Get(progress,"elapsedMs","0"),out ms)?Math.Max(0,ms/1000):0);elapsedSince=DateTime.UtcNow;
+            string state=Json.Get(job,"status"),code=Json.Get(progress,"taskCode"),phase=Phase(Json.Get(progress,"phase"));int done=ActivityData.Int(progress,"completed",0),total=ActivityData.Int(progress,"total",0);
+            if(new[]{"completed","cancelled","failed","timed_out"}.Contains(state)){var result=NvidiaPresentation.Object(job,"result");if(result.Count>0)Present(result);var error=NvidiaPresentation.Object(job,"error");
+                Terminal(state=="completed"?"后台任务已完成；已逐项呈现服务端回执。任务达标与奖励到账分别核验，待确认项仍保持待确认。":state=="cancelled"?"后台已确认停止；已提交动作的回执保留，未继续后续任务。":state=="timed_out"?"后台等待已超时；已收到的任务和回执保留，未自动重试执行。":"后台任务未完成："+Json.Get(error,"message",Json.Get(error,"code","请核对逐项回执"))+"；上次任务列表已保留。",state!="completed");return true;}
+            activeStatus=state;bool cancelling=state=="cancelling";if(cancelling)stopPending=true;SetBusy(true);SetProgress((globalJob&&!string.IsNullOrEmpty(accountId)?"当前接管全部 WB 账号批次（停止会影响整个批次） · ":"")+(cancelling?"已请求停止；正在等待当前已提交动作确认，不重放动作。":phase)+(string.IsNullOrEmpty(code)?"":" · 当前任务："+code+(globalJob?" · "+Json.Get(progress,"accountId"):""))+" · 已完成 "+done+" / "+total,cancelling);return false;
+        }
+        private async Task Follow(Dictionary<string,object> job){int version=operationVersion;while(Alive&&operating&&version==operationVersion){if(ApplyJob(job))return;await Task.Delay(WbTaskUiMetrics.PollMilliseconds,lifetime.Token);if(!Alive||!operating||version!=operationVersion)return;
+                while(Alive&&operating&&version==operationVersion){try{job=await backend.TaskRequest("GET","/admin/workbuddy/task-jobs/"+Uri.EscapeDataString(activeJobId),null,lifetime.Token);break;}
+                    catch(OperationCanceledException){if(!Alive)return;SetProgress("读取进度暂时超时；正在只读重连，后台任务仍保留，不重放动作。",true);}
+                    catch(Exception x){if(!Alive)return;if(x.Data.Contains("httpStatus")&&Convert.ToInt32(x.Data["httpStatus"])==404){uncertainSubmission=true;SetBusy(false);hint.ForeColor=Theme.Warning;hint.Text="后台暂未找到原任务回执；上次任务列表已保留，不自动重放。点击重新连接核对状态。";return;}SetProgress("进度连接暂时中断；正在只读重连，后台任务与已有回执保留。",true);}
+                    await Task.Delay(WbTaskUiMetrics.RetryMilliseconds,lifetime.Token);
+                }
+            }}
+        private async Task StopAsync(){if(!Alive||!operating||stopPending||string.IsNullOrEmpty(activeJobId))return;int version=operationVersion;string id=activeJobId;stopPending=true;stop.Enabled=false;SetProgress("正在请求停止后续任务；当前已提交动作仍需等待确认，不重放动作。",true);
+            try{var job=await backend.TaskRequest("POST","/admin/workbuddy/task-jobs/"+Uri.EscapeDataString(id)+"/cancel",new{},lifetime.Token);if(Alive&&operating&&operationVersion==version&&activeJobId==id)ApplyJob(job);}
+            catch(Exception){if(Alive&&operating&&operationVersion==version&&activeJobId==id){stopPending=activeStatus=="cancelling";stop.Enabled=!stopPending;SetProgress(stopPending?"后台已确认正在停止；继续等待当前已提交动作确认，不重放。":"停止请求回执尚未确认；继续只读查询后台，不自动重发停止或执行动作。",true);}}
+        }
+        protected override void OnFormClosing(FormClosingEventArgs e){base.OnFormClosing(e);if(!e.Cancel){closing=true;lifetime.Cancel();clock.Stop();}}
+        protected override void Dispose(bool disposing){if(disposing&&!resourcesDisposed){resourcesDisposed=true;closing=true;operating=false;lifetime.Cancel();clock.Dispose();}base.Dispose(disposing);}
+        private string RowKey(Dictionary<string,object> task){return (string.IsNullOrEmpty(accountId)?Json.Get(task,"accountId"):"")+"\n"+Json.Get(task,"taskCode",Json.Get(task,"code"));}
         private void Present(Dictionary<string,object> data){lastData=data;var rows=Json.Rows(data,"tasks").ToArray();if(rows.Length==0)rows=Json.Rows(NvidiaPresentation.Object(data,"tasks"),"items").ToArray();if(rows.Length==0)rows=Json.Rows(data,"results").SelectMany(r=>Json.Rows(r,"tasks")).ToArray();
-            grid.Rows.Clear();var receipts=Json.Rows(data,"receipts").ToArray();foreach(var task in rows){string code=Json.Get(task,"taskCode",Json.Get(task,"code"));var receipt=NvidiaPresentation.Object(task,"lastReceipt");if(receipt.Count==0)receipt=receipts.LastOrDefault(r=>Json.Get(r,"taskCode")==code)??new Dictionary<string,object>();
+            if(!string.IsNullOrEmpty(accountId))rows=rows.Where(t=>string.IsNullOrEmpty(Json.Get(t,"accountId"))||Json.Get(t,"accountId")==accountId).ToArray();
+            int scroll=grid.FirstDisplayedScrollingRowIndex,horizontal=grid.HorizontalScrollingOffset;var selected=grid.CurrentRow==null?null:grid.CurrentRow.Tag as Dictionary<string,object>;string selectedCode=selected==null?"":RowKey(selected);int selectedColumn=grid.CurrentCell==null?0:grid.CurrentCell.ColumnIndex;var receipts=Json.Rows(data,"receipts").ToArray();
+            grid.SuspendLayout();try{foreach(var task in rows){string code=Json.Get(task,"taskCode",Json.Get(task,"code"));var receipt=NvidiaPresentation.Object(task,"lastReceipt");if(receipt.Count==0)receipt=receipts.LastOrDefault(r=>Json.Get(r,"taskCode")==code&&(!string.IsNullOrEmpty(accountId)||string.IsNullOrEmpty(Json.Get(task,"accountId"))||Json.Get(r,"accountId")==Json.Get(task,"accountId")))??new Dictionary<string,object>();
                 string accepted=WbPoolUi.Flag(task,"accepted")||new[]{"accepted","in_progress","claimed"}.Contains(Json.Get(task,"acceptStatus"))?"已接受":"尚未接受";string qualified=WbPoolUi.Flag(task,"qualified")||WbPoolUi.Flag(task,"claimable")||WbPoolUi.Flag(task,"claimed")?"已达标":"未达标";
                 string execution=WbPoolUi.Flag(task,"automaticExecution")?"已接入真实执行器":"请实际使用对应功能；此处支持接受及达标领取";
-                int index=grid.Rows.Add(Json.Get(task,"title",Json.Get(task,"name",code))+Environment.NewLine+code,Json.Get(task,"description","服务端未提供任务说明")+Environment.NewLine+execution,WbPoolUi.Progress(task)+Environment.NewLine+WbPoolUi.Reward(task),accepted+" · "+qualified+Environment.NewLine+WbPoolUi.TaskState(task)+"\n官方状态："+Json.Get(task,"serverStatus",Json.Get(task,"status","未返回")),WbPoolUi.Receipt(receipt),CanAct(task,"accept")?"接受":"—",CanAct(task,"run")?"执行":"需实际使用",CanAct(task,"claim")?"领取":"—");grid.Rows[index].Tag=task;grid.Rows[index].MinimumHeight=108;for(int c=0;c<5;c++)grid.Rows[index].Cells[c].Style.WrapMode=DataGridViewTriState.True;
-                if(WbPoolUi.Flag(task,"claimed"))grid.Rows[index].Cells[3].Style.ForeColor=Theme.Success;
-            }
-            heading.Text="账号 ID："+accountId+"\n"+rows.Length+" 项任务 · 查询 "+WbPoolUi.Time(data,"checkedAt")+" · 可横向滚动至每项操作";
-            hint.Text=rows.Length==0?"官方任务列表尚未返回；点击重新查询获取真实状态，不将空列表解释为已完成。":"接受、达标与领取分别显示；没有真实执行器的任务保留实际使用要求。ID 和任务代码可选中复制；表格支持双向滚动。";
+                object[] values={Json.Get(task,"title",Json.Get(task,"name",code))+Environment.NewLine+code+(string.IsNullOrEmpty(accountId)?"\n"+Json.Get(task,"accountId"):""),Json.Get(task,"description","服务端未提供任务说明")+Environment.NewLine+execution,WbPoolUi.Progress(task)+Environment.NewLine+WbPoolUi.Reward(task),accepted+" · "+qualified+Environment.NewLine+WbPoolUi.TaskState(task)+"\n官方状态："+Json.Get(task,"serverStatus",Json.Get(task,"status","未返回")),WbPoolUi.Receipt(receipt),!string.IsNullOrEmpty(accountId)&&CanAct(task,"accept")?"接受":"—",!string.IsNullOrEmpty(accountId)&&CanAct(task,"run")?"执行":"需实际使用",!string.IsNullOrEmpty(accountId)&&CanAct(task,"claim")?"领取":"—"};
+                var row=grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r=>{var t=r.Tag as Dictionary<string,object>;return t!=null&&RowKey(t)==RowKey(task);});if(row==null)row=grid.Rows[grid.Rows.Add(values)];else for(int i=0;i<values.Length;i++)if(!object.Equals(row.Cells[i].Value,values[i]))row.Cells[i].Value=values[i];row.Tag=task;row.MinimumHeight=WbTaskUiMetrics.MinimumRowHeight;for(int c=0;c<5;c++)row.Cells[c].Style.WrapMode=DataGridViewTriState.True;row.Cells[3].Style.ForeColor=WbPoolUi.Flag(task,"claimed")?Theme.Success:Theme.Ink;
+            }}finally{grid.ResumeLayout();}
+            if(!string.IsNullOrEmpty(selectedCode)){var selectedRow=grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r=>{var t=r.Tag as Dictionary<string,object>;return t!=null&&RowKey(t)==selectedCode;});if(selectedRow!=null)grid.CurrentCell=selectedRow.Cells[Math.Min(selectedColumn,grid.Columns.Count-1)];}
+            if(scroll>=0&&scroll<grid.Rows.Count)grid.FirstDisplayedScrollingRowIndex=scroll;grid.HorizontalScrollingOffset=horizontal;
+            heading.Text=(string.IsNullOrEmpty(accountId)?"全部 WB 账号 · 按账号依次执行，关闭可保留后台任务":"账号 ID："+accountId)+"\n"+grid.Rows.Count+" 项任务 · 查询 "+WbPoolUi.Time(data,"checkedAt")+" · 任务和回执逐项更新";
+            if(!operating)hint.Text=rows.Length==0?"官方任务列表尚未返回；已有列表保留，不将空列表解释为已完成。":"接受、达标与领取分别显示；没有真实执行器的任务保留实际使用要求。表格支持双向滚动，关闭不会取消后台任务。";
         }
     }
 
