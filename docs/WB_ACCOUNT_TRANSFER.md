@@ -46,7 +46,7 @@
 
 - 顶层可为单个账号对象、账号对象数组，或 `{ "schemaVersion": 1, "format": "workbuddy-auths", "accounts": [...] }`。
 - `uid` 是去重身份，`enterpriseId` / `nickname` 是资料；网关账号 ID 由稳定槽位维护，不直接信任文件名作为 ID。
-- `accessToken` / `refreshToken` 为非空明文字符串；凭据内容不出现在预览、普通 summary/details 或错误日志中。
+- `accessToken` 为非空明文字符串；`refreshToken` 可省略或为空，表示旧版仅访问态账号，到期需重新登录，不伪造续期能力。凭据内容不出现在预览、普通 summary/details 或错误日志中。
 - `expiresAt` 接受秒或毫秒时间戳，导出统一毫秒；过期与字段缺失分开展示。
 - `domain` 使用已知官方 WorkBuddy/CodeBuddy 的国内/国际域名，不接受任意自建服务 URL。国内与国际同 UID 仍为不同账号身份。
 - `gateway` 保留本机显示名、备注及积分调用开关，不是官方账号资料。`label` 最多 128 字符，`notes` 最多 2000 字符；账号备注与路由 ID 分开。
@@ -183,3 +183,7 @@ $result = Invoke-RestMethod "$base/admin/workbuddy/accounts/export" `
 - 格式校验 → 保存 → 主体/余额刷新 → 真实推理 → 官方客户端切号是独立步骤；前一步成功不冒充后一步已完成。
 - 回滚先在独立副本核对备份对应的账号/配置，保留更新后新增历史，再恢复相关文件；不要整目录覆盖其他同期变更。
 - 与自动轮换的关系见 [WB 轮换](WB_ROTATION.md)；暂停积分调用与签到/任务的关系见 [WB 帐号池](wb-account-pool.md)。
+
+## 旧版仅访问态账号
+
+既有旧账号可能只保存 Access Token，没有 Refresh Token。JSON、ZIP 和 `switch-json` 都可完整导出并重新导入这类账号，`auth.refreshToken` 保持空字符串。预览返回 `hasRefreshToken:false`、`refreshable:false` 与固定 `wb_import_access_only` 提示；现有访问态只在有效期内使用，到期后重新登录。程序不补造 Refresh Token、不为导出而调用续期，不改原凭据文件。空 Access Token 仍会被拒绝。

@@ -32,6 +32,7 @@ function normalize(raw){
   const a=raw.account,b=raw.auth,uid=valueText(a.uid,{required:true,max:200}),domain=typeof b.domain==='string'?b.domain.toLowerCase():'';
   if(!domains.has(domain))throw issue('wb_import_domain','WB auth.domain 需要已知的官方 CN/AI 域名');
   for(const k of ['accessToken','refreshToken']){
+    if(k==='refreshToken'&&(b[k]===undefined||b[k]===''))continue;
     if(object(b[k])&&(own(b[k],'$wbEncrypted')||own(b[k],'envelope'))||typeof b[k]==='string'&&/^enc[:/]/i.test(b[k]))throw issue('wb_import_encrypted_token','WB 加密登录态需要先由原客户端保存为可读登录态');
     if(typeof b[k]!=='string'||!b[k].trim()||b[k].length>32768||/[\x00-\x20\x7f]/.test(b[k]))throw issue('wb_import_token','WB 登录态字段缺失或格式不正确');
   }
@@ -40,7 +41,7 @@ function normalize(raw){
   const expiresAtMs=workBuddyExpiry({expiresAt:b.expiresAt});if(!Number.isFinite(expiresAtMs)||expiresAtMs<=0||expiresAtMs>8640000000000000)throw issue('wb_import_expiry','WB expiresAt 时间戳超出有效范围');
   const gateway=raw.gateway===undefined?{}:raw.gateway;if(!object(gateway)||Object.keys(gateway).some(k=>!['label','notes','inferenceEnabled'].includes(k))||gateway.inferenceEnabled!==undefined&&typeof gateway.inferenceEnabled!=='boolean')throw issue('wb_import_metadata','WB gateway 元数据格式不正确');
   const nickname=valueText(a.nickname,{max:500}),enterpriseId=valueText(a.enterpriseId,{max:200}),label=profileText(gateway.label,'label',128),notes=profileText(gateway.notes,'notes',2000);
-  const account={uid,enterpriseId,nickname,...(a.email!==undefined?{email:valueText(a.email,{max:500})}:{}),...(a.enterpriseName!==undefined?{enterpriseName:valueText(a.enterpriseName,{max:500})}:{})},auth={accessToken:b.accessToken,refreshToken:b.refreshToken,expiresAt:expiresAtMs,domain};
+  const account={uid,enterpriseId,nickname,...(a.email!==undefined?{email:valueText(a.email,{max:500})}:{}),...(a.enterpriseName!==undefined?{enterpriseName:valueText(a.enterpriseName,{max:500})}:{})},auth={accessToken:b.accessToken,refreshToken:b.refreshToken??'',expiresAt:expiresAtMs,domain};
   return {uid,edition:domains.get(domain),label:label?.trim()||nickname.slice(0,128)||'WorkBuddy '+domains.get(domain).toUpperCase(),notes:notes??'',inferenceEnabled:gateway.inferenceEnabled!==false,account,auth,expiresAtMs,authRaw:authRaw??{account,auth},switchMetadata};
 }
 function parseJson(text){try{return JSON.parse(text);}catch{throw issue('wb_import_json','WB JSON 语法不正确');}}
@@ -70,7 +71,7 @@ async function existingIdentities(service){
 }
 async function prepare(service,body){
   const records=inputFiles(body),existing=await existingIdentities(service),seen=new Set(),entries=[];
-  for(const r of records){try{const n=normalize(r.raw),key=n.edition+'\0'+n.uid,found=existing.get(key)??(service.config.value.accounts??[]).find(a=>a.platform==='workbuddy'&&workBuddyEdition(a)===n.edition&&service.ledger?.principalHash?.(a.id)===hash('workbuddy\0'+n.uid)),duplicateInImport=seen.has(key);seen.add(key);entries.push({...r,normalized:n,existing:found,view:{index:r.index,fileIndex:r.fileIndex,label:redact(n.label),uid:redact(n.uid),edition:n.edition,duplicate:!!found||duplicateInImport,duplicateInImport,accountId:found?.id??null,expiresAt:new Date(n.expiresAtMs).toISOString(),expired:n.expiresAtMs<=Date.now(),inferenceEnabled:found?found.inferenceEnabled!==false:n.inferenceEnabled,valid:true,errors:[]}});}catch(e){if(!(e instanceof AppError))throw e;entries.push({...r,view:{index:r.index,fileIndex:r.fileIndex,label:'待核验账号',uid:null,edition:null,duplicate:false,accountId:null,valid:false,errors:[{code:e.code,message:e.message}]}});}}
+  for(const r of records){try{const n=normalize(r.raw),key=n.edition+'\0'+n.uid,found=existing.get(key)??(service.config.value.accounts??[]).find(a=>a.platform==='workbuddy'&&workBuddyEdition(a)===n.edition&&service.ledger?.principalHash?.(a.id)===hash('workbuddy\0'+n.uid)),duplicateInImport=seen.has(key),hasRefreshToken=n.auth.refreshToken.length>0;seen.add(key);entries.push({...r,normalized:n,existing:found,view:{index:r.index,fileIndex:r.fileIndex,label:redact(n.label),uid:redact(n.uid),edition:n.edition,duplicate:!!found||duplicateInImport,duplicateInImport,accountId:found?.id??null,expiresAt:new Date(n.expiresAtMs).toISOString(),expired:n.expiresAtMs<=Date.now(),hasRefreshToken,refreshable:hasRefreshToken,warnings:hasRefreshToken?[]:[{code:'wb_import_access_only',message:'该账号仅含访问态；访问态到期后需重新登录，未提供自动续期凭据'}],inferenceEnabled:found?found.inferenceEnabled!==false:n.inferenceEnabled,valid:true,errors:[]}});}catch(e){if(!(e instanceof AppError))throw e;entries.push({...r,view:{index:r.index,fileIndex:r.fileIndex,label:'待核验账号',uid:null,edition:null,duplicate:false,accountId:null,valid:false,errors:[{code:e.code,message:e.message}]}});}}
   return entries;
 }
 export async function previewWorkBuddyImport(service,body){
@@ -112,7 +113,7 @@ export async function importWorkBuddyAccounts(service,body){
 }
 async function exportRaw(service,account){
   const file=await resolveCredentialFile(account,service.config),bytes=await readFile(file);if(bytes.length>2*1024*1024)throw issue('wb_export_size_limit','WB 本机账号文件过大');const raw=parseJson(decodeWorkBuddyText(bytes)),auth=raw.auth??raw,profile=raw.account??raw.profileRaw??{},uid=raw.uid??raw.principal??profile.uid;
-  if(typeof auth.accessToken!=='string'||typeof auth.refreshToken!=='string')throw issue('wb_export_saved_session_required','WB 导出需要已保存的账号登录态，请先保存当前账号');
+  if(typeof auth.accessToken!=='string')throw issue('wb_export_saved_session_required','WB 导出需要已保存的账号登录态，请先保存当前账号');
   const normalized=normalize({account:{...profile,uid,enterpriseId:profile.enterpriseId??'',nickname:profile.nickname??''},auth:{accessToken:auth.accessToken,refreshToken:auth.refreshToken,expiresAt:raw.expiresAtMs??auth.expiresAt,domain:auth.domain??raw.domain},gateway:{label:account.label??account.id,notes:account.notes??'',inferenceEnabled:account.inferenceEnabled!==false}});
   const authRaw=structuredClone(raw.authRaw??{account:normalized.account,auth:normalized.auth}),target=object(authRaw.auth)?authRaw.auth:authRaw;Object.assign(target,normalized.auth);
   // Native switch clients prefer auth_raw.auth. A renewed owned session must

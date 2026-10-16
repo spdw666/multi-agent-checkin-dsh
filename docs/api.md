@@ -288,3 +288,5 @@ HTTP 截止与供给进度超时不同：接力默认 30 秒无有效进展，�
 轮换与接力/签到任务分开：默认关闭，仅考虑同版本可用 WB 候选，暂停积分调用的账号排除；网关只影响下一请求，CLI 存活时推迟，不终止进程。`dryRun` 预览、配置保存和实际逐目标切换结果是三个状态；HTTP 200 不是“所有账号都已经切换”。
 
 文件形状、容量、错误与示例见 [WB 账号交换](WB_ACCOUNT_TRANSFER.md)；轮换设置、候选、CLI 门控与地区写入见 [WB 轮换](WB_ROTATION.md)；来源对照见 [WB_SWITCH_COMPARISON.md](WB_SWITCH_COMPARISON.md)。
+
+交换预览支持旧版仅 Access Token 的账号：`hasRefreshToken:false`、`refreshable:false`、`warnings:[{code:"wb_import_access_only",...}]`。导出缺失 Refresh Token 为 `""`，到期需重新登录；不伪造续期能力。
