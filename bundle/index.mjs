@@ -14,6 +14,7 @@ import {rememberSecret,errorView} from '../src/util.mjs';
 import {thinkingMetadata} from '../src/reasoning.mjs';
 import {createModelRefresh} from './model-refresh.mjs';
 import {gatewayRequestPolicy} from './request-policy.mjs';
+import {wrapGatewayRetryMetadata,registerGatewayRetryRecovery} from './retry-metadata.mjs';
 export const name='dsh-ai-credit-gateway';
 export const inject=['llm'];
 export const Config=z.object({configFile:z.string().default(process.env.AI_CREDIT_CONFIG??join(projectRoot,'config.local.json'))});
@@ -31,7 +32,7 @@ export function createGatewayAdapter({runtime,models,resolveAttachments}) {
   const provider={...base,getModels:buildModels};
   const profile={provider:providerId,displayName:'AI网关',...gatewayRequestPolicy(runtime,current),retryPolicy:retryPolicy(),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
   let profiles=new Map([[providerId,profile]]);
-  const adapter=new PiAiAdapter({profiles:()=>profiles,auth:inertAuth,resolveApiKey:async()=>runtime.key,...(resolveAttachments?{resolveAttachments}:{})});
+  const adapter=wrapGatewayRetryMetadata(new PiAiAdapter({profiles:()=>profiles,auth:inertAuth,resolveApiKey:async()=>runtime.key,...(resolveAttachments?{resolveAttachments}:{})}),{models:()=>current});
   return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;current=models;modelFingerprint=next;Object.assign(profile,gatewayRequestPolicy(runtime,current),{retryPolicy:retryPolicy()});profiles=new Map([[providerId,profile]]);return true}};
 }
 export async function createBundleRuntime(configFile,_options={}) {
@@ -54,6 +55,7 @@ export async function createBundleRuntime(configFile,_options={}) {
 }
 export function apply(ctx,config) {
   void diagnostic('BUNDLE_APPLY');
+  registerGatewayRetryRecovery(ctx);
   let stopped=false,stack,adapterHandle,directoryHandle,discoveryHandle,timer,modelRefresh;
   const settingsNs=ctx.fiber?.entry?.options?.id??name;
   ctx.inject(['settings'],child=>ctx.effect(()=>child.settings.configure({auto:true},ctx.fiber)));

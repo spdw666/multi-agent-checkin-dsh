@@ -17,6 +17,8 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 
 > 兼容名称：npm 包仍为 `dsh-ai-credit-gateway`，CLI 与 DSH Provider 仍为 `ai-credit`，历史仓库地址保持不变。Windows 正式入口为 **`AI积分网关.exe`**。
 
+真实功能自动任务的执行链、官方组件、状态和防重复机制见 [WB 自动执行器说明](docs/WB_TASK_EXECUTORS.md)。
+
 ## 目录
 
 - [产品定位与架构](#产品定位与架构)
@@ -24,6 +26,8 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 - [Windows 原生桌面](#windows-原生桌面)
 - [七个页面](#七个页面)
 - [wb帐号池详解](#wb帐号池详解)
+- [账号导入、导出与整理](#账号导入导出与整理)
+- [账号自动轮换](#账号自动轮换)
 - [同模型自动接力](#同模型自动接力)
 - [支持的平台与能力边界](#支持的平台与能力边界)
 - [OpenAI 兼容客户端接入](#openai-兼容客户端接入)
@@ -80,6 +84,24 @@ DSH / Hermes / 其他客户端 ─ apiKey ─ /v1
 | `docs/` | API、平台来源、接入与行为说明 |
 
 公开仓库包含原生桌面源码与构建入口，不包含个人安装目录、登录数据、数据库或聊天。本机已有 EXE/Node runtime 不等于仓库发行附件；下载二进制以实际 Releases 附件为准。
+
+
+### WB 日常工作流
+
+**新账号**：添加官方登录 / 保存当前客户端账号 / 导入 JSON 或 ZIP → 核对账号身份与版本 → 刷新积分 → 选择需要发布的模型。**整理账号**：修改显示名与备注 → 按 ID/UID 搜索 → 只停用积分调用或显式删除。**多账号使用**：同版同模型池按额度故障接力；另可开启到期优先/顺序轮换，提前决定后续账号。导入、发布路由、真实模型请求与官方任务完成分别给回执，不合并为一个“成功”。
+
+常用入口与操作区别：
+
+| 操作 | 改变什么 | 保留什么 |
+|---|---|---|
+| 添加/导入账号 | 新的独立登录快照；显式替换只换同主体凭据 | 原账号、稳定 ID、路由启停、历史与其他平台 |
+| 导出账号 JSON/ZIP | 将选中已保存登录数据写到用户选择路径 | 账号和路由保持原状，不执行推理或任务 |
+| 停用该账号 | `inferenceEnabled:false`，暂停模型/积分调用 | 自动签到、自动任务、资料和登录态 |
+| 账号管理整体停用 | `enabled:false`，退出自动调度/使用 | 账号配置与历史 |
+| 自动轮换 | 后续网关请求/后续 CLI 启动的优先账号 | 已开始的生成、模型 ID、上下文与工具 |
+| 模型路由“导出选中” | 取消发布选中模型路由 | 账号、登录态、路由定义与历史 |
+
+详细对照：[workbuddy-switch 参考矩阵](docs/WB_SWITCH_COMPARISON.md)。本项目使用其格式/策略知识独立适配，完整上游许可保留；IDE 插件切号、悬浮窗、签名更新等参考项目桌面功能不自动成为本网关功能。
 
 ## 快速开始
 
@@ -205,6 +227,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 - **认证拒绝 / `auth_rejected`**：会话撤销、登录失效或凭据被拒；HTTP 401/403 单独出现不等于官方封禁。
 - **未知**：本次查询证据不足；保留最近成功数据与失败原因，不猜测为正常或封禁。
 - **手动标记封禁**：本机整理功能，可清除；标记后退出 WB 接力候选，不自动删聊天。
+- **停用该账号 / 启用该账号**：每个 WB 账号都有独立按钮，仅暂停该账号的积分与模型调用；账号资料、登录态、自动签到和自动任务继续保留。停用后不会加入模型候选或自动切号；再次启用恢复参与。该开关对应 `accounts[].inferenceEnabled`，与停用整个账号的 `enabled` 不同。
 - **删除账号**：确认后清理账号、上游、池与失效路由引用；保留聊天、历史及私密回滚备份，与“停用”不同。
 
 核对账号 ID、UID 与封禁来源后再删除。封禁卡保留是为了识别整理，不让它继续参与调用。
@@ -228,9 +251,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 3. 领取服务端已达标且可领取任务的奖励。
 4. 重新查询任务/余额，核对结果并持久去重。
 
-**创建自动化、应用体验、专家使用等任务的真实执行器未注册时，显示 `manual_action_required` / 待操作。** 展示全部任务不等于每个任务都有“一键完成”执行器；不伪造功能使用事件，不把领奖提交成功当任务已完成。
+**后台已接入真实功能执行器：对话、技能、专家、画布、外观、资料库与本地自动化按各自入口执行，并回查官方任务进度。** 首次对话前置任务优先处理；应用授权、订阅等待时间、资料正文与业务组件等条件未就绪时保留具体状态。完整流程、幂等规则与组件要求见 [WB 自动执行器说明](docs/WB_TASK_EXECUTORS.md)。只有官方查询确认达标才领取，只有再查 `claimed` 才显示已领取。没有执行器的任务继续显示 `manual_action_required`；已接入但条件未就绪的任务返回具体等待原因。
 
 “自动任务”由后台约每 30 分钟检查，同账号互斥。默认关闭，关闭后停止后续自动流程。查询、接受、执行与领取分别有状态，以官方回查为准。
+
+WB 真实任务执行器使用共享 SQLite 租约，桌面核心与 DSH 同时触发同一账号、任务时仅一个进程执行；丢租后停止后续动作，已提交但结果不确定的操作保留待核验，不重复生成。
 
 ### 切号与聊天迁移
 
@@ -242,6 +267,71 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 先关闭 WorkBuddy，再切换/迁移。写入前备份与校验，失败恢复客户端登录和网关选择，不强行关闭正在执行的用户任务。
 
 `cloudSyncConfirmed:false` 表示只完成本机处理，云端归属和同步需官方客户端下次启动确认。源会话保留；结构未适配或正文不全时返回待处理状态，不用调用账本冒充聊天正文。
+
+## 账号导入、导出与整理
+
+完整格式与 API 见 [WB 账号交换手册](docs/WB_ACCOUNT_TRANSFER.md)。WB 帐号池顶部固定有“导入账号”“导出账号”“轮换设置”，每号“更多操作”有“修改名称 / 备注”“导出此号”；原管理入口继续处理添加登录、保存当前客户端和本地显示名/备注，保持原来的身份、积分、任务与会话管理。
+
+### 导入的操作顺序
+
+1. 选择一个或多个 `.json` / `.zip`；先做只读预览。
+2. 核对国内/国际版、稳定 UID、有效期、格式问题与重复项。
+3. 选择导入条目，决定“跳过已有”还是“替换已有登录态”，再提交。
+4. 查看新增、替换、跳过及逐项回执；之后按需刷新身份和积分。
+
+支持附件类 `account` / `auth` JSON（单对象、对象数组或带 `schemaVersion:1` 的 `workbuddy-auths` 包），以及 workbuddy-switch 原始明文扁平数组；ZIP 可装多个账号 JSON。预览不返回 token，也不执行登录续期、签到或生成。JSON 中的昵称不是网关稳定 ID，文件名也不作为身份依据。
+
+```json
+{
+  "account": {"uid":"SAMPLE_UID","enterpriseId":"SAMPLE_ENTERPRISE","nickname":"SAMPLE 工作号"},
+  "auth": {"accessToken":"SAMPLE_ACCESS_TOKEN","refreshToken":"SAMPLE_REFRESH_TOKEN","expiresAt":1893456000000,"domain":"www.workbuddy.cn"},
+  "gateway": {"label":"SAMPLE 国内号","notes":"SAMPLE 本地备注","inferenceEnabled":true}
+}
+```
+
+身份按**版本 + UID**去重，默认跳过已有；显式替换只更新对应主体的已保存凭据，不覆盖原账号 ID、显示名、备注、整体启用、积分调用开关、任务和路由策略。已有自动维护池可以加入同版新账号，手动池与停用路由保持原样。新增账号按保存回执建立，不用文件内任意路径决定本机落盘位置。
+
+### 导出与本地整理
+
+导出选择当前浏览账号、全部或明确多选账号，保存为兼容 JSON、逐账号 ZIP 或 workbuddy-switch JSON（`switch-json`）；格式与导入相对应，包含实际登录数据，而日常 summary/details 仍隐藏 token。把导出物留在本机私密备份目录；公开仓库只包含 SAMPLE 格式示例，不包含个人账号包、账号清单、密钥或压缩包。
+
+显示名与备注仅影响本机识别，不修改官方 UID、登录地区或路由 ID。备注空串表示清空；账号详情继续显示身份、登录期限、封禁依据、积分包与任务。预览、保存、官方认证有效与真实推理是不同验收步骤，不把成功解析文件描述为模型已经可用。
+
+### 管理接口速查
+
+| 接口 | 用途 |
+|---|---|
+| `POST /admin/workbuddy/accounts/import/preview` | 只读解析与去重预览 |
+| `POST /admin/workbuddy/accounts/import/commit` | 按选择和策略提交 |
+| `POST /admin/workbuddy/accounts/export` | 返回所选账号 JSON/ZIP 的 base64 内容 |
+| `POST /admin/workbuddy/accounts/ACCOUNT/profile` | 保存显示名和备注 |
+| `POST /admin/workbuddy/accounts/ACCOUNT/inference` | 仅暂停/恢复积分调用 |
+
+全部使用 `adminKey`。普通管理 HTTP 请求为 4 MiB；账号导入入口为 base64 / JSON 转义提供 16 MiB 包装正文上限，解码后的原始文件合计仍为 4 MiB，另有单 JSON、账号与解压限制，见完整手册。导出响应含登录数据，客户端直接保存文件，不把响应正文写入反馈日志。
+
+## 账号自动轮换
+
+轮换默认关闭，在 [WB 轮换手册](docs/WB_ROTATION.md) 中配置目标、策略、频率、冷却、紧迫窗口、差异阈值和最小剩余积分。设置、预览、实际评估与提交回执分别展示。
+
+| 选择 | 含义 |
+|---|---|
+| 到期优先 `expiry` | 有效包中剩余积分的最早到期更紧迫者优先 |
+| 顺序轮换 `round_robin` | 在有效候选中按稳定顺序前进 |
+| 网关 `gateway` | 只改同版同型号 WB 池下一请求偏好 |
+| CodeBuddy CLI `codebuddy-cli` | 为空闲 CLI 的后续启动准备身份 |
+| 两者 `both` | 两个目标分别核对并报告结果 |
+
+整体停用、暂停积分调用、封禁、凭据/余额不满足条件、过期或未知的账号退出轮换候选。冷却和到期差异门槛用于避免抖动，不跨国内/国际版或型号替换。网关更新后不打断已经开始的生成，不重放工具，不改模型 ID/输入历史/预算。
+
+CLI 检测到心跳新鲜的会话或明确运行进程时推迟，不关闭用户 CLI 或重启客户端。配置写入前保留原件，地区、已有 helper/环境覆盖与凭据条件分别核对；运行中进程仍持有自己的旧 token，写盘不当成该进程实时换号。
+
+自动轮换不等于故障接力：前者按策略选择**下一次**，后者在同一请求交付前按明确故障分类选择兼容备用；两者都遵守账号积分开关。自动签到和真实任务有独立开关/幂等账本，不随轮换停止。
+
+```json
+{"enabled":false,"target":"gateway","strategy":"expiry","intervalMinutes":5,"cooldownMinutes":120,"minUrgencyHours":72,"minRemainingCredits":0,"minGapHours":6,"edition":"cn"}
+```
+
+`GET /admin/workbuddy/rotation` 返回设置、状态与预览；`POST` 同路径保存平铺设置；`POST /admin/workbuddy/rotation/evaluate` 默认 `{"dryRun":true}` 只预览，`dryRun:false` 才尝试按策略提交。开关开启与实际切换成功分别检查，不用 HTTP 200 代替逐目标回执。
 
 ## 同模型自动接力
 
@@ -386,7 +476,7 @@ HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较�
 }
 ```
 
-这是字段片段，不是完整配置。映射键精确匹配路由；改名同步改键。聊天正文默认 64 MiB，管理正文固定 4 MiB；体积超限与模型上下文超限分开。见 [API](docs/api.md)。
+这是字段片段，不是完整配置。映射键精确匹配路由；改名同步改键。聊天正文默认 64 MiB，普通管理正文固定 4 MiB；WB 账号导入有独立 16 MiB 包装上限、原始文件合计仍 4 MiB。体积超限与模型上下文超限分开。见 [API](docs/api.md)。
 
 ## 每日签到与自动刷新
 
@@ -447,6 +537,9 @@ HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较�
 |---|---|
 | `workbuddy.autoMigrateSessions` | 切号迁移本机会话副本，默认关闭 |
 | `workbuddy.autoTasks` | 周期执行已实现真实任务，默认关闭 |
+| `workbuddy.rotation` | 账号轮换设置，默认关闭；与签到任务和接力分开 |
+| `accounts[].inferenceEnabled` | 仅控制 WB 模型积分调用，缺省为 true |
+| `accounts[].notes` | 本机账号备注，不作为上游身份 |
 | `modelRelay.enabled` | 自动接力总开关 |
 | `modelRelay.partitions.workbuddy` / `other` | 两分区开关 |
 | `modelRelay.reserveCredits` | 已知积分预留，默认 100 |
@@ -465,6 +558,7 @@ HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较�
 | `data/service.log` | 后台日志 |
 | 数据目录 SQLite | 领取账本、用量、池状态与幂等 |
 | `data/account-deletion-backups/` | 删号前私密配置备份 |
+| `data/account-transfer-backups/` | 导入/替换前的私密配置与凭据原件 |
 | WB 快照/迁移备份 | 独立凭据、原数据库/文件与迁移映射 |
 
 `data/` 指实际 `dataDir`，不保证在仓库。备份覆盖配置、整个数据目录和涉及的客户端登录/会话文件。活跃 SQLite 用一致性备份或停服务后复制，不能只复制主 DB 漏掉 WAL。
@@ -521,6 +615,18 @@ DSH profile 用 [DSH 回滚](docs/dsh.md) 和 `scripts/rollback-dsh.mjs`；删�
 
 区分轮询、进程与模型长连接。先查健康、日志与请求状态，避免重复提交已受理的领取/删除/切号。GET 重连不重放写操作，手动暂停按用户操作恢复。
 
+### 导入成功但账号仍然认证失败
+
+导入说明交换文件已保存，不是一次官方续期或真实推理。先核对 UID、国内/国际版、到期时间与定向身份/余额查询；同主体凭据过期可重新授权或显式替换，不将认证拒绝误写为封禁。ZIP/JSON 错误在预览修正后再提交。
+
+### 轮换开启却没有换账号
+
+查看轮换预览与最近回执：当前已为目标、没有有效余额候选、冷却中、到期差异不够、积分调用暂停以及 CLI 存活都是不同原因。`gateway` 目标只影响下一次网关请求，原生客户端未换号符合该目标语义。正在输出的请求不为轮换而重放。
+
+### 刷新后一直显示正在处理
+
+账号操作成功、失败、取消与“操作已成功但刷新失败”有独立终态；按钮会恢复。界面更新以匹配的保存回执为准，HTTP 失败不乐观切换账号开关。反馈时给操作、终态文字与去密时间，不重复提交已受理的写操作。
+
 ### 如何反馈
 
 给版本、平台、客户端版本、路由、错误码、时间、请求模式、工具阶段与去密日志。不提交 token、Cookie、密钥、登录快照、个人 DB 或完整聊天。以错误分类和源码证据为准，不仅凭截图猜测。
@@ -557,6 +663,9 @@ node --test tests/http.test.mjs
 | 文档 | 内容 |
 |---|---|
 | [WB 帐号池](docs/wb-account-pool.md) | 身份、封禁、积分包、任务、迁移与 API |
+| [WB 账号交换](docs/WB_ACCOUNT_TRANSFER.md) | 添加、JSON/ZIP 预览/去重/导出、备注与回执 |
+| [WB 轮换](docs/WB_ROTATION.md) | 到期/顺序策略、目标、CLI 存活门控与故障 |
+| [workbuddy-switch 功能对照](docs/WB_SWITCH_COMPARISON.md) | 固定来源、能力矩阵、复用与独立实现选择 |
 | [API](docs/api.md) / [用量](docs/usage.md) | 管理契约、状态、分页与记账 |
 | [同模型接力](docs/model-relay.md) | 候选、缓冲、活动与免费平台 |
 | [DSH](docs/dsh.md) / [请求策略](docs/dsh-request-policy.md) | bundle、profile、预算与回滚 |
@@ -578,7 +687,7 @@ node --test tests/http.test.mjs
 | [dingminhua/dsh-connect-workbuddy](https://github.com/dingminhua/dsh-connect-workbuddy) / [hawklithm/workbuddy2api](https://github.com/hawklithm/workbuddy2api) | WorkBuddy bridge / DSML 复用，保留 MIT 与解析器来源 |
 | [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) | 身份、目录、区域、SOLO bridge 与签到模块 |
 | [spirodelazz/ide-daily-checkin](https://github.com/spirodelazz/ide-daily-checkin) / [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin) | 本机凭据助手，不直接执行其成长/抽奖 |
-| [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) | 登录格式、会话复制与详细身份参照；独立适配 Node/WinForms，不冒称其全部客户端切换/悬浮窗/自动更新 |
+| [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) | 登录/交换格式、账号整理、会话复制、到期轮换和 CLI 存活门控参照；独立适配 Node/WinForms，范围见功能对照，不冒称其全部客户端切换/悬浮窗/自动更新 |
 | [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | 池、额度/限流、任务协议与卡片组织，未移植 Go/Web UI |
 | [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) | CodeArts/小浣熊续期、额度与分类参照，不复制匿名渠道或整仓承诺 |
 | [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) / [bowenliang123/dsh-context](https://github.com/bowenliang123/dsh-context) | 同款供给、免费平台与活动组织，未复制程序/素材 |

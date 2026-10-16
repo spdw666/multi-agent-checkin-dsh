@@ -11,6 +11,7 @@ import {runWorkBuddyTasks,queryWorkBuddyTasks,workBuddyTaskSnapshot,workBuddyRec
 import {prepareWorkBuddyClientSwitch} from './workbuddy-client.mjs';
 import {readWorkBuddyIdentity,workBuddyBan,workBuddyFailure,isWorkBuddyBlocked} from './workbuddy-status.mjs';
 import {normalizeWorkBuddyPackage} from './workbuddy-resources.mjs';
+import {workBuddyParticipation} from './workbuddy-pool.mjs';
 
 const defaults={autoMigrateSessions:false,autoTasks:false};
 export const workBuddySettings=service=>({...defaults,...service.config.value.workbuddy});
@@ -19,20 +20,26 @@ export function currentWorkBuddyAccount(service){
   for(const route of service.config.value.routes){if(route.enabled===false)continue;const up=service.config.value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId&&u.kind==='workbuddy'&&u.enabled!==false);if(!up)continue;const chosen=service.router.pool?.candidates(route,{ignoreCooldown:true})?.[0]?.accountId??up.accountId;if(!isWorkBuddyBlocked(service,chosen))return chosen;}return null;
 }
 const number=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0?x:null;
-export function syncWorkBuddyPools(value) {
-  for(const route of value.routes){const primary=value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId);if(primary?.kind!=='workbuddy')continue;
-    const edition=workBuddyEdition(value.accounts.find(a=>a.id===primary.accountId));
-    const ids=value.accounts.filter(a=>a.platform==='workbuddy'&&a.enabled!==false&&workBuddyEdition(a)===edition&&value.upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===a.id&&u.enabled!==false)).map(a=>a.id);
-    if(ids.length)route.accountPool={...route.accountPool,enabled:true,accountIds:ids,cooldownSeconds:route.accountPool?.cooldownSeconds??3600};
+export function syncWorkBuddyPools(value,{routeIds}={}) {
+  const selected=routeIds?new Set(routeIds):null;
+  for(const route of value.routes){if(route.enabled===false||selected&&!selected.has(route.id))continue;const primary=value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId);if(primary?.kind!=='workbuddy'||primary.enabled===false)continue;
+    // Existing unmarked pools are user/legacy policy, not an invitation to
+    // replace their chosen members. Explicit off always wins, even on an
+    // automatically-created pool. Only a missing pool is upgraded by default.
+    if(route.accountPool&&(route.accountPool.enabled===false||route.accountPool.autoManaged!==true))continue;
+    const primaryAccount=(value.accounts??[]).find(a=>a.id===primary.accountId);if(!primaryAccount||primaryAccount.enabled===false)continue;const edition=workBuddyEdition(primaryAccount);
+    const ids=(value.accounts??[]).filter(a=>a.platform==='workbuddy'&&a.enabled!==false&&workBuddyEdition(a)===edition&&value.upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===a.id&&u.enabled!==false)).map(a=>a.id);
+    if(ids.length)route.accountPool={...route.accountPool,enabled:true,autoManaged:true,accountIds:ids,cooldownSeconds:route.accountPool?.cooldownSeconds??3600};
   }return value;
 }
 export function workBuddyModelGroups(service) {
-  const groups=new Map();for(const route of service.config.value.routes){if(route.enabled===false)continue;const u=service.config.value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId&&u.enabled!==false);if(u?.kind!=='workbuddy')continue;
+  const groups=new Map();for(const route of service.config.value.routes){if(route.enabled===false)continue;const u=service.config.value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId);if(u?.kind!=='workbuddy')continue;
     const edition=workBuddyEdition(service.config.value.accounts.find(a=>a.id===u.accountId)),exactModel=route.targets[0].model,key=edition+'\0'+exactModel;
-    if(!groups.has(key))groups.set(key,{edition,exactModel,model:exactModel,name:route.name??exactModel,routeId:route.id,routeIds:[],accountIds:[],poolEnabled:route.accountPool?.enabled===true});
-    const group=groups.get(key);group.routeIds.push(route.id);
-    const ids=route.accountPool?.enabled?route.accountPool.accountIds:[u.accountId];for(const id of ids)if(!group.accountIds.includes(id)&&service.config.value.accounts.some(a=>a.id===id&&a.enabled!==false&&workBuddyEdition(a)===edition))group.accountIds.push(id);
-  }return [...groups.values()];
+    if(!groups.has(key))groups.set(key,{edition,exactModel,model:exactModel,name:route.name??exactModel,routeId:route.id,routeIds:[],accountIds:[],configuredAccountIds:[],routeParticipation:[],poolEnabled:false,availabilityBasis:'runtime_pool_candidates',generationVerified:false,candidateMeaning:'参与账号表示当前路由候选；实际调用仍逐号核对官方目录与请求能力，不代表已完成生成验证'});
+    const group=groups.get(key),participation=workBuddyParticipation(service,route);group.routeIds.push(route.id);group.routeParticipation.push(participation);group.poolEnabled||=route.accountPool?.enabled===true;
+    for(const id of participation.accountIds)if(!group.accountIds.includes(id))group.accountIds.push(id);
+    for(const id of participation.configuredAccountIds)if(!group.configuredAccountIds.includes(id))group.configuredAccountIds.push(id);
+  }return [...groups.values()].map(group=>({...group,availableCount:group.accountIds.length,configuredCount:group.configuredAccountIds.length,excludedAccounts:group.routeParticipation.flatMap(r=>r.excludedAccounts).filter((r,i,list)=>!group.accountIds.includes(r.accountId)&&list.findIndex(x=>x.accountId===r.accountId&&x.reason===r.reason)===i)}));
 }
 async function refreshBalance(service,account) {
   service.balanceCache??=new Map();try{const health=await boundedBalanceRead(()=>service.platforms.health(account.id),service.balanceTimeoutMs??25000),normalized=normalizeBalance('workbuddy',health);
@@ -49,16 +56,26 @@ export async function workBuddySummary(service,{refresh=false,accountId,includeT
   // A cache read only opens saved JSON metadata. No credential resolution,
   // token rotation, balance request, task accept or reward claim occurs here.
   let metadata=await mapBounded(list,a=>readWorkBuddyIdentity(service,a));
-  if(refresh)await mapBounded(list.filter(a=>(!accountId||accountId===a.id)&&a.enabled!==false),a=>refreshWorkBuddyDetails(service,a,{includeTasks}));
+  if(refresh)await mapBounded(list.filter(a=>(!accountId||accountId===a.id)&&a.enabled!==false),a=>service.workbuddyExecutorController?.signal.aborted?undefined:refreshWorkBuddyDetails(service,a,{includeTasks}));
   if(refresh)metadata=await mapBounded(list,a=>readWorkBuddyIdentity(service,a));
   const rows=list.map((account,i)=>{const balance=service.balanceCache?.get(account.id)??service.ledger?.get('wb-management-balance:'+account.id)??{},taskCache=workBuddyTaskSnapshot(service,account.id),cooldown=service.router.pool?.get('wb-pool-cooldown:'+account.id)??{},remaining=number(balance.value),total=number(balance.total),ban=workBuddyBan(service,account.id,balance),credentialStatus=ban.status==='banned'?'banned':balance.error?balance.error.authRejected||[401,403].includes(balance.error.httpStatus??balance.error.status)?'auth_rejected':'check_failed':balance.lastSuccessAt||balance.checkedAt?'authenticated':metadata[i].credential.status==='missing'?'missing':'not_checked';
     const packages=balance.packages??(balance.parts??[]).map((p,j)=>normalizeWorkBuddyPackage({...p,remain:p.value,size:p.total},j)),consumed=number(balance.consumed)??(remaining!==null&&total!==null?Math.max(0,total-remaining):null),tasks={...taskCache,items:taskCache.tasks??[],receipts:(service.ledger?.get('wb-management-task-receipts:'+account.id)??taskCache.receipts??[]).map(workBuddyReceiptView)};
-    return {accountId:account.id,id:account.id,label:account.label??account.id,...metadata[i],uid:metadata[i].identity.uid,nickname:metadata[i].identity.nickname,email:metadata[i].identity.email,region:metadata[i].edition,edition:workBuddyEdition(account),enabled:account.enabled!==false,current:selected===account.id&&ban.status!=='banned',remaining,total,consumed,checkedAt:balance.checkedAt??null,lastSuccessAt:balance.lastSuccessAt??balance.checkedAt??null,lastFailureAt:balance.lastFailureAt??null,stale:balance.stale===true,usageStatus:ban.status==='banned'?'banned':balance.error?'error':remaining===null?'unknown':remaining===0?'exhausted':'available',credentialStatus,credential:{...metadata[i].credential,status:credentialStatus,checkedAt:balance.lastFailureAt??balance.checkedAt??null},ban,balance:{remaining,total,consumed,packages,complete:balance.complete??null,queryScope:balance.queryScope??null,packageCount:packages.length,checkedAt:balance.checkedAt??null,lastSuccessAt:balance.lastSuccessAt??balance.checkedAt??null,lastFailureAt:balance.lastFailureAt??null,error:balance.error??null,stale:balance.stale===true},tasks,dailyCheckin:balance.dailyCheckin??{status:'unknown',checkedAt:null,todayCheckedIn:null},cooldown:cooldown.until>Date.now()?{until:cooldown.until,reason:cooldown.reason}:null,...(balance.error?{error:balance.error}:{})};
+    return {accountId:account.id,id:account.id,label:account.label??account.id,notes:account.notes??'',...metadata[i],uid:metadata[i].identity.uid,nickname:metadata[i].identity.nickname,email:metadata[i].identity.email,region:metadata[i].edition,edition:workBuddyEdition(account),enabled:account.enabled!==false,inferenceEnabled:account.inferenceEnabled!==false,current:selected===account.id&&ban.status!=='banned',remaining,total,consumed,checkedAt:balance.checkedAt??null,lastSuccessAt:balance.lastSuccessAt??balance.checkedAt??null,lastFailureAt:balance.lastFailureAt??null,stale:balance.stale===true,usageStatus:ban.status==='banned'?'banned':account.inferenceEnabled===false?'inference_disabled':balance.error?'error':remaining===null?'unknown':remaining===0?'exhausted':'available',credentialStatus,credential:{...metadata[i].credential,status:credentialStatus,checkedAt:balance.lastFailureAt??balance.checkedAt??null},ban,balance:{remaining,total,consumed,packages,complete:balance.complete??null,queryScope:balance.queryScope??null,packageCount:packages.length,checkedAt:balance.checkedAt??null,lastSuccessAt:balance.lastSuccessAt??balance.checkedAt??null,lastFailureAt:balance.lastFailureAt??null,error:balance.error??null,stale:balance.stale===true},tasks,dailyCheckin:balance.dailyCheckin??{status:'unknown',checkedAt:null,todayCheckedIn:null},cooldown:cooldown.until>Date.now()?{until:cooldown.until,reason:cooldown.reason}:null,...(balance.error?{error:balance.error}:{})};
   });
-  const enabled=rows.filter(a=>a.enabled&&a.ban.status!=='banned'),sum=field=>enabled.length&&enabled.every(a=>a[field]!==null)?enabled.reduce((n,a)=>n+a[field],0):null,knownSum=field=>enabled.filter(a=>a[field]!==null).reduce((n,a)=>n+a[field],0);
-  return {accounts:rows,currentAccountId:rows.find(a=>a.current)?.accountId??null,totals:{remaining:sum('remaining'),total:sum('total'),consumed:sum('consumed'),knownRemaining:knownSum('remaining'),knownTotal:knownSum('total'),knownAccounts:enabled.filter(a=>a.remaining!==null).length,accountCount:enabled.length,allAccounts:rows.length,bannedAccounts:rows.filter(a=>a.ban.status==='banned').length,disabledAccounts:rows.filter(a=>!a.enabled).length,unknownAccounts:enabled.filter(a=>a.remaining===null).length},models:workBuddyModelGroups(service),settings:workBuddySettings(service),sessionCapabilities:await workBuddySessionCapabilities(service),refreshed:refresh};
+  const enabled=rows.filter(a=>a.enabled&&a.ban.status!=='banned'),inference=enabled.filter(a=>a.inferenceEnabled),inferenceSum=field=>inference.length?inference.every(a=>a[field]!==null)?inference.reduce((n,a)=>n+a[field],0):null:0,sum=field=>enabled.length&&enabled.every(a=>a[field]!==null)?enabled.reduce((n,a)=>n+a[field],0):null,knownSum=field=>enabled.filter(a=>a[field]!==null).reduce((n,a)=>n+a[field],0);
+  return {accounts:rows,currentAccountId:rows.find(a=>a.current)?.accountId??null,totals:{balanceScope:'enabled_non_banned_accounts_including_inference_disabled',inferenceEnabledAccounts:inference.length,inferenceDisabledAccounts:rows.filter(a=>!a.inferenceEnabled).length,inferenceRemaining:inferenceSum('remaining'),inferenceTotal:inferenceSum('total'),remaining:sum('remaining'),total:sum('total'),consumed:sum('consumed'),knownRemaining:knownSum('remaining'),knownTotal:knownSum('total'),knownAccounts:enabled.filter(a=>a.remaining!==null).length,accountCount:enabled.length,allAccounts:rows.length,bannedAccounts:rows.filter(a=>a.ban.status==='banned').length,disabledAccounts:rows.filter(a=>!a.enabled).length,unknownAccounts:enabled.filter(a=>a.remaining===null).length},models:workBuddyModelGroups(service),settings:workBuddySettings(service),sessionCapabilities:await workBuddySessionCapabilities(service),refreshed:refresh};
 }
 export async function workBuddyAccountDetails(service,accountId,{refresh=false}={}){if(!service.config.value.accounts.some(a=>a.platform==='workbuddy'&&a.id===accountId))throw new AppError('WB 帐号不存在',404,'account_not_found');const summary=await workBuddySummary(service,{refresh,accountId,includeTasks:true});return {account:summary.accounts.find(a=>a.accountId===accountId),refreshed:refresh};}
+// The HTTP handler owns withConfigMutation. Read the latest queued value here;
+// never normalize pools or mutate the general account/task enable switches.
+export async function setWorkBuddyInference(service,accountId,body) {
+  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length!==1||typeof body.enabled!=='boolean')throw new AppError('WB 积分调用开关需要 enabled=true/false',400,'invalid_workbuddy_inference');
+  if(typeof service.config.load==='function')await service.config.load();
+  const value=structuredClone(service.config.value),account=value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy');
+  if(!account)throw new AppError('WB 帐号不存在',404,'account_not_found');
+  account.inferenceEnabled=body.enabled;await service.config.save(value);
+  return {saved:true,accountId,inferenceEnabled:account.inferenceEnabled,automaticCheckinUnchanged:true,automaticTasksUnchanged:true};
+}
 export async function saveWorkBuddySettings(service,body) {
   if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!['autoMigrateSessions','autoTasks'].includes(k))||Object.values(body).some(v=>typeof v!=='boolean'))throw new AppError('WorkBuddy 设置需要布尔开关',400,'invalid_workbuddy_settings');
   const value=structuredClone(service.config.value);value.workbuddy={...workBuddySettings(service),...body};syncWorkBuddyPools(value);await service.config.save(value);if(value.workbuddy.autoTasks===false)service.workbuddyAutomaticTaskController?.abort(new AppError('WB 自动任务已暂停',499,'wb_tasks_cancelled'));return {saved:true,settings:workBuddySettings(service)};
@@ -66,6 +83,7 @@ export async function saveWorkBuddySettings(service,body) {
 export async function switchWorkBuddyAccount(service,accountId,{migrate,switchClient=false}={}) {
   if(typeof switchClient!=='boolean'||migrate!==undefined&&typeof migrate!=='boolean')throw new AppError('WB 切号参数需要布尔开关',400,'invalid_workbuddy_switch');
   const account=service.config.value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy'&&a.enabled!==false);if(!account)throw new AppError('WorkBuddy 帐号不存在或已停用',404,'account_not_found');
+  if(account.inferenceEnabled===false)throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');
   if(isWorkBuddyBlocked(service,accountId))throw new AppError('WB 帐号已标记封禁，请先核验或删除该帐号',409,'wb_account_banned');
   // Verify this saved login, never overwrite an official client login file.
   const credential=await service.credentials.resolve(accountId,{force:true});

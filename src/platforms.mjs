@@ -132,9 +132,11 @@ export class Platforms {
     if(u.kind==='freeapi')return freeProviderChat(u,await this.credentials.resolve(u.accountId),input,signal);
     if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');const c=await this.credentials.resolve(u.accountId);try{return await p.chat(u,c,input,signal);}catch(error){if(error.status!==401)throw error;const newer=await this.credentials.resolve(u.accountId,{force:true});if(newer.accessToken===c.accessToken)throw error;return p.chat(u,newer,input,signal);}}
     if(u.kind==='workbuddy') {
+      const ensureInference=async()=>{if(typeof this.config.workBuddyInferenceAllowed==='function'&&!await this.config.workBuddyInferenceAllowed(u.accountId))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');const accounts=this.config.value.accounts;if(accounts===undefined&&typeof this.config.workBuddyInferenceAllowed!=='function')return;const a=Array.isArray(accounts)?accounts.find(a=>a.id===u.accountId&&a.platform==='workbuddy'):undefined;if(!a||a.enabled===false||a.inferenceEnabled===false)throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');};
+      await ensureInference();
       const body=prepareChatBody(JSON.stringify(input));const tools=declaredTools(body);
-      let c=await this.credentials.resolve(u.accountId);let result=await this.wb.chatStream(c,body,signal);
-      if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken)result=await this.wb.chatStream(newer,body,signal);}
+      let c=await this.credentials.resolve(u.accountId);await ensureInference();let result=await this.wb.chatStream(c,body,signal);
+      if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken){await ensureInference();result=await this.wb.chatStream(newer,body,signal);}}
       if(!result.ok)throw new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
       return {response:result.response,recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
     }

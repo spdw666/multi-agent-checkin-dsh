@@ -8,6 +8,7 @@ import {runNativeHelper} from './credentials.mjs';
 import {AppError,rememberSecret} from './util.mjs';
 import {selectCliModels,prepareChatBody,declaredTools} from '../vendor/workbuddy-core.mjs';
 import {providerFetch,providerJson} from './provider-http.mjs';
+import {buddyChatRejection} from './provider-rate-limit.mjs';
 
 function endpoints(c){const allowed=['www.workbuddy.ai','www.codebuddy.ai','www.codebuddy.cn','www.workbuddy.cn'];if(!allowed.includes(c.domain))throw new AppError('Buddy登录区域未识别',401,'provider_region_unknown');const global=c.domain.endsWith('.ai');return {global,billing:global?'https://'+c.domain:'https://www.codebuddy.cn',chat:global?'https://'+c.domain:'https://copilot.tencent.com'}}
 export function normalizeBuddyCredential(raw,{expectedDomain,filePath,proxyUrl}={}){
@@ -55,8 +56,8 @@ export async function buddyClaim(c,task='daily-checkin',options={}){
 }
 export async function buddyChat(upstream,c,input,signal,options={}){
   const request={...input,stream:true};if(request.max_completion_tokens!==undefined&&request.max_tokens===undefined)request.max_tokens=request.max_completion_tokens;delete request.max_completion_tokens;const body=prepareChatBody(JSON.stringify(request)),tools=declaredTools(body),fetchImpl=options.fetchImpl??providerFetch;
-  const response=await fetchImpl(endpoints(c).chat+'/v2/chat/completions',{method:'POST',headers:headers(c),body,signal,proxyUrl:c.proxyUrl,redirect:'error'});
-  if(!response.ok){await response.body?.cancel();throw new AppError(`Buddy聊天接口 HTTP ${response.status}`,response.status,'provider_chat_rejected')}
+  const response=await fetchImpl(endpoints(c).chat+'/v2/chat/completions',{method:'POST',headers:headers(c),body,signal,proxyUrl:c.proxyUrl,redirect:'error',headersTimeoutMs:90000,requestTimeoutMs:180000});
+  if(!response.ok)throw await buddyChatRejection(response,{signal,errorBodyMaxBytes:options.errorBodyMaxBytes,errorBodyTimeoutMs:options.errorBodyTimeoutMs});
   return {response,recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
 }
 export const codeBuddyProvider={resolve:resolveBuddyCredential,models:buddyModels,health:buddyHealth,status:buddyStatus,claim:buddyClaim,chat:buddyChat};

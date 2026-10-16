@@ -56,16 +56,16 @@ test('manual mixed target lists stay partitioned even with automatic relay disab
 });
 test('one-million-token primary keeps its actual capacity instead of a 32K standby default',async()=>{
  const f=fixture();delete f.metadata.cb.contextWindow;f.metadata.cb.maxTokens=1024;
- const row=await f.router.routeInfo(f.config.value.routes[2]);assert.equal(row.contextWindow,1000000);assert.equal(row.maxTokens,64000);assert.equal(row.modelRelay.partition,'other');assert.equal(row.modelRelay.targetCount,1);
+ const row=await f.router.routeInfo(f.config.value.routes[2]);assert.equal(row.contextWindow,1000000);assert.equal(row.maxTokens,64000);assert.equal(row.modelRelay.partition,'other');assert.equal(row.modelRelay.targetCount,2);assert.equal(row.modelRelay.fullWindowCompatibleCount,1);
 });
-test('a smaller context standby is skipped without changing the original history or output budget',async()=>{
+test('a standby below the actual requested output envelope is skipped without trimming',async()=>{
  const f=fixture();f.metadata.cb.contextWindow=32768;f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('down',503,'unavailable');};
  const raw=request('ca'),before=JSON.stringify(raw);await assert.rejects(collectChat(f.router.chat(raw)),e=>e.code==='same_model_unavailable'&&e.status===503);
  assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['ca']);assert.equal(JSON.stringify(raw),before);assert.equal(f.router.relay.cooldown({upstreamId:'cb',model}),null);assert.equal(f.rows[1].error.code,'relay_context_incompatible');
 });
-test('an unknown context standby is not assumed to satisfy the primary declared window',async()=>{
+test('unknown standby capacity delegates unchanged payload to the authoritative upstream',async()=>{
  const f=fixture();delete f.metadata.cb.contextWindow;f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('credits exhausted',402,'credits_exhausted');};
- await assert.rejects(collectChat(f.router.chat(request('ca'))),e=>e.status===503);assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['ca']);
+ await assert.rejects(collectChat(f.router.chat(request('ca'))),e=>e.status===402);assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['ca','cb']);assert.ok(f.calls.every(c=>JSON.stringify(c.request.messages)===JSON.stringify(request('ca').messages)));
 });
 test('context length error remains a request capability failure, not wallet depletion or supplier cooldown',async()=>{
  const f=fixture();f.config.value.routes=f.config.value.routes.filter(r=>r.id.startsWith('ca/'));
@@ -99,10 +99,10 @@ test('context mismatch cannot suppress the next small request on a healthy walle
 });
 test('supplier rate limit followed by incompatible tools still reports supplier unavailability',async()=>{
  const f=fixture();f.metadata.cb.tools=false;f.platforms.chat=async()=>{throw new AppError('rate limit',429,'rate_limit');};
- await assert.rejects(collectChat(f.router.chat(request('ca'))),e=>e.status===503&&e.code==='same_model_unavailable');assert.equal(f.router.relay.cooldown({upstreamId:'cb',model}),null);
+ await assert.rejects(collectChat(f.router.chat(request('ca'))),e=>e.status===429&&e.code==='same_model_rate_limited');assert.equal(f.router.relay.cooldown({upstreamId:'cb',model}),null);
 });
 test('default no-progress supplier wait is 30 seconds rather than fixed90 complete-result timeout',async()=>{
- const f=fixture(),router=new Router(f.config,f.platforms);assert.equal(router.relayAttemptTimeoutMs,30000);const row=await router.routeInfo(f.config.value.routes[2]);assert.equal(row.modelRelay.attemptTimeoutMode,'progress_idle');
+ const f=fixture(),router=new Router(f.config,f.platforms);assert.equal(router.relayAttemptTimeoutMs,30000);const row=await router.routeInfo(f.config.value.routes[2]);assert.equal(row.modelRelay.attemptTimeoutMode,'prefill_then_progress_idle');assert.equal(row.modelRelay.prefillTimeoutMs,90000);
 });
 test('continuous stream progress can exceed the initial idle budget without being killed and replayed',async()=>{
  const f=fixture({idle:70}),normal=f.platforms.chat;f.platforms.chat=async(t,r,signal)=>{if(t.upstreamId!=='ca')return normal(t,r);f.calls.push({target:t,request:r});let n=0,timer;const body=new ReadableStream({start(controller){timer=setInterval(()=>{n++;const done=n===5;controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify({choices:[{delta:{content:'S'+n},finish_reason:done?'stop':null}]})+'\n\n'));if(done){clearInterval(timer);controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));controller.close();}},25);signal.addEventListener('abort',()=>{clearInterval(timer);controller.error(new Error('aborted'));},{once:true});},cancel(){clearInterval(timer);}});return {response:new Response(body,{headers:{'content-type':'text/event-stream'}})};};

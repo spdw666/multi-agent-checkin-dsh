@@ -1,4 +1,5 @@
 import {AppError,errorView,hash} from './util.mjs';
+import {syncWorkBuddyPools} from './workbuddy-management.mjs';
 export const platformNames={qoder:'Qoder',codebuddy:'CodeBuddy',workbuddyai:'WorkBuddy AI',cline:'Cline',codearts:'CodeArts Agent',lobster:'LobsterAI',raccoon:'商汤小浣熊',loomy:'Loomy'};
 export function importedRouteId(upstreamId,modelId){
  const raw=upstreamId+'/'+modelId;
@@ -64,7 +65,7 @@ export async function importModels(service,items,{enabled=true}={}) {
     prepared.push({item,selected,upstream,model,routes});
   }
   return withConfigMutation(service,async()=>{
-   const value=structuredClone(service.config.value);
+   const value=structuredClone(service.config.value),wbImportedRoutes=new Set();
    for(const {item,selected,upstream,model,routes}of prepared){
     const u=value.upstreams.find(u=>u.id===item.upstreamId);
     if(JSON.stringify(u)!==upstream)throw new AppError('Upstream changed during model discovery; reload and retry',409,'configuration_changed');
@@ -76,11 +77,13 @@ export async function importModels(service,items,{enabled=true}={}) {
       continue;
     }
     const found=value.routes.find(r=>r.targets.length===1&&r.targets[0].upstreamId===u.id&&r.targets[0].model===model.id);
-    if(found){found.enabled=selected;continue;}
+    if(found){found.enabled=selected;if(selected&&u.kind==='workbuddy')wbImportedRoutes.add(found.id);continue;}
     if(!selected)continue;
     const id=importedRouteId(u.id,model.id);if(value.routes.some(r=>r.id===id))throw new AppError('Route ID collision',409,'route_collision');
     value.routes.push({id,name:(platformNames[u.kind]??(u.kind==='trae'?'Trae CN':u.kind==='workbuddy'?'WorkBuddy':u.kind==='qwenwork'?'千问办公':u.kind==='zcode'?'ZCode':u.kind==='bigmodel'?'智谱 BigModel':u.kind==='antigravity'?'Antigravity':u.kind==='nvidia'?'NVIDIA 官方API':'MiniMax Code'))+' · '+model.name,enabled:true,targets:[{upstreamId:u.id,model:model.id}]});
+    if(u.kind==='workbuddy')wbImportedRoutes.add(id);
   }
+  if(wbImportedRoutes.size)syncWorkBuddyPools(value,{routeIds:wbImportedRoutes});
   await service.config.save(value);
   return {saved:true,selected:items.length,enabled};
   });

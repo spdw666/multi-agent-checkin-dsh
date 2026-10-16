@@ -48,7 +48,7 @@ test('tools incompatibility does not cool plain requests for the same supplier',
 });
 test('all actual cooldowns give truthful503 and nearest finite retry deadline',async()=>{
  const f=fixture();for(const [u,m,seconds] of [['q','gmodel',18],['w',glm,41]])f.router.relay.set('relay-cooldown:'+u+'\0'+m,{until:Date.now()+seconds*1000,reasonCode:'rate_limited'});
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===503&&e.code==='same_model_cooldown'&&e.retryAfterSeconds>=17&&e.retryAfterSeconds<=18&&!e.message.includes('WorkBuddy'));
+ await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===429&&e.code==='same_model_rate_limited'&&e.retryAfterSeconds>=17&&e.retryAfterSeconds<=18&&!e.message.includes('WorkBuddy'));
  assert.equal(f.calls.length,0);
 });
 test('all disabled targets give truthful no-enabled503, no invented retry',async()=>{
@@ -94,9 +94,9 @@ test('zero cash and unknown or stale credit balances are not considered generati
  const f=fixture();for(const row of [{value:0,unit:'元'},{value:0,unit:'积分',stale:true},{value:0,unit:'积分',error:{}},{value:null,unit:'积分'},null])assert.equal(f.router.relay.exhaustedBalance(row),false);
 });
 
-for(const [status,code] of [[429,'rate_limited'],[504,'relay_target_timeout'],[402,'credits_exhausted']])test(`supplier ${status} followed by last tools mismatch is truthful503, not caller400`,async()=>{
+for(const [status,code] of [[429,'rate_limited'],[504,'relay_target_timeout'],[402,'credits_exhausted']])test(`supplier ${status} followed by last tools mismatch preserves supplier failure, not caller400`,async()=>{
  const f=fixture();f.catalogs.w[0].tools=false;f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('SAMPLE_SUPPLIER_FAILURE',status,code)};
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===503&&e.code==='same_model_unavailable'&&Number.isFinite(e.retryAfterSeconds)&&!e.message.includes('WorkBuddy'));
+ await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===(status===429?429:503)&&e.code===(status===429?'same_model_rate_limited':'same_model_unavailable')&&Number.isFinite(e.retryAfterSeconds)&&!e.message.includes('WorkBuddy'));
  assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['q']);assert.equal(f.router.relay.cooldown({upstreamId:'w',model:glm}),null);assert.ok(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}));
 });
 test('all suppliers capability-only mismatches retain caller400 with no outage cooldown',async()=>{

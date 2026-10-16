@@ -95,3 +95,9 @@ Loomy 旧测试环境的登录失效结论已纠正；小浣熊 Electron Cookie 
 WB 两个参考项目的完整 MIT 声明与固定提交记录保留在 [src/workbuddy-reference-license.mjs](src/workbuddy-reference-license.mjs)。本工程没有运行第三方安装脚本，不复制用户数据，不将上述项目的所有功能描述为本项目已实现功能。
 
 身份、封禁来源、全部积分包分页、任务描述/奖励/进度/回执由本工程统一管理契约与原生详情窗口呈现。认证 401/403 不独自证明封禁；本机人工标记与官方事实分开。真实任务执行仍按本网关实际注册执行器判断，未接入的自动化/应用/专家使用任务保留待操作。功能边界见 [docs/wb-account-pool.md](docs/wb-account-pool.md)。
+
+## WorkBuddy-switch 账号交换与轮换补充参照
+
+继续固定 `changexbc/workbuddy-switch` 的 MIT 提交 `22b318c1f44b335c2222e444abcc2d0f74e160f7`（0.1.62 版本线），未改变原有完整许可。逐项阅读 `crates/wb-switch-core/src/modules/export_import.rs`、`account.rs`、`rotate.rs`、`codebuddy_cli.rs` 及导入/导出界面，参考账号格式、去重预览、备注、积分到期策略和 CLI 存活门控。
+
+本工程独立实现 Node JSON/ZIP 交换、配置提交/备份、网关下一请求偏好与空闲 CLI 写入；未复制 Rust/Tauri/React 程序、客户端进程终止代码、悬浮窗或签名更新器。ZIP 扩展为本网关实现，非固定参考提交的 JSON 导出功能。完整源文件链接与能力对照见 [docs/WB_SWITCH_COMPARISON.md](docs/WB_SWITCH_COMPARISON.md)，实际格式见 [docs/WB_ACCOUNT_TRANSFER.md](docs/WB_ACCOUNT_TRANSFER.md)。

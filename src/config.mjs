@@ -1,5 +1,6 @@
 import {desktopProviderKinds} from './provider-registry.mjs';
 import {relayDefaults,validateRelay} from './model-relay.mjs';
+import {validateWorkBuddyRotation} from './workbuddy-rotation-policy.mjs';
 import {getFreeProvider} from './free-providers.mjs';
 import {dirname, join} from 'node:path';
 import {readFile, copyFile, mkdir} from 'node:fs/promises';
@@ -17,7 +18,7 @@ export function validateConfig(c) {
       ids.add(item.id);
     }
   }
-  for(const a of c.accounts){if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');if(a.platform==='freeapi')getFreeProvider(a.freeProviderId);}
+  for(const a of c.accounts){if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds].includes(a.platform)||!a.credentials)throw new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');if(a.platform==='workbuddy'&&a.inferenceEnabled!==undefined&&typeof a.inferenceEnabled!=='boolean')throw new AppError(`Account ${a.id}: inferenceEnabled must be boolean`,400,'invalid_config');if(a.platform==='freeapi')getFreeProvider(a.freeProviderId);}
   for(const u of c.upstreams){
     if(!['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds].includes(u.kind))throw new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
     if(u.kind==='freeapi'&&['baseUrl','url','endpoint','proxyUrl'].some(k=>u[k]!==undefined))throw new AppError('Free providers use registered fixed endpoints',400,'invalid_free_provider_endpoint');
@@ -33,7 +34,7 @@ export function validateConfig(c) {
     if(pool&&(!Array.isArray(pool.accountIds)||!pool.accountIds.length||new Set(pool.accountIds).size!==pool.accountIds.length||pool.accountIds.some(id=>!c.accounts.some(a=>a.id===id&&a.platform==='workbuddy'))||c.upstreams.find(u=>u.id===r.targets[0].upstreamId)?.kind!=='workbuddy'||pool.cooldownSeconds!==undefined&&(!Number.isInteger(pool.cooldownSeconds)||pool.cooldownSeconds<60||pool.cooldownSeconds>86400)))throw new AppError(`Route ${r.id}: invalid WorkBuddy account pool`,400,'invalid_config');
   }
   if(c.modelRelay!==undefined)validateRelay({...relayDefaults,...c.modelRelay});
-  if(c.workbuddy!==undefined&&(!c.workbuddy||typeof c.workbuddy!=='object'||Array.isArray(c.workbuddy)||Object.entries(c.workbuddy).some(([k,v])=>!['autoMigrateSessions','autoTasks'].includes(k)||typeof v!=='boolean')))throw new AppError('Invalid WorkBuddy settings',400,'invalid_config');
+  if(c.workbuddy!==undefined){if(!c.workbuddy||typeof c.workbuddy!=='object'||Array.isArray(c.workbuddy)||Object.entries(c.workbuddy).some(([k,v])=>!['autoMigrateSessions','autoTasks','rotation'].includes(k)||k!=='rotation'&&typeof v!=='boolean'))throw new AppError('Invalid WorkBuddy settings',400,'invalid_config');if(c.workbuddy.rotation!==undefined)validateWorkBuddyRotation(c.workbuddy.rotation);}
   if(!c.server||!Number.isInteger(c.server.port)||c.server.port<0||c.server.port>65535)throw new AppError('Invalid server port',400,'invalid_config');
   if(c.server.requestTimeoutMs!==undefined&&(!Number.isInteger(c.server.requestTimeoutMs)||c.server.requestTimeoutMs<1000||c.server.requestTimeoutMs>1200000))throw new AppError('server.requestTimeoutMs must be integer milliseconds 1000..1200000',400,'invalid_config');
   if(c.server.modelRequestTimeouts!==undefined){const map=c.server.modelRequestTimeouts;if(!map||typeof map!=='object'||Array.isArray(map)||Object.keys(map).length>500||Object.entries(map).some(([id,v])=>!id||id.length>512||!Number.isInteger(v)||v<1000||v>1200000))throw new AppError('server.modelRequestTimeouts must map route IDs to integer milliseconds 1000..1200000',400,'invalid_config');}
@@ -53,6 +54,9 @@ export async function initConfig(file) {
 export class ConfigStore {
   constructor(file) {this.file=localPath(file,process.cwd());this.base=dirname(this.file);}
   async load() {this.value=validateConfig(await readJson(this.file));this.dataDir=localPath(this.value.dataDir??'./data',this.base);return this.value;}
+  // Workers otherwise reload on a timer. A final read-only gate prevents a
+  // prepared/credential-refreshing request from spending a newly stopped account.
+  async workBuddyInferenceAllowed(accountId) {const value=validateConfig(await readJson(this.file)),a=value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy');return !!a&&a.enabled!==false&&a.inferenceEnabled!==false;}
   path(value) {return localPath(value,this.base);}
   async save(value) {validateConfig(value);const before=await readFile(this.file);await atomicJson(this.file+'.backup.json',JSON.parse(before));await atomicJson(this.file,value);await this.load();}
 }

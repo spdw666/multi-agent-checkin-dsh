@@ -1,0 +1,117 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+const {runWorkBuddyTasks,queryWorkBuddyTasks,workBuddyTaskSnapshot,workBuddyReceiptView}=await import(process.env.WB_TASK_ENGINE_MODULE?pathToFileURL(process.env.WB_TASK_ENGINE_MODULE).href:'../src/workbuddy-tasks.mjs');
+const task=(code,extra={})=>({task_code:code,title:'SAMPLE '+code,description:'SAMPLE real feature',progress:{current:0,target:1},accept_status:'accepted',reward_credit:100,...extra});
+function fixture(raw=[task('SAMPLE_A')]){
+  const data=new Map(),state={tasks:structuredClone(raw),queries:0,accepts:[],claims:[],events:[],query:null,accept:null,claim:null};
+  const service={config:{value:{accounts:[{id:'SAMPLE_ACCOUNT',platform:'workbuddy',edition:'cn',enabled:true}],workbuddy:{autoTasks:true}}},ledger:{get:k=>data.get(k),set:(k,v)=>data.set(k,v)},credentials:{resolve:async()=>({edition:'cn',uid:'SAMPLE_UID',accessToken:'SAMPLE_ENGINE_ACCESS_TOKEN'})},claims:{run:async()=>({status:'already',reason:'server_already_claimed'})},workbuddyTaskExecutors:new Map(),workbuddyRuntime:{taskPollDelays:[0,0,0]}};
+  service.workbuddyRuntime.fetchImpl=async(url,init)=>{
+    if(url.endsWith('/tasks')){state.events.push('query');state.queries++;await state.query?.(state,init);return Response.json({code:0,data:{tasks:state.tasks}});}
+    if(url.endsWith('/accept')){const codes=JSON.parse(init.body).task_codes;state.events.push('accept:'+codes.join(','));state.accepts.push(codes);const ack=await state.accept?.(codes,init);for(const raw of state.tasks)if(!state.skipImmediateAccept&&codes.includes(raw.task_code)&&!ack?.results?.some(r=>r.task_code===raw.task_code&&r.status==='error'))raw.accept_status='accepted';return Response.json({code:0,data:ack??{}});}
+    if(url.endsWith('/claim')){const code=decodeURIComponent(url.split('/').at(-2));state.events.push('claim:'+code);state.claims.push(code);await state.claim?.(code,init);state.tasks.find(t=>t.task_code===code).accept_status='claimed';return Response.json({code:0,data:{credit:100,energy:5}});}
+    throw Error('SAMPLE unexpected URL');
+  };
+  return {service,state,data,run:opts=>runWorkBuddyTasks(service,{accountId:'SAMPLE_ACCOUNT',action:'run',taskCodes:raw.map(t=>t.task_code),...opts})};
+}
+const records=(result,status)=>result.receipts.filter(r=>r.status===status);
+
+test('real executor receives cancellation contract; accept action poll claim and fresh confirmation form one chain',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'not_accepted'})]),controller=new AbortController();let calls=0;
+  f.service.workbuddyTaskExecutors.set('SAMPLE_A',async args=>{calls++;assert.equal(args.service,f.service);assert.equal(args.accountId,'SAMPLE_ACCOUNT');assert.equal(args.task.taskCode,'SAMPLE_A');assert.equal(args.signal,controller.signal);assert.equal(typeof args.check,'function');args.check();f.state.events.push('execute');f.state.query=s=>{s.tasks[0].progress.current=1;};return {status:'completed',operationId:'SAMPLE_OPERATION',completedActions:1};});
+  const r=await f.run({signal:controller.signal});assert.equal(calls,1);assert.deepEqual(f.state.accepts,[['SAMPLE_A']]);assert.deepEqual(f.state.claims,['SAMPLE_A']);assert.equal(records(r,'claimed')[0].serverConfirmed,true);assert.equal(records(r,'claimed')[0].credit,100);assert.equal(r.tasks[0].claimed,true);assert.equal(records(r,'action_executed').length,0);assert.ok(f.state.events.indexOf('execute')<f.state.events.indexOf('claim:SAMPLE_A'));
+});
+test('completed real operation with delayed accounting stays pending and does not imply task reward completion',async()=>{
+  const f=fixture();f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>({status:'completed',reason:'operation_complete',operationId:'SAMPLE_OPERATION',completedActions:1,accessToken:'NEVER_RETURN',raw:{secret:'NEVER_RETURN'}}));const r=await f.run();assert.equal(f.state.queries,4);assert.equal(f.state.claims.length,0);const pending=records(r,'task_accounting_pending')[0];assert.ok(pending);assert.equal(pending.serverConfirmed,false);assert.equal(pending.execution.status,'completed');assert.equal(pending.execution.completedActions,1);assert.equal(JSON.stringify(r).includes('NEVER_RETURN'),false);assert.equal(workBuddyTaskSnapshot(f.service,'SAMPLE_ACCOUNT').tasks[0].executionStrategy,'wait_for_official_task_accounting');
+});
+test('pending executor result can be claimed only after an official poll qualifies the task',async()=>{
+  const f=fixture();let executed=false;f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{executed=true;return {status:'pending',operationId:'SAMPLE_IN_PROGRESS',completedActions:0};});f.state.query=s=>{if(executed&&s.queries>=3)s.tasks[0].progress.current=1;};const r=await f.run();assert.equal(records(r,'claimed').length,1);assert.deepEqual(f.state.claims,['SAMPLE_A']);assert.equal(records(r,'action_executed').length,0);
+});
+test('deferred executor result preserves reason and never claims or advertises action executed',async()=>{
+  const f=fixture();f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>({status:'deferred',reason:'official_client_busy',operationId:'SAMPLE_DEFER'}));const r=await f.run();assert.equal(records(r,'execution_deferred')[0].reason,'official_client_busy');assert.equal(f.state.queries,1);assert.equal(f.state.claims.length,0);assert.equal(records(r,'action_executed').length,0);
+});
+test('unsupported result and malformed executor return have no fabricated successful action',async()=>{
+  for(const response of [{status:'unsupported',reason:'official_feature_unavailable'},undefined,{ok:true},{status:'completed_wrong'}]){const f=fixture();f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>response);const r=await f.run();assert.equal(records(r,'execution_unsupported').length,1);assert.equal(f.state.claims.length,0);assert.equal(records(r,'action_executed').length,0);assert.equal(r.tasks[0].current,0);}
+});
+test('one executor error is isolated and a later different task can complete and claim',async()=>{
+  const f=fixture([task('SAMPLE_A'),task('SAMPLE_B')]);f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{throw Error('SAMPLE operation failed');});f.service.workbuddyTaskExecutors.set('SAMPLE_B',async()=>{f.state.tasks[1].progress.current=1;return {status:'completed',completedActions:1};});const r=await f.run();assert.equal(records(r,'task_error')[0].taskCode,'SAMPLE_A');assert.equal(records(r,'claimed')[0].taskCode,'SAMPLE_B');assert.deepEqual(f.state.claims,['SAMPLE_B']);
+});
+test('accept rejection is isolated per task instead of blocking other official tasks',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'not_accepted'}),task('SAMPLE_B',{accept_status:'not_accepted',progress:{current:1,target:1}})]);f.state.accept=codes=>{if(codes.includes('SAMPLE_A'))throw Error('SAMPLE first acceptance failed');};const r=await f.run();assert.ok(records(r,'task_error').some(r=>r.taskCode==='SAMPLE_A'));assert.deepEqual(f.state.claims,['SAMPLE_B']);
+});
+test('executor caller cancellation immediately stops later tasks and propagates the original abort',async()=>{
+  const f=fixture([task('SAMPLE_A'),task('SAMPLE_B')]),controller=new AbortController(),reason=Error('SAMPLE cancelled');let later=0;
+  f.service.workbuddyTaskExecutors.set('SAMPLE_A',async({check})=>{controller.abort(reason);check();return {status:'completed'};});f.service.workbuddyTaskExecutors.set('SAMPLE_B',async()=>{later++;return {status:'completed'};});await assert.rejects(f.run({signal:controller.signal}),e=>e===reason);assert.equal(later,0);assert.equal(f.state.claims.length,0);
+});
+test('abort during a polling delay is prompt and cannot reach the next official query or claim',async()=>{
+  const f=fixture(),controller=new AbortController();f.service.workbuddyRuntime.taskPollDelays=[10000];f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{setTimeout(()=>controller.abort(Error('SAMPLE delay cancelled')),5);return {status:'completed'};});const before=Date.now();await assert.rejects(f.run({signal:controller.signal}));assert.ok(Date.now()-before<2000);assert.equal(f.state.queries,1);assert.equal(f.state.claims.length,0);
+});
+test('claimed during official polling never submits a second claim',async()=>{
+  const f=fixture();let ran=false;f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{ran=true;return {status:'completed'};});f.state.query=s=>{if(ran){s.tasks[0].accept_status='claimed';s.tasks[0].progress.current=1;}};const r=await f.run();assert.equal(f.state.claims.length,0);assert.equal(records(r,'already_claimed').length,1);assert.equal(r.tasks[0].claimed,true);
+});
+test('initially claimed and locked tasks do not execute registered functions',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'claimed'}),task('SAMPLE_B',{locked:true})]);let ran=0;for(const code of ['SAMPLE_A','SAMPLE_B'])f.service.workbuddyTaskExecutors.set(code,async()=>{ran++;return {status:'completed'};});const r=await f.run();assert.equal(ran,0);assert.equal(records(r,'already_claimed').length,1);assert.equal(records(r,'locked').length,1);assert.equal(f.state.claims.length,0);
+});
+test('unknown claim outcome remains submitted and is never replayed on another run',async()=>{
+  const f=fixture([task('SAMPLE_A',{progress:{current:1,target:1}})]);f.state.claim=()=>{throw Error('SAMPLE lost claim response');};const first=await f.run();const second=await f.run();assert.equal(f.state.claims.length,1);assert.equal(records(first,'claim_unconfirmed').length,1);assert.equal(records(second,'claim_unconfirmed')[0].reason,'previous_submission_not_confirmed');
+});
+test('poll query failure records an isolated task error and never claims from stale pre-action progress',async()=>{
+  const f=fixture([task('SAMPLE_A'),task('SAMPLE_B',{progress:{current:1,target:1}})]);f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{f.state.query=s=>{if(s.queries===2)throw Error('SAMPLE poll unavailable');};return {status:'completed'};});const r=await f.run();assert.equal(records(r,'task_error')[0].taskCode,'SAMPLE_A');assert.equal(records(r,'task_accounting_pending')[0].reason,'official_progress_query_failed');assert.equal(workBuddyTaskSnapshot(f.service,'SAMPLE_ACCOUNT').tasks[0].executionStrategy,'wait_for_official_task_accounting');assert.deepEqual(f.state.claims,['SAMPLE_B']);
+});
+test('injected poll schedule bounds read-only checks with no repeated executor action',async()=>{
+  const f=fixture();let actions=0;f.service.workbuddyRuntime.taskPollDelays=[0,0];f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{actions++;return {status:'pending',operationId:'SAMPLE_PENDING'};});const r=await f.run();assert.equal(actions,1);assert.equal(f.state.queries,3);assert.equal(records(r,'task_accounting_pending').length,1);assert.equal(f.state.claims.length,0);
+});
+test('cached snapshots re-evaluate registered capability metadata without performing actions or upstream requests',async()=>{
+  const f=fixture();await queryWorkBuddyTasks(f.service,{accountId:'SAMPLE_ACCOUNT'});const fn=async()=>({status:'deferred'});fn.capability={kind:'official_cli',feature:'SAMPLE feature',needsDesktop:true,requiresWindow:false,accessToken:'NEVER_RETURN',raw:{secret:'NEVER_RETURN'}};f.service.workbuddyTaskExecutors.set('SAMPLE_A',fn);const before=f.state.queries,s=workBuddyTaskSnapshot(f.service,'SAMPLE_ACCOUNT');assert.equal(s.tasks[0].automaticExecution,true);assert.equal(s.tasks[0].executionCapability.registered,true);assert.equal(s.tasks[0].executionCapability.kind,'official_cli');assert.equal(s.tasks[0].executionCapability.needsDesktop,true);assert.equal(s.tasks[0].executionStrategy,'registered_executor_then_verify');assert.equal(JSON.stringify(s).includes('NEVER_RETURN'),false);assert.equal(f.state.queries,before);f.service.workbuddyTaskExecutors.set('SAMPLE_A',{});assert.equal(workBuddyTaskSnapshot(f.service,'SAMPLE_ACCOUNT').tasks[0].automaticExecution,false);
+});
+test('receipt execution projection exposes only a bounded redacted summary, never raw outputs',()=>{
+  const view=workBuddyReceiptView({taskCode:'SAMPLE_A',status:'task_accounting_pending',execution:{status:'completed',reason:'Bearer SAMPLE_TOKEN',operationId:'SAMPLE_OP',completedActions:2,totalActions:5,accessToken:'NEVER_RETURN',raw:{value:'NEVER_RETURN'},stdout:'NEVER_RETURN'},raw:{refreshToken:'NEVER_RETURN'}});assert.deepEqual(Object.keys(view.execution).sort(),['completedActions','operationId','reason','status','totalActions']);assert.equal(view.execution.reason,'Bearer [REDACTED]');assert.equal(JSON.stringify(view).includes('NEVER_RETURN'),false);
+});
+test('query action propagates its caller abort signal to official HTTP',async()=>{
+  const f=fixture(),controller=new AbortController();f.state.query=(_s,init)=>{assert.equal(init.signal.aborted,false);controller.abort(Error('SAMPLE query cancelled'));init.signal.throwIfAborted();};await assert.rejects(f.run({action:'query',signal:controller.signal}));
+});
+test('batch cancellation never starts the next account',async()=>{
+  const f=fixture(),controller=new AbortController();f.service.config.value.accounts.push({id:'SAMPLE_SECOND',platform:'workbuddy',enabled:true,edition:'cn'});let resolved=0;f.service.credentials.resolve=async()=>{resolved++;return {accessToken:'SAMPLE_ENGINE_ACCESS_TOKEN',edition:'cn',uid:'SAMPLE_UID'};};f.service.workbuddyTaskExecutors.set('SAMPLE_A',async({check})=>{controller.abort(Error('SAMPLE batch cancelled'));check();return {status:'completed'};});await assert.rejects(runWorkBuddyTasks(f.service,{action:'run',signal:controller.signal}));assert.equal(resolved,1);
+});
+test('daily check-in failure does not block unrelated qualified official rewards',async()=>{
+  const f=fixture([task('SAMPLE_A',{progress:{current:1,target:1}})]);f.service.claims.run=async()=>{throw Error('SAMPLE check-in unavailable');};const r=await f.run({taskCodes:undefined});assert.ok(records(r,'task_error').some(r=>r.taskCode==='daily-checkin'));assert.deepEqual(f.state.claims,['SAMPLE_A']);
+});
+test('explicit accept and claim actions never execute real feature functions',async()=>{
+  for(const action of ['accept','claim']){const f=fixture();let actions=0;f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{actions++;return {status:'completed'};});await f.run({action});assert.equal(actions,0);assert.equal(f.state.claims.length,0);}
+});
+test('a lost post-claim query keeps the submitted guard and later tasks continue',async()=>{
+  const f=fixture([task('SAMPLE_A',{progress:{current:1,target:1}}),task('SAMPLE_B',{progress:{current:1,target:1}})]);f.state.query=s=>{if(s.queries===2)throw Error('SAMPLE post-claim query lost');};const r=await f.run();assert.ok(records(r,'claim_unconfirmed').some(r=>r.taskCode==='SAMPLE_A'));assert.ok(records(r,'claimed').some(r=>r.taskCode==='SAMPLE_B'));const a=f.state.tasks[0];a.accept_status='accepted';await f.run({taskCodes:['SAMPLE_A']});assert.equal(f.state.claims.filter(c=>c==='SAMPLE_A').length,1);
+});
+test('UI cached snapshot exposes acceptance and execution_started while the real executor is still suspended',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'not_accepted'})]);let release,began;const started=new Promise(resolve=>{began=resolve;}),wait=new Promise(resolve=>{release=resolve;});
+  f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>{began();await wait;return {status:'deferred',reason:'SAMPLE paused real operation'};});const pending=f.run();
+  try{await started;const cached=workBuddyTaskSnapshot(f.service,'SAMPLE_ACCOUNT');assert.equal(cached.tasks[0].current,0);assert.equal(cached.tasks[0].claimed,false);assert.ok(cached.receipts.some(r=>r.status==='accepted'&&r.serverConfirmed));assert.equal(cached.receipts.at(-1).status,'execution_started');assert.equal(cached.receipts.at(-1).serverConfirmed,false);assert.equal(cached.tasks[0].lastReceipt.status,'execution_started');assert.equal(f.data.get('wb-management-task-receipts:SAMPLE_ACCOUNT').at(-1).status,'execution_started');assert.equal(f.state.claims.length,0);}finally{release();await pending;}
+});
+test('service shutdown cancels a manual executor, tracks its whole flight and releases the account lock',async()=>{
+  const f=fixture(),shutdown=new AbortController(),incoming=new AbortController(),reason=Error('SAMPLE service closing');f.service.workbuddyExecutorController=shutdown;let began,observed;const started=new Promise(resolve=>{began=resolve;});
+  f.service.workbuddyTaskExecutors.set('SAMPLE_A',async({signal,check})=>{observed=signal;began();if(!signal)return {status:'deferred'};await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});check();return {status:'completed'};});
+  const pending=f.run({signal:incoming.signal});try{await started;assert.ok(f.service.workbuddyTaskFlights instanceof Set);assert.equal(f.service.workbuddyTaskFlights.size,1);assert.notEqual(observed,incoming.signal);shutdown.abort(reason);await assert.rejects(pending,e=>e===reason);assert.equal(observed.aborted,true);assert.equal(incoming.signal.aborted,false);assert.equal(f.service.workbuddyTaskFlights.size,0);assert.equal(f.state.claims.length,0);}finally{shutdown.abort(reason);await pending.catch(()=>{});}
+  f.service.workbuddyExecutorController=new AbortController();f.service.workbuddyTaskExecutors.set('SAMPLE_A',async()=>({status:'deferred',reason:'SAMPLE resumed'}));await f.run();assert.equal(f.service.workbuddyTaskFlights.size,0);
+});
+test('HTTP200 per-code acceptance error exposes a structured prerequisite wait and never executes that task',async()=>{
+  const f=fixture([task('skill_1',{accept_status:'not_accepted',progress:{current:0,target:0}})]);let actions=0;f.state.accept=()=>({results:[{task_code:'skill_1',status:'error',message:'prerequisite not met: first_buddy'}]});f.service.workbuddyTaskExecutors.set('skill_1',async()=>{actions++;return {status:'completed'};});const r=await f.run();assert.equal(actions,0);assert.equal(f.state.claims.length,0);assert.equal(f.state.accepts.length,1);const receipt=records(r,'waiting_prerequisite')[0];assert.equal(receipt.reason,'prerequisite not met: first_buddy');assert.equal(receipt.prerequisiteTaskCode,'first_buddy');assert.equal(receipt.serverConfirmed,false);assert.equal(records(r,'accepted').length,0);assert.equal(workBuddyTaskSnapshot(f.service,'SAMPLE_ACCOUNT').tasks[0].executionStrategy,'wait_for_official_prerequisite');
+});
+test('other HTTP200 acceptance rejection preserves its bounded redacted reason and does not block later tasks',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'not_accepted'}),task('SAMPLE_B',{progress:{current:1,target:1}})]);f.state.accept=()=>({results:[{task_code:'SAMPLE_A',status:'error',message:'SAMPLE entitlement denied Bearer SAMPLE_PRIVATE_TOKEN'}]});const r=await f.run();assert.equal(records(r,'accept_rejected')[0].reason,'SAMPLE entitlement denied Bearer [REDACTED]');assert.equal(records(r,'accepted').length,0);assert.deepEqual(f.state.claims,['SAMPLE_B']);assert.equal(JSON.stringify(r).includes('SAMPLE_PRIVATE_TOKEN'),false);
+});
+test('successful acceptance uses bounded read-only propagation checks and never repeats acceptance POST',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'not_accepted'})]);f.state.skipImmediateAccept=true;f.state.accept=()=>({results:[{task_code:'SAMPLE_A',status:'success'}]});f.state.query=s=>{if(s.queries>=3)s.tasks[0].accept_status='accepted';};const r=await f.run({action:'accept'});assert.equal(records(r,'accepted').length,1);assert.equal(records(r,'accepted')[0].serverConfirmed,true);assert.equal(f.state.accepts.length,1);assert.equal(f.state.queries,3);
+});
+test('first_buddy is executed and officially claimed before a previously earlier dependent skill is accepted',async()=>{
+  const f=fixture([task('skill_1',{accept_status:'not_accepted'}),task('first_buddy',{accept_status:'not_accepted'})]);f.state.accept=codes=>({results:codes.map(code=>({task_code:code,status:code==='skill_1'&&f.state.tasks.find(t=>t.task_code==='first_buddy').accept_status!=='claimed'?'error':'success',message:'prerequisite not met: first_buddy'}))});for(const code of ['first_buddy','skill_1'])f.service.workbuddyTaskExecutors.set(code,async()=>{f.state.events.push('execute:'+code);f.state.tasks.find(t=>t.task_code===code).progress.current=1;return {status:'completed',completedActions:1};});const r=await f.run();assert.deepEqual(f.state.claims,['first_buddy','skill_1']);assert.ok(f.state.events.indexOf('claim:first_buddy')<f.state.events.indexOf('accept:skill_1'));assert.ok(f.state.events.indexOf('execute:first_buddy')<f.state.events.indexOf('execute:skill_1'));assert.equal(records(r,'waiting_prerequisite').length,0);assert.equal(records(r,'claimed').length,2);
+});
+test('a specific dependent-task request remains waiting and does not recursively append prerequisite generation',async()=>{
+  const f=fixture([task('skill_1',{accept_status:'not_accepted'}),task('first_buddy',{accept_status:'not_accepted'})]);let actions=0;for(const code of ['skill_1','first_buddy'])f.service.workbuddyTaskExecutors.set(code,async()=>{actions++;return {status:'completed'};});f.state.accept=()=>({results:[{task_code:'skill_1',status:'error',message:'prerequisite not met: first_buddy'}]});const r=await f.run({taskCodes:['skill_1']});assert.equal(actions,0);assert.deepEqual(f.state.accepts,[['skill_1']]);assert.equal(records(r,'waiting_prerequisite').length,1);assert.equal(f.state.claims.length,0);
+});
+test('an explicit per-code result list missing the selected task does not become accepted',async()=>{
+  const f=fixture([task('SAMPLE_A',{accept_status:'not_accepted'})]);f.state.accept=()=>({results:[{task_code:'SAMPLE_OTHER',status:'success'}]});const r=await f.run({action:'accept'});assert.equal(records(r,'accepted').length,0);assert.equal(records(r,'accept_unconfirmed')[0].reason,'official_accept_result_missing');assert.equal(f.state.accepts.length,1);
+});
+test('explicit task-does-not-require-acceptance acknowledgement allows its real action without treating other errors as accepted',async()=>{
+  const f=fixture([task('first_buddy',{accept_status:'not_accepted',progress:{current:0,target:0}})]);let actions=0;f.state.accept=()=>({results:[{task_code:'first_buddy',status:'error',message:'task does not require acceptance'}]});f.service.workbuddyTaskExecutors.set('first_buddy',async()=>{actions++;return {status:'completed',completedActions:1};});const r=await f.run();assert.equal(actions,1);assert.equal(records(r,'accept_not_required')[0].reason,'task does not require acceptance');assert.equal(records(r,'accepted').length,0);assert.equal(records(r,'accept_rejected').length,0);assert.equal(records(r,'task_accounting_pending').length,1);assert.equal(f.state.claims.length,0);assert.equal(r.tasks[0].target,0);assert.equal(r.tasks[0].current,0);assert.equal(r.tasks[0].accepted,false);
+  const g=fixture([task('first_buddy',{accept_status:'not_accepted'})]);g.state.accept=()=>({results:[{task_code:'first_buddy',status:'error',message:'SAMPLE acceptance failed for another reason'}]});g.service.workbuddyTaskExecutors.set('first_buddy',async()=>{throw Error('SAMPLE other error must not execute');});const rejected=await g.run();assert.equal(records(rejected,'accept_not_required').length,0);assert.equal(records(rejected,'accept_rejected').length,1);
+});

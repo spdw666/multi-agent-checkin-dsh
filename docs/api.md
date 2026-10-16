@@ -23,10 +23,11 @@
 - **Host**：`Host` 必须等于服务自身 `baseUrl` 的 host，或 `localhost:<实际端口>`，否则返回 `403 host_rejected`。用其他主机名（含 IP 变体、反代域名）访问会被拒绝。
 - 响应统一带 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，JSON 与静态资源均 `Cache-Control: no-store`；不返回 CORS 许可头，跨源读取不被鼓励也不被支持。界面资源额外带严格 CSP（`default-src 'self'`、`frame-ancestors 'none'`）。
 
-## 3. 请求体上限：聊天 64 MiB，管理 4 MiB
+## 3. 请求体上限：聊天 64 MiB，普通管理 4 MiB
 
 - **聊天**：`POST /v1/chat/completions` 使用 `server.bodyLimitBytes`，默认 `67108864`（64 MiB），可配置范围 `1024`–`67108864`，越界为 `400 invalid_config`。这是**字节上限，不是模型上下文上限**；超限返回 `413 body_too_large`，错误消息包含实际字节数与上限，并明确说明**消息历史未被裁剪**——网关不静默截断，长会话由调用端做上下文压缩。上游自身报的 context length / token limit 属另一层限制。
-- **管理**：所有 `/admin/*` 请求体固定上限 `4194304`（4 MiB），**不随聊天上限一起放宽**。`POST /admin/model-tests` 允许空 body（按默认 `scope` 处理）。
+- **普通管理**：除下述账号导入包装例外外，`/admin/*` 请求体固定上限 `4194304`（4 MiB），**不随聊天上限一起放宽**。`POST /admin/model-tests` 允许空 body（按默认 `scope` 处理）。
+- **WB 账号导入**：`/admin/workbuddy/accounts/import/preview`、`/commit` 与兼容 `/import` 的 HTTP 正文为 `16777216`（16 MiB）包装上限，仅容纳 base64 与 JSON 转义；解码后的输入文件合计仍为 4 MiB。单 JSON、解压总量、文件数与账号数另行限制，见第 13 节。
 - 非 JSON 体返回 `400 invalid_request_error`；`Content-Length` 已超限时直接拒绝，不读取正文。
 
 ## 4. 每路由 HTTP 截止时间
@@ -210,7 +211,7 @@ HTTP `200` 不等于权益已发放，必须逐账号看 `status`。真实代码
 2. 先 `GET /admin/state` 拿 `baseUrl`，再按该地址发起同源请求，避免 `host_rejected`。
 3. `202` 与 `200` 都不代表业务成功：体检看 `status` 与 `jobKeys`，领取看逐账号 `status`，余额看 `value` 与 `stale`。
 4. 未知状态显示为“未知”，不要用绿色或零值填充；缓存数值必须同时显示 `checkedAt` 与 `stale`。
-5. 长会话超限时提示调整 `server.bodyLimitBytes`；管理请求上限固定 4 MiB，不要一并放大。
+5. 长会话超限时提示调整 `server.bodyLimitBytes`；普通管理请求上限固定 4 MiB，不要一并放大。WB 账号导入使用其独立包装／原始文件双重限制。
 
 ### 模型目录占位与“导出选中”（取消导入）
 
@@ -254,7 +255,7 @@ HTTP `200` 不等于权益已发放，必须逐账号看 `status`。真实代码
 
 ### 任务、切换与会话
 
-`GET /admin/workbuddy/tasks?accountId=ACCOUNT` 查询任务；POST 支持 `action: query/accept/run/claim`。当前真实执行覆盖接受任务、每日签到与领取已达标奖励，并查询确认；创建自动化、应用体验、专家使用等未注册真实执行器时保持 `manual_action_required`，不伪造进度或遥测。
+`GET /admin/workbuddy/tasks?accountId=ACCOUNT` 查询任务；POST 支持 `action: query/accept/run/claim`。任务按实际注册执行器处理：接受任务、真实每日签到、对话/技能/专家/画布/资料库/自动化等已接入功能，执行后回查官方进度并只领取已达标奖励；前置条件未就绪或未注册执行器时保留具体等待状态或 `manual_action_required`，不伪造进度或遥测。执行器要求见 [WB_TASK_EXECUTORS.md](WB_TASK_EXECUTORS.md)。
 
 设置只接受布尔 `autoTasks` / `autoMigrateSessions`，默认关闭。自动任务同账号互斥，约每 30 分钟检查，不以刷新余额代替签到。
 
@@ -266,3 +267,24 @@ HTTP `200` 不等于权益已发放，必须逐账号看 `status`。真实代码
 
 HTTP 截止与供给进度超时不同：接力默认 30 秒无有效进展，正文/推理/工具增量刷新计时。主供应窗口广播与备用能力筛选分离，保留模型 ID、历史、工具与输出预算；不要将能力错误写成真实积分耗尽。
 
+
+## 13. WB 账号交换、备注与自动轮换
+
+所有接口使用 `adminKey`。普通管理请求固定 4 MiB；账号导入 preview/commit（含兼容 `/import`）单独提供 16 MiB HTTP 包装上限，供 base64 / JSON 转义使用，解码后的文件合计仍限制 4 MiB，单 JSON 256 KiB、解压总量 16 MiB、账号 128、文件 32。这个例外不改变其他管理入口或聊天字节边界。
+
+| 接口 | 输入 / 结果 |
+|---|---|
+| `POST /admin/workbuddy/accounts/import/preview` | `{files:[{format:"json"或"zip",name,content}],duplicatePolicy}` → 脱敏 `entries`、`errors`、`valid` |
+| `POST /admin/workbuddy/accounts/import/commit` | 同一 `files`，可加 `selectedIndexes`；`duplicatePolicy:"skip"`（默认）或 `"replace"` → `saved`、新增/替换/跳过与逐账号结果 |
+| `POST /admin/workbuddy/accounts/export` | `{accountIds:["ACCOUNT"],format:"json"或"zip"或"switch-json"}` → `exported`、`filename`、`contentType`、`encoding:"base64"`、`content`、`count` |
+| `POST /admin/workbuddy/accounts/:id/profile` | `{label?,notes?}` → 本机展示字段保存回执；不变更主体/任务/路由 |
+| `POST /admin/workbuddy/accounts/:id/inference` | 严格 `{enabled:boolean}` → `inferenceEnabled` 与签到/任务不变回执 |
+| `GET /admin/workbuddy/rotation` | `{settings,state,preview}`，默认只读 |
+| `POST /admin/workbuddy/rotation` | 平铺严格设置：`enabled`、`target`、`strategy`、频率/冷却/门槛、`edition` |
+| `POST /admin/workbuddy/rotation/evaluate` | `{dryRun:true}` 默认只预览；false 才按当前策略尝试提交 |
+
+导入按版本 + UID 去重；预览不写入、不续期、不调用模型；提交重新核对当前配置，默认跳过已有账号。显式替换更新同主体凭据，保留既有槽位、显示名/备注、账号与积分启停、任务、手动池、路由启停；私密原件备份和失败回滚与结果分别记录。导出响应是刻意返回的凭据文件传输，客户端保存后不打印内容，普通 summary/details 继续隐藏 token。
+
+轮换与接力/签到任务分开：默认关闭，仅考虑同版本可用 WB 候选，暂停积分调用的账号排除；网关只影响下一请求，CLI 存活时推迟，不终止进程。`dryRun` 预览、配置保存和实际逐目标切换结果是三个状态；HTTP 200 不是“所有账号都已经切换”。
+
+文件形状、容量、错误与示例见 [WB 账号交换](WB_ACCOUNT_TRANSFER.md)；轮换设置、候选、CLI 门控与地区写入见 [WB 轮换](WB_ROTATION.md)；来源对照见 [WB_SWITCH_COMPARISON.md](WB_SWITCH_COMPARISON.md)。

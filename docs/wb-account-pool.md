@@ -12,6 +12,12 @@
 
 所有已保存账号都会列出，包括停用、认证拒绝与封禁账号。坏状态不通过隐藏卡片来“解决”；用户能核对 ID、UID 和原因后决定是否删除。
 
+## 添加、导入导出与轮换
+
+账号管理增加本机 JSON/ZIP 交换、只读预览、按国内/国际版与 UID 去重、明确选择导出和显示名/备注整理。交换文件包含凭据，公开示例只有 SAMPLE；详细格式、限制、接口和替换保留语义见 [WB 账号交换](WB_ACCOUNT_TRANSFER.md)。
+
+账号自动轮换默认关闭，可选择到期优先/顺序及网关/CodeBuddy CLI 目标。轮换不打断生成、不关闭运行中的 CLI、不改变签到任务开关；候选、冷却、门控和逐目标结果见 [WB 轮换](WB_ROTATION.md)。参考项目能力与本工程独立实现边界见[功能对照](WB_SWITCH_COMPARISON.md)。
+
 ## 身份与登录详情
 
 ### 标识不能混为一谈
@@ -144,7 +150,7 @@ Content-Type: application/json
 
 ### 当前自动执行的真实覆盖
 
-支持官方任务查询、批量接受、真实每日签到，以及领取服务端已达标奖励并查询确认。自动任务开关默认关闭，统一后台调度器约每 30 分钟检查，同账号互斥；关闭后取消后续自动流程。
+已注册 18 个官方任务的真实执行器，自动任务按“查询 → 接受确认 → 真实功能执行 → 消费完整结果与独立读回 → 官方进度回查 → 达标领取 → 再查 claimed”闭环运行，并保留真实每日签到。自动任务开关默认关闭，统一后台调度器约每 30 分钟检查，同账号互斥；关闭后取消后续自动流程。组件、前置条件与各类任务的执行方式见 [WB 真实功能自动执行器](WB_TASK_EXECUTORS.md)。
 
 以下不是同一件事：
 
@@ -155,7 +161,9 @@ Content-Type: application/json
 5. 领取奖励。
 6. 官方回查确认已领取。
 
-创建自动化、应用体验、专家使用等尚未注册真实执行器的任务，保留 `manual_action_required`。网关不发送伪造使用事件，也不把领奖请求成功当成“任务全部完成”。
+真实执行覆盖对话、市场技能、画布、模板、专家/专家团、自动化、资料库与外观等功能；注册执行器不等于依赖已经就绪，也不等于官方已经记账。自动化以创建后持久读回并暂停为业务验证，资料库要求读取真实正文，外观要求设置后读回；实际动作验证通过而官方成长进度尚未确认时，仍等待回查，不强领未达标奖励。
+
+应用授权状态观察不等于真实应用体验；应用、外部订阅等前置条件未满足时显示具体等待原因。模板、专家等真实动作已提交而结果未知时保留 `pending`，不重复提交模型动作。未注册的任务仍保留 `manual_action_required`。网关不发送伪造使用事件，也不把请求成功、执行器 `completed` 或领奖提交成功当成官方任务已完成。
 
 | `executionStrategy` | 含义 |
 |---|---|
@@ -165,11 +173,29 @@ Content-Type: application/json
 | `registered_executor_then_verify` | 仅在实际注册执行器时执行，之后回查 |
 | `manual_action_required` | 需要真实手工功能使用或尚未接入执行器 |
 
-回执保留动作、taskCode、时间、状态、`serverConfirmed`、错误等。未知领奖提交以持久幂等记录保护，不盲目重复提交。常见回执 `accepted`、`accept_unconfirmed`、`claimed`、`claim_unconfirmed`、`already_claimed`、`action_required` 应分别展示。
+回执保留动作、taskCode、时间、状态、`serverConfirmed`、错误等。真实执行与领奖均有持久幂等记录，结果未知时不盲目重复提交；实际动作进度与官方 `current` / `target` / `claimed` 分开展示。常见回执 `accepted`、`accept_unconfirmed`、`claimed`、`claim_unconfirmed`、`already_claimed`、`action_required` 应分别展示。
 
 ## 每日签到不等于自动刷新
 
 `dailyCheckin` 独立展示签到状态、查询时间、官方今日结果与错误。刷新余额只是查询，不发积分；自动任务包含真实签到，只有官方回执/账单确认才能认定到账。小浣熊等平台的“每日签到领取”语义与 WB 任务列表也不要混同。
+
+## 只停用积分调用，保留签到与任务
+
+每个账号卡片底部固定提供 **停用该账号**；停用后按钮变为 **启用该账号**。该操作仅修改当前 WB 账号的 `inferenceEnabled`：省略或 `true` 表示允许模型调用，`false` 表示停止使用该账号的积分，不参与模型候选、自动接力或调用账号切换。
+
+这个开关不修改账号整体的 `enabled`、任务开关、自动签到、`workbuddy.autoTasks` 或自动迁移设置。只停用积分的账号仍保留资料、余额与任务，签到和已实现的自动任务照常按原设置运行；任务本身的官方执行和领取条件仍按实际状态验证。
+
+```http
+POST /admin/workbuddy/accounts/ACCOUNT/inference
+Authorization: Bearer TOKEN
+Content-Type: application/json
+
+{"enabled":false}
+```
+
+恢复使用时发送 `{"enabled":true}`。summary/details 返回 `inferenceEnabled`；`totals.inferenceEnabledAccounts` / `inferenceDisabledAccounts` 分别统计允许与暂停积分调用的账号，`inferenceRemaining` / `inferenceTotal` 表示可调用部分的已知额度。总资产与可调用额度分开，不将暂停积分的余额记为零。
+
+此操作与把整个账号 `enabled` 设为 `false`、封禁标记或删除账号不同。每次新调用均重新核对实际设置，已开始的响应不因开关变化而被中止或重放。
 
 ## 切换账号
 

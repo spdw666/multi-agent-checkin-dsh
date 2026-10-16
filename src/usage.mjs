@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
 import {errorView} from './util.mjs';
 import {captureRequestContext} from './activity-context.mjs';
+import {rateLimitMetadata} from './rate-limit-metadata.mjs';
 const number=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:null;
 export function usageCounters(u={}) {
   const promptTokens=number(u.prompt_tokens??u.input_tokens),completionTokens=number(u.completion_tokens??u.output_tokens);
@@ -16,5 +17,9 @@ export class UsageAttempt {
     try{this.id=ledger?.beginUsage?.(this.row)}catch(e){console.error('usage_record_write_failed',e.code??'storage_error');}
   }
   chunk(chunk){if(this.firstTokenMs===null&&(chunk.choices??[]).some(c=>c.delta?.content||c.delta?.tool_calls?.length))this.firstTokenMs=Math.round(performance.now()-this.clock);if(chunk.usage)for(const [key,value] of Object.entries(usageCounters(chunk.usage)))if(value!==null)this.usage[key]=value;}
-  finish(status,error){const row={...this.row,...this.usage,status,finishedAt:new Date().toISOString(),durationMs:Math.max(0,Math.round(performance.now()-this.clock)),firstTokenMs:this.firstTokenMs,chargeSource:this.usage.credits!=null||this.usage.cost!=null?'upstream_usage':'not_reported',...(error?{error:errorView(error)}:{})};try{if(this.id!==undefined)this.ledger.finishUsage(this.id,row)}catch(e){console.error('usage_record_write_failed',e.code??'storage_error');}}
+  finish(status,error){
+    const rateLimit=rateLimitMetadata(error);if(rateLimit.rateLimitKind)this.row.rateLimit=rateLimit;
+    if(error){const phase=['connect','tls_handshake','response_header','response_body'].includes(error.networkPhase)?error.networkPhase:null,code=['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ECONNRESET','ETIMEDOUT','CERT_HAS_EXPIRED','ERR_TLS_CERT_ALTNAME_INVALID','UNABLE_TO_VERIFY_LEAF_SIGNATURE','DEPTH_ZERO_SELF_SIGNED_CERT','ABORT_ERR'].includes(error.transportCode)?error.transportCode:null,timeoutOrigin=['connect_deadline','header_deadline','body_idle','request_deadline'].includes(error.timeoutOrigin)?error.timeoutOrigin:null;
+      if(phase||code||timeoutOrigin)this.row.transportFailure={phase,code,timeoutOrigin};}
+    const row={...this.row,...this.usage,status,finishedAt:new Date().toISOString(),durationMs:Math.max(0,Math.round(performance.now()-this.clock)),firstTokenMs:this.firstTokenMs,chargeSource:this.usage.credits!=null||this.usage.cost!=null?'upstream_usage':'not_reported',...(error?{error:errorView(error)}:{})};try{if(this.id!==undefined)this.ledger.finishUsage(this.id,row)}catch(e){console.error('usage_record_write_failed',e.code??'storage_error');}}
 }

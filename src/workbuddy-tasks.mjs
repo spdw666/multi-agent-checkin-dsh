@@ -5,6 +5,7 @@
 import {AppError,errorView,rememberSecret,hash,redact} from './util.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {workBuddyFailure,workBuddyUpstreamError,isWorkBuddyBlocked} from './workbuddy-status.mjs';
+import {setTimeout as sleep} from 'node:timers/promises';
 
 const locks=new WeakMap();
 export function normalizeWorkBuddyTask(raw) {
@@ -28,50 +29,98 @@ export class WorkBuddyTaskClient {
   async claim(code){return this.request('/activity/growth/tasks/'+encodeURIComponent(code)+'/claim',{body:{},web:true});}
 }
 async function client(service,accountId,signal){const a=service.config.value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy'&&a.enabled!==false);if(!a)throw new AppError('WB 帐号不存在或已停用',404,'account_not_found');return new WorkBuddyTaskClient(await service.credentials.resolve(accountId),{fetchImpl:service.workbuddyRuntime?.fetchImpl??fetch,signal});}
-export function workBuddyReceiptView(receipt){if(!receipt||typeof receipt!=='object')return null;const view={};for(const key of ['accountId','action','taskCode','status','checkedAt','serverConfirmed','credit','energy','current','target','reason','description','alreadyClaimed'])if(['string','boolean','number'].includes(typeof receipt[key]))view[key]=typeof receipt[key]==='string'?redact(receipt[key]).slice(0,1000):receipt[key];if(receipt.error)view.error=workBuddyFailure(receipt.error);return view;}
-export function workBuddyTaskSnapshot(service,accountId){const row=service.ledger?.get('wb-management-tasks:'+accountId)??{accountId,tasks:[],checkedAt:null,lastSuccessAt:null,lastFailureAt:null,stale:false,error:null,receipts:service.ledger?.get('wb-management-task-receipts:'+accountId)??[]};return {...row,receipts:(row.receipts??[]).map(workBuddyReceiptView)};}
+const executionStatuses=new Set(['completed','pending','deferred','unsupported']);
+function executionView(execution){
+  if(!execution||typeof execution!=='object'||!executionStatuses.has(execution.status))return null;
+  const view={status:execution.status};
+  for(const key of ['reason','operationId','feature','kind','checkedAt'])if(typeof execution[key]==='string')view[key]=redact(execution[key]).slice(0,1000);
+  for(const key of ['completedActions','totalActions'])if(typeof execution[key]==='number'&&Number.isFinite(execution[key])&&execution[key]>=0)view[key]=execution[key];
+  return view;
+}
+export function workBuddyReceiptView(receipt){if(!receipt||typeof receipt!=='object')return null;const view={};for(const key of ['accountId','action','taskCode','status','phase','checkedAt','serverConfirmed','credit','energy','current','target','reason','description','alreadyClaimed','prerequisiteTaskCode'])if(['string','boolean','number'].includes(typeof receipt[key])&&(typeof receipt[key]!=='number'||Number.isFinite(receipt[key])))view[key]=typeof receipt[key]==='string'?redact(receipt[key]).slice(0,1000):receipt[key];if(receipt.error)view.error=workBuddyFailure(receipt.error);const execution=executionView(receipt.execution);if(execution)view.execution=execution;return view;}
+function acceptanceFailure(ack,code){
+  if(!Array.isArray(ack?.results))return null;
+  const row=ack.results.find(r=>(r?.task_code??r?.taskCode??r?.code)===code);
+  if(!row)return {status:'accept_unconfirmed',reason:'official_accept_result_missing'};
+  if(row.success!==false&&!['error','failed','failure','rejected','denied'].includes(String(row.status??'').toLowerCase()))return null;
+  const reason=redact(String(row.message??row.reason??row.error?.message??row.error??'official_accept_rejected')).slice(0,1000),waiting=/prerequisite|前置|先完成|依赖/i.test(reason);
+  if(/^task does not require acceptance[.!。]?$/i.test(reason.trim()))return {status:'accept_not_required',reason};
+  return {status:waiting?'waiting_prerequisite':'accept_rejected',reason,...(waiting&&/\bfirst_buddy\b/.test(reason)?{prerequisiteTaskCode:'first_buddy'}:{})};
+}
+function taskWithCapability(service,task,receipts){
+  const executor=service.workbuddyTaskExecutors?.get?.(task.taskCode),registered=typeof executor==='function',capability={registered,status:registered?'registered':'not_registered'};
+  if(registered&&executor.capability&&typeof executor.capability==='object'){
+    for(const key of ['kind','feature'])if(typeof executor.capability[key]==='string')capability[key]=redact(executor.capability[key]).slice(0,500);
+    for(const key of ['needsDesktop','requiresWindow'])if(typeof executor.capability[key]==='boolean')capability[key]=executor.capability[key];
+  }
+  const lastReceipt=[...receipts].reverse().find(r=>r?.taskCode===task.taskCode)??null;
+  const executionStrategy=task.claimed?'already_claimed':task.locked?'locked':task.claimable?'claim_server_confirmed_reward':lastReceipt?.status==='task_accounting_pending'?'wait_for_official_task_accounting':lastReceipt?.status==='waiting_prerequisite'?'wait_for_official_prerequisite':registered?'registered_executor_then_verify':'manual_action_required';
+  return {...task,automaticExecution:registered,executionCapability:capability,executionStrategy,lastReceipt};
+}
+export function workBuddyTaskSnapshot(service,accountId){const row=service.ledger?.get('wb-management-tasks:'+accountId)??{accountId,tasks:[],checkedAt:null,lastSuccessAt:null,lastFailureAt:null,stale:false,error:null,receipts:service.ledger?.get('wb-management-task-receipts:'+accountId)??[]};const receipts=(row.receipts??[]).map(workBuddyReceiptView).filter(Boolean);return {...row,tasks:(row.tasks??[]).map(t=>taskWithCapability(service,t,receipts)),receipts};}
 function saveTaskSnapshot(service,accountId,tasks,receipts){
-  const checkedAt=new Date().toISOString();receipts=(receipts??service.ledger?.get('wb-management-task-receipts:'+accountId)??[]).map(workBuddyReceiptView);
-  for(const task of tasks){task.automaticExecution=service.workbuddyTaskExecutors?.has(task.taskCode)===true;task.executionStrategy=task.claimed?'already_claimed':task.locked?'locked':task.claimable?'claim_server_confirmed_reward':task.automaticExecution?'registered_executor_then_verify':'manual_action_required';task.lastReceipt=[...receipts].reverse().find(r=>r.taskCode===task.taskCode)??null;}
-  const row={accountId,tasks,checkedAt,lastSuccessAt:checkedAt,lastFailureAt:null,stale:false,error:null,source:'official_growth_tasks',automaticScope:'accept_and_server_confirmed_rewards',receipts};service.ledger?.set('wb-management-tasks:'+accountId,row);return row;
+  const checkedAt=new Date().toISOString();receipts=(receipts??service.ledger?.get('wb-management-task-receipts:'+accountId)??[]).map(workBuddyReceiptView).filter(Boolean);
+  tasks=tasks.map(t=>taskWithCapability(service,t,receipts));
+  const row={accountId,tasks,checkedAt,lastSuccessAt:checkedAt,lastFailureAt:null,stale:false,error:null,source:'official_growth_tasks',automaticScope:tasks.some(t=>t.automaticExecution)?'registered_actions_and_server_confirmed_rewards':'accept_and_server_confirmed_rewards',receipts};service.ledger?.set('wb-management-tasks:'+accountId,row);return row;
 }
 function saveTaskFailure(service,accountId,error){const old=workBuddyTaskSnapshot(service,accountId),row={...old,lastFailureAt:new Date().toISOString(),stale:!!old.lastSuccessAt,error:workBuddyFailure(error)};service.ledger?.set('wb-management-tasks:'+accountId,row);if(row.error.banned)service.ledger?.set('wb-management-official-status:'+accountId,{status:'banned',reason:row.error.message,source:'official_response',checkedAt:row.lastFailureAt,httpStatus:row.error.httpStatus,upstreamCode:row.error.upstreamCode});return row;}
 export async function queryWorkBuddyTasks(service,{accountId,signal}={}) {
-  try{return saveTaskSnapshot(service,accountId,await(await client(service,accountId,signal)).query());}catch(e){saveTaskFailure(service,accountId,e);throw e;}
+  try{signal?.throwIfAborted();const api=await client(service,accountId,signal);signal?.throwIfAborted();const tasks=await api.query();signal?.throwIfAborted();return saveTaskSnapshot(service,accountId,tasks);}catch(e){saveTaskFailure(service,accountId,e);throw e;}
 }
-export async function runWorkBuddyTasks(service,{accountId,action='run',taskCodes,taskCode,automatic=false,signal}={}) {
+export function runWorkBuddyTasks(service,options={}) {
+  const shutdown=service.workbuddyExecutorController?.signal,signal=shutdown?options.signal&&options.signal!==shutdown?AbortSignal.any([options.signal,shutdown]):shutdown:options.signal;
+  const flights=service.workbuddyTaskFlights??=new Set();
+  let flight;flight=runWorkBuddyTaskOperation(service,{...options,signal}).finally(()=>flights.delete(flight));flights.add(flight);return flight;
+}
+async function runWorkBuddyTaskOperation(service,{accountId,action='run',taskCodes,taskCode,automatic=false,signal}={}) {
+  const check=()=>{signal?.throwIfAborted();if(automatic&&service.config.value.workbuddy?.autoTasks!==true)throw new AppError('WB 自动任务已暂停',499,'wb_tasks_cancelled');};
+  const rethrowCancellation=error=>{check();if(error?.name==='AbortError'||error?.code==='wb_tasks_cancelled')throw error;};
   if(accountId===undefined||accountId===null){
     if(!['run','query','accept','claim'].includes(action))throw new AppError('WB 任务操作格式错误',400,'wb_task_action_invalid');
-    const results=[];for(const a of service.config.value.accounts.filter(a=>a.platform==='workbuddy'&&a.enabled!==false&&!isWorkBuddyBlocked(service,a.id))){signal?.throwIfAborted();try{results.push(await runWorkBuddyTasks(service,{accountId:a.id,action,taskCodes,taskCode,automatic,signal}));}catch(e){results.push({accountId:a.id,status:'error',error:errorView(e),tasks:[],receipts:[{accountId:a.id,action,status:'error',error:errorView(e)}]});}}
+    const results=[];for(const a of service.config.value.accounts.filter(a=>a.platform==='workbuddy'&&a.enabled!==false&&!isWorkBuddyBlocked(service,a.id))){check();try{results.push(await runWorkBuddyTasks(service,{accountId:a.id,action,taskCodes,taskCode,automatic,signal}));}catch(e){rethrowCancellation(e);results.push({accountId:a.id,status:'error',error:errorView(e),tasks:[],receipts:[{accountId:a.id,action,status:'error',error:errorView(e)}]});}}
     return {action,results,tasks:results.flatMap(r=>(r.tasks??[]).map(t=>({...t,accountId:r.accountId}))),receipts:results.flatMap(r=>r.receipts??[])};
   }
-  if(!['run','query','accept','claim'].includes(action))throw new AppError('WB 任务操作格式错误',400,'wb_task_action_invalid');if(action==='query')return queryWorkBuddyTasks(service,{accountId});
+  if(!['run','query','accept','claim'].includes(action))throw new AppError('WB 任务操作格式错误',400,'wb_task_action_invalid');if(action==='query'){check();return queryWorkBuddyTasks(service,{accountId,signal});}
   if(taskCode!==undefined)taskCodes=[taskCode];if(taskCodes!==undefined&&(!Array.isArray(taskCodes)||taskCodes.some(t=>typeof t!=='string'||!t||t.length>256)))throw new AppError('WB 任务标识格式错误',400,'wb_task_code_invalid');
   let active=locks.get(service);if(!active){active=new Set();locks.set(service,active);}if(active.has(accountId))throw new AppError('该 WB 帐号的积分任务正在执行',409,'wb_tasks_busy');active.add(accountId);
-  let tasks,operationError;const receipts=[],record=receipt=>{const full={accountId,action,checkedAt:new Date().toISOString(),...receipt};receipts.push(full);return full;};
-  const check=()=>{signal?.throwIfAborted();if(automatic&&service.config.value.workbuddy?.autoTasks!==true)throw new AppError('WB 自动任务已暂停',499,'wb_tasks_cancelled');};
+  let tasks,operationError;const receipts=[],record=receipt=>{const full=workBuddyReceiptView({accountId,action,checkedAt:new Date().toISOString(),...receipt});receipts.push(full);const recent=receipts.slice(-200);service.ledger?.set('wb-management-task-receipts:'+accountId,recent);if(tasks)saveTaskSnapshot(service,accountId,tasks,recent);return full;};
   try{
-    check();if(isWorkBuddyBlocked(service,accountId))throw new AppError('WB 帐号已标记封禁，请先核验或删除该帐号',409,'wb_account_banned');const api=await client(service,accountId,signal);tasks=await api.query();check();if(taskCodes?.some(code=>!tasks.some(t=>t.taskCode===code)))throw new AppError('所选任务不在当前官方任务列表',404,'wb_task_not_found');const selected=()=>tasks.filter(t=>!taskCodes||taskCodes.includes(t.taskCode));
-    if(action==='run'&&!taskCodes){const receipt=await service.claims.run(accountId,'daily-checkin');record({taskCode:'daily-checkin',status:receipt.status,receipt,serverConfirmed:receipt.serverConfirmed===true||receipt.reason==='server_already_claimed'});}
-    if(['accept','run'].includes(action)){
-      const codes=selected().filter(t=>!t.claimed&&!t.locked&&['','not_accepted'].includes(t.acceptStatus)).map(t=>t.taskCode);
-      if(codes.length){check();await api.accept(codes);tasks=await api.query();for(const code of codes){const after=tasks.find(t=>t.taskCode===code);record({taskCode:code,status:after&&!['','not_accepted'].includes(after.acceptStatus)?'accepted':'accept_unconfirmed',serverConfirmed:!!after&&!['','not_accepted'].includes(after.acceptStatus)});}}
-      if(action==='accept')return {accountId,tasks,receipts};
-    }
-    for(const task of selected()){
-      check();
-      if(task.claimed){record({taskCode:task.taskCode,status:'already_claimed',serverConfirmed:true});continue;}if(task.locked){record({taskCode:task.taskCode,status:'locked',serverConfirmed:true});continue;}
-      if(!task.claimable&&action==='run'&&service.workbuddyTaskExecutors?.has(task.taskCode)){
-        const execution=await service.workbuddyTaskExecutors.get(task.taskCode)({service,accountId,task});record({taskCode:task.taskCode,status:'action_executed',execution});tasks=await api.query();Object.assign(task,tasks.find(t=>t.taskCode===task.taskCode));
-      }
-      if(!task.claimable){record({taskCode:task.taskCode,status:'action_required',current:task.current,target:task.target,description:task.description,serverConfirmed:true});continue;}
-      const key='wb-management-task-claim:'+hash(accountId+'\0'+task.taskCode),pending=service.ledger?.get(key);
-      if(pending?.status==='submitted'){record({taskCode:task.taskCode,status:'claim_unconfirmed',reason:'previous_submission_not_confirmed',serverConfirmed:false});continue;}
-      service.ledger?.set(key,{status:'submitted',submittedAt:new Date().toISOString()});let claim;
-      try{claim=await api.claim(task.taskCode);}catch(e){record({taskCode:task.taskCode,status:'claim_unconfirmed',error:errorView(e),serverConfirmed:false});continue;}
-      tasks=await api.query();const after=tasks.find(t=>t.taskCode===task.taskCode),confirmed=after?.claimed===true;
-      if(confirmed)service.ledger?.set(key,{status:'confirmed',confirmedAt:new Date().toISOString()});
-      record({taskCode:task.taskCode,status:confirmed?'claimed':'claim_unconfirmed',serverConfirmed:confirmed,credit:confirmed?Number(claim.credit??0)||0:null,energy:confirmed?Number(claim.energy??0)||0:null,alreadyClaimed:claim.already_claimed===true});
+    check();if(isWorkBuddyBlocked(service,accountId))throw new AppError('WB 帐号已标记封禁，请先核验或删除该帐号',409,'wb_account_banned');const api=await client(service,accountId,signal);check();tasks=await api.query();check();if(taskCodes?.some(code=>!tasks.some(t=>t.taskCode===code)))throw new AppError('所选任务不在当前官方任务列表',404,'wb_task_not_found');const selectedCodes=tasks.filter(t=>!taskCodes||taskCodes.includes(t.taskCode)).map(t=>t.taskCode);if(action==='run')selectedCodes.sort((a,b)=>Number(b==='first_buddy')-Number(a==='first_buddy'));
+    if(action==='run'&&!taskCodes){try{check();const receipt=await service.claims.run(accountId,'daily-checkin');check();record({taskCode:'daily-checkin',status:receipt.status,reason:receipt.reason,serverConfirmed:receipt.serverConfirmed===true||receipt.reason==='server_already_claimed'});}catch(e){rethrowCancellation(e);record({taskCode:'daily-checkin',status:'task_error',phase:'daily_checkin',error:errorView(e),serverConfirmed:false});}}
+    const requestedDelays=service.workbuddyRuntime?.taskPollDelays;
+    const pollDelays=Array.isArray(requestedDelays)&&requestedDelays.length?requestedDelays.slice(0,5).map(d=>Number.isFinite(d)&&d>=0?Math.min(d,10000):0):[0,1000,2000];
+    const pollTask=async(code,confirmed,delays=pollDelays)=>{let after;for(const delay of delays){check();if(delay)await sleep(delay,undefined,{signal});check();tasks=await api.query();check();after=tasks.find(t=>t.taskCode===code);if(confirmed(after))break;}return after;};
+    const pollProgress=code=>pollTask(code,t=>t?.claimed||t?.claimable||t?.locked);
+    for(const code of selectedCodes){
+      let phase='query',activeExecution;
+      try{
+        check();let task=tasks.find(t=>t.taskCode===code);if(!task){record({taskCode:code,status:'task_unavailable',reason:'official_task_missing',serverConfirmed:false});continue;}
+        if(task.claimed){record({taskCode:code,status:'already_claimed',serverConfirmed:true});continue;}if(task.locked){record({taskCode:code,status:'locked',serverConfirmed:true});continue;}
+        if(['accept','run'].includes(action)&&['','not_accepted'].includes(task.acceptStatus)){
+          phase='accept';check();const ack=await api.accept([code]);check();const failure=acceptanceFailure(ack,code);if(failure){record({taskCode:code,...failure,serverConfirmed:failure.status==='accept_not_required'});if(failure.status!=='accept_not_required')continue;}
+          else{const isAccepted=t=>!!t&&!['','not_accepted','error','failed','rejected'].includes(t.acceptStatus);task=await pollTask(code,isAccepted,pollDelays.slice(0,3));const accepted=isAccepted(task);record({taskCode:code,status:accepted?'accepted':'accept_unconfirmed',serverConfirmed:accepted});if(!accepted)continue;}
+        }
+        if(action==='accept')continue;
+        if(task.claimed){record({taskCode:code,status:'already_claimed',serverConfirmed:true});continue;}if(task.locked){record({taskCode:code,status:'locked',serverConfirmed:true});continue;}
+        const key='wb-management-task-claim:'+hash(accountId+'\0'+code),pending=service.ledger?.get(key);
+        if(pending?.status==='submitted'){record({taskCode:code,status:'claim_unconfirmed',reason:'previous_submission_not_confirmed',serverConfirmed:false});continue;}
+        const executor=service.workbuddyTaskExecutors?.get?.(code);
+        if(!task.claimable&&action==='run'&&typeof executor==='function'){
+          phase='execution';check();record({taskCode:code,status:'execution_started',serverConfirmed:false});check();const execution=executionView(await executor({service,accountId,task,signal,check}))??{status:'unsupported',reason:'executor_result_invalid'};check();record({taskCode:code,status:'execution_'+execution.status,reason:execution.reason,execution,serverConfirmed:false});
+          if(['deferred','unsupported'].includes(execution.status))continue;
+          activeExecution=execution;phase='progress_poll';task=await pollProgress(code);
+          if(task?.claimed){record({taskCode:code,status:'already_claimed',execution,serverConfirmed:true});continue;}
+          if(task?.locked){record({taskCode:code,status:'locked',execution,serverConfirmed:true});continue;}
+          if(!task?.claimable){record({taskCode:code,status:'task_accounting_pending',reason:task?'official_progress_not_confirmed':'official_task_missing',current:task?.current,target:task?.target,execution,serverConfirmed:false});continue;}
+        }
+        if(!task.claimable){record({taskCode:code,status:'action_required',current:task.current,target:task.target,description:task.description,serverConfirmed:true});continue;}
+        phase='claim';check();service.ledger?.set(key,{status:'submitted',submittedAt:new Date().toISOString()});
+        try{
+          const claim=await api.claim(code);check();tasks=await api.query();check();const after=tasks.find(t=>t.taskCode===code),confirmed=after?.claimed===true;
+          if(confirmed)service.ledger?.set(key,{status:'confirmed',confirmedAt:new Date().toISOString()});
+          record({taskCode:code,status:confirmed?'claimed':'claim_unconfirmed',serverConfirmed:confirmed,credit:confirmed?Number(claim.credit??0)||0:null,energy:confirmed?Number(claim.energy??0)||0:null,alreadyClaimed:claim.already_claimed===true});
+        }catch(e){rethrowCancellation(e);record({taskCode:code,status:'claim_unconfirmed',phase,error:errorView(e),serverConfirmed:false});}
+      }catch(e){rethrowCancellation(e);record({taskCode:code,status:'task_error',phase,error:errorView(e),serverConfirmed:false});if(phase==='progress_poll'&&activeExecution)record({taskCode:code,status:'task_accounting_pending',reason:'official_progress_query_failed',execution:activeExecution,error:errorView(e),serverConfirmed:false});}
     }
     return {accountId,tasks,receipts};
   }catch(e){operationError=e;throw e;}finally{active.delete(accountId);service.ledger?.set('wb-management-task-receipts:'+accountId,receipts.slice(-200));if(tasks)saveTaskSnapshot(service,accountId,tasks,receipts.slice(-200));if(operationError)saveTaskFailure(service,accountId,operationError);}

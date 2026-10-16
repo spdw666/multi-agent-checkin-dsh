@@ -7,12 +7,14 @@ import http from 'node:http';
 import {timingSafeEqual} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {workBuddySummary,workBuddyAccountDetails,saveWorkBuddySettings,switchWorkBuddyAccount,deleteGatewayAccount} from './workbuddy-management.mjs';
+import {workBuddySummary,workBuddyAccountDetails,setWorkBuddyInference,saveWorkBuddySettings,switchWorkBuddyAccount,deleteGatewayAccount} from './workbuddy-management.mjs';
 import {markWorkBuddyStatus} from './workbuddy-status.mjs';
 import {mergeWorkBuddySessions} from './workbuddy-sessions.mjs';
 import {queryWorkBuddyTasks,runWorkBuddyTasks} from './workbuddy-tasks.mjs';
 import {startWorkBuddyLogin,pollWorkBuddyLogin,cancelWorkBuddyLogin} from './workbuddy-login.mjs';
 import {projectRoot} from './config.mjs';
+import {workBuddyRotationStatus,saveWorkBuddyRotation,evaluateWorkBuddyRotation} from './workbuddy-rotation.mjs';
+import {previewWorkBuddyImport,importWorkBuddyAccounts,exportWorkBuddyAccounts,updateWorkBuddyAccount} from './workbuddy-transfer.mjs';
 import {AppError,errorView} from './util.mjs';
 import {collectChat,validateChat} from './openai.mjs';
 import {buildActivityContext} from './activity-context.mjs';
@@ -20,6 +22,7 @@ import {relayPolicy,validateRelay} from './model-relay.mjs';
 import {freeProviderMetadata,freeProviderList,prepareFreeProviderConfig,resolveFreeCredential,freeProviderModels} from './free-providers.mjs';
 import {importedRouteId} from './model-directory.mjs';
 import {gatewayRequestTimeout} from './request-timeouts.mjs';
+import {rateLimitMetadata} from './rate-limit-metadata.mjs';
 export {gatewayRequestTimeout} from './request-timeouts.mjs';
 function equal(a,b){const x=Buffer.from(a??''),y=Buffer.from(b??'');return x.length===y.length&&timingSafeEqual(x,y);}
 function authorized(req,token){const h=req.headers.authorization;return typeof h==='string'&&h.startsWith('Bearer ')&&equal(h.slice(7),token);}
@@ -78,6 +81,16 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='GET'&&url.pathname==='/admin/activity-context')return json(res,200,buildActivityContext(service,Object.fromEntries(['range','limit','search','source','model'].map(k=>[k,url.searchParams.get(k)??undefined]))));
         if(req.method==='GET'&&url.pathname==='/admin/model-relay')return json(res,200,service.router.relay.status());
         if(req.method==='POST'&&url.pathname==='/admin/model-relay'){const b=await readBody(req);if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['enabled','reservePercent','reserveCredits','partitions'].includes(k)))throw new AppError('Invalid relay settings',400,'invalid_model_relay');return json(res,200,await withConfigMutation(service,async()=>{const value=structuredClone(service.config.value);value.modelRelay=validateRelay({...relayPolicy(value),...b});await service.config.save(value);return {saved:true,...service.router.relay.status()};}));}
+        if(req.method==='GET'&&url.pathname==='/admin/workbuddy/rotation')return json(res,200,await workBuddyRotationStatus(service));
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/rotation'){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>saveWorkBuddyRotation(service,b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/rotation/evaluate')return json(res,200,await evaluateWorkBuddyRotation(service,await readBody(req,4194304,{allowEmpty:true})));
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/accounts/import/preview')return json(res,200,await previewWorkBuddyImport(service,await readBody(req,16777216)));
+        if(req.method==='POST'&&['/admin/workbuddy/accounts/import/commit','/admin/workbuddy/accounts/import'].includes(url.pathname)){const b=await readBody(req,16777216);return json(res,200,await withConfigMutation(service,()=>importWorkBuddyAccounts(service,b)));}
+        if(req.method==='POST'&&url.pathname==='/admin/workbuddy/accounts/export')return json(res,200,await exportWorkBuddyAccounts(service,await readBody(req)));
+        const wbProfile=/^\/admin\/workbuddy\/accounts\/([^/]+)\/profile$/.exec(url.pathname);
+        if(req.method==='POST'&&wbProfile){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>updateWorkBuddyAccount(service,decodeURIComponent(wbProfile[1]),b)));}
+        const wbInference=/^\/admin\/workbuddy\/accounts\/([^/]+)\/inference$/.exec(url.pathname);
+        if(req.method==='POST'&&wbInference){const b=await readBody(req);return json(res,200,await withConfigMutation(service,()=>setWorkBuddyInference(service,decodeURIComponent(wbInference[1]),b)));}
         if(req.method==='GET'&&url.pathname==='/admin/workbuddy/summary')return json(res,200,await workBuddySummary(service,{refresh:['1','true'].includes(url.searchParams.get('refresh')),accountId:url.searchParams.get('accountId')??undefined,includeTasks:true}));
         const wbDetails=/^\/admin\/workbuddy\/accounts\/([^/]+)\/details$/.exec(url.pathname);
         if(req.method==='GET'&&wbDetails)return json(res,200,await workBuddyAccountDetails(service,decodeURIComponent(wbDetails[1]),{refresh:['1','true'].includes(url.searchParams.get('refresh'))}));
@@ -152,7 +165,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         }catch(e){if(controller.signal.aborted&&controller.signal.reason?.name==='TimeoutError')throw new AppError('Gateway request deadline exceeded',504,'request_timeout');throw e;}finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
       }
       throw new AppError('Endpoint not found',404,'not_found');
-    }catch(e){const error=errorView(e),retry=[429,503].includes(error.status)&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0?{retryAfterSeconds:e.retryAfterSeconds}:{};if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:{message:error.message,type:error.code,code:error.code,...retry,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}})}\n\n`);}else {if(retry.retryAfterSeconds!==undefined)res.setHeader('Retry-After',String(Math.ceil(retry.retryAfterSeconds)));json(res,error.status,{error:{message:error.message,type:error.code,code:error.code,...retry,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})}});}}
+    }catch(e){const error=errorView(e),retry=[429,503,504].includes(error.status)&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0&&e.retryAfterSeconds<=86400?{retryAfterSeconds:e.retryAfterSeconds}:{};const metadata=rateLimitMetadata(e);if(![429,503,504].includes(error.status)){delete metadata.retryAfterSeconds;delete metadata.retryAfterSource;}const payload={message:error.message,type:error.code,code:error.code,...retry,...metadata,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})};if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:payload})}\n\n`);}else {if(retry.retryAfterSeconds!==undefined)res.setHeader('Retry-After',String(Math.ceil(retry.retryAfterSeconds)));json(res,error.status,{error:payload});}}
   });
   server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.off('error',reject);resolve()})});

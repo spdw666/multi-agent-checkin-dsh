@@ -1,6 +1,6 @@
 {
   "name": "dsh-ai-credit-gateway",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "AI gateway: local desktop accounts, daily entitlements, selected model audits, DSH and Hermes",
   "type": "module",
   "license": "MIT",

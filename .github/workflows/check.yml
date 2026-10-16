@@ -27,3 +27,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./desktop/tests/Run-WbDetailsFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/AiCreditDesktopTests"
+      - name: Verify WB paging and operation lifecycle with synthetic accounts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./desktop/tests/Run-WbPagingFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbPagingTests"
+          ./desktop/tests/Run-WbOperationToggleFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbOperationTests"
+      - name: Verify account transfer and rotation UI with synthetic accounts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/tests/Run-WbTransferRotationFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbTransferTests"

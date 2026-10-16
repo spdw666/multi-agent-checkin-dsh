@@ -1,6 +1,7 @@
 import {randomInt} from 'node:crypto';
 import {dayIn} from './util.mjs';
 import {runAutomaticWorkBuddyTasks} from './workbuddy-management.mjs';
+import {evaluateWorkBuddyRotation} from './workbuddy-rotation.mjs';
 export function dailyPlan(now,schedule,jitter=0) {
   // Search local wall-clock minutes. This also handles DST folds/gaps on a future VPS timezone.
   const fmt=new Intl.DateTimeFormat('en-GB',{timeZone:schedule.timezone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
@@ -21,6 +22,7 @@ export class Scheduler {
       this.automaticWorkBuddyTasksAt=Date.now();
       this.track(runAutomaticWorkBuddyTasks(this.service).then(result=>{if(result.enabled)this.ledger.set('wb-automatic-tasks-last',{at:Date.now(),...result});}).catch(error=>{this.ledger.set('wb-automatic-tasks-last',{at:Date.now(),status:'error',code:error.code??'wb_auto_tasks_error'});}));
     }
+    if(this.service?.config?.value?.workbuddy?.rotation?.enabled===true){this.track(evaluateWorkBuddyRotation(this.service,{dryRun:false},{scheduled:true}).catch(error=>{this.ledger.set('wb-rotation-last-error',{at:Date.now(),code:error.code??'wb_rotation_error'});}));}
     const s=this.config.value.scheduler;if(!s.enabled)return;
     const day=dayIn(new Date(),s.timezone);const signature=JSON.stringify([s.timezone,s.hour,s.minute,s.jitterSeconds,(this.config.value.accounts??[]).map(a=>[a.id,a.enabled,a.tasks])]);let plan=this.ledger.get('schedule-plan');
     if(!plan||plan.day!==day||plan.signature!==signature){const jitter=randomInt(0,s.jitterSeconds+1);const now=new Date();

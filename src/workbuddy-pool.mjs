@@ -20,12 +20,12 @@ export class WorkBuddyPool {
   get(key){return this.ledger?.get(key)??this.memory.get(key);}
   set(key,value){if(this.ledger)this.ledger.set(key,value);else this.memory.set(key,value);}
   candidates(route,{ignoreCooldown=false,includeBlocked=false}={}) {
-    if(!route.accountPool?.enabled)return route.targets.filter(t=>{const u=(this.config.value.upstreams??[]).find(u=>u.id===t.upstreamId);return includeBlocked||u?.kind!=='workbuddy'||!isWorkBuddyBlocked(this,u.accountId);});
+    if(!route.accountPool?.enabled)return route.targets.filter(t=>{const u=(this.config.value.upstreams??[]).find(u=>u.id===t.upstreamId);if(u?.kind!=='workbuddy')return true;const a=this.config.value.accounts?.find(a=>a.id===u.accountId);return u.enabled!==false&&a?.enabled!==false&&a?.inferenceEnabled!==false&&(includeBlocked||!isWorkBuddyBlocked(this,u.accountId));});
     const base=route.targets[0],primary=this.config.value.upstreams.find(u=>u.id===base.upstreamId);
     if(primary?.kind!=='workbuddy')throw new AppError('WorkBuddy account pool requires a WorkBuddy primary target',400,'invalid_account_pool');
     const targets=route.accountPool.accountIds.map(accountId=>{
       const primaryAccount=this.config.value.accounts.find(a=>a.id===primary.accountId);
-      const account=this.config.value.accounts.find(a=>a.id===accountId&&a.enabled!==false&&a.platform==='workbuddy'&&workBuddyEdition(a)===workBuddyEdition(primaryAccount)&&(includeBlocked||!isWorkBuddyBlocked(this,a.id)));
+      const account=this.config.value.accounts.find(a=>a.id===accountId&&a.enabled!==false&&a.inferenceEnabled!==false&&a.platform==='workbuddy'&&workBuddyEdition(a)===workBuddyEdition(primaryAccount)&&(includeBlocked||!isWorkBuddyBlocked(this,a.id)));
       const u=account&&this.config.value.upstreams.find(u=>u.kind==='workbuddy'&&u.accountId===accountId&&u.enabled!==false);
       return u?{upstreamId:u.id,model:base.model,accountId}:undefined;
     }).filter(Boolean);
@@ -51,6 +51,18 @@ export class WorkBuddyPool {
   }
   revive(accountId){this.set('wb-pool-cooldown:'+accountId,{until:0,reason:'balance_restored'});}
   status(route){return {routeId:route.id,enabled:route.accountPool?.enabled===true,preferredAccountId:this.get('wb-pool-route:'+route.id)?.preferredAccountId??null,accounts:this.candidates(route,{ignoreCooldown:true,includeBlocked:true}).map(t=>{const accountId=t.accountId??this.config.value.upstreams.find(u=>u.id===t.upstreamId)?.accountId,blocked=isWorkBuddyBlocked(this,accountId);return {...t,accountId,...this.get('wb-pool-cooldown:'+accountId),banned:blocked,available:!blocked&&(this.get('wb-pool-cooldown:'+accountId)?.until??0)<=Date.now()};})};}
+}
+// Read-only participation projection. Directory cache rows in current releases
+// have neither freshness nor completeness metadata, so they are advisory only:
+// a missing cached item never becomes a new routing veto here.
+export function workBuddyParticipation(service,route){
+  const value=service.config.value,upstreams=value.upstreams??[],accounts=value.accounts??[],primary=upstreams.find(u=>u.id===route.targets[0]?.upstreamId),edition=workBuddyEdition(accounts.find(a=>a.id===primary?.accountId)),model=route.targets[0]?.model;
+  const pool=typeof service.router?.pool?.candidates==='function'?service.router.pool:new WorkBuddyPool(service.config,service.ledger);
+  const exact=t=>t.model===model&&upstreams.some(u=>u.id===t.upstreamId&&u.kind==='workbuddy'&&workBuddyEdition(accounts.find(a=>a.id===u.accountId))===edition),targets=pool.candidates(route).filter(exact);
+  const id=t=>t.accountId??upstreams.find(u=>u.id===t.upstreamId)?.accountId,unique=items=>[...new Set(items.filter(Boolean))],accountIds=unique(targets.map(id)),configuredAccountIds=unique(route.accountPool?.enabled?route.accountPool.accountIds:route.targets.filter(exact).map(id));
+  const excludedAccounts=configuredAccountIds.filter(a=>!accountIds.includes(a)).map(accountId=>{const a=accounts.find(a=>a.id===accountId),cooldown=pool.get?.('wb-pool-cooldown:'+accountId);const reason=!a?'account_missing':a.platform!=='workbuddy'?'platform_mismatch':a.enabled===false?'account_disabled':a.inferenceEnabled===false?'inference_disabled':workBuddyEdition(a)!==edition?'edition_mismatch':isWorkBuddyBlocked(service,accountId)?'account_banned':!upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===accountId&&u.enabled!==false)?'upstream_disabled_or_missing':cooldown?.until>Date.now()?'credit_cooldown':'not_selected_by_runtime';return {accountId,reason,...(reason==='credit_cooldown'?{until:cooldown.until}:{})};});
+  const evidence=targets.map(t=>{const cached=service.platforms?.catalogs?.get?.(t.upstreamId),rows=Array.isArray(cached)?cached:null,row=rows?.find(m=>m.id===t.model);return {accountId:id(t),upstreamId:t.upstreamId,model:t.model,catalog:{status:rows?row?'listed_in_cache':'not_listed_in_cache':'not_cached',freshness:'unknown',completeness:'unknown',callableDeclared:typeof row?.callable==='boolean'?row.callable:null,importableDeclared:typeof row?.importable==='boolean'?row.importable:null,generationVerified:false}};});
+  return {routeId:route.id,policy:route.accountPool?.enabled?route.accountPool.autoManaged===true?'automatic_same_edition':'explicit_members':route.accountPool?.enabled===false?'explicit_pool_off':'single_account',accountIds,configuredAccountIds,availableCount:accountIds.length,configuredCount:configuredAccountIds.length,excludedAccounts,evidence};
 }
 export async function configureWorkBuddyPool(service,{routeId,accountIds,enabled=true,cooldownSeconds=3600}) {
   const value=structuredClone(service.config.value),route=value.routes.find(r=>r.id===routeId);
