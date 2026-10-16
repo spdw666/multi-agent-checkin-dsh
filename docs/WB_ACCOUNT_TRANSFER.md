@@ -154,7 +154,7 @@ PowerShell 保存方式（从本机私密文件取管理密钥，不把结果正
 
 ```powershell
 $base = 'http://127.0.0.1:19421'
-$keys = Get-Content 'C:\Gateway\datapi-keys.json' -Raw | ConvertFrom-Json
+$keys = Get-Content 'C:\Gateway\data\api-keys.json' -Raw | ConvertFrom-Json
 $headers = @{Authorization = 'Bearer ' + $keys.adminKey}
 $body = @{accountIds=@('ACCOUNT'); format='zip'} | ConvertTo-Json
 $result = Invoke-RestMethod "$base/admin/workbuddy/accounts/export" `
