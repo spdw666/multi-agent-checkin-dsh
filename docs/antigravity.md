@@ -1,11 +1,11 @@
 # Antigravity 专用本机协议桥
 
-星桥 AI 网关通过单账号、本机运行的 CLIProxyAPI 将 Antigravity 接到 DSH 和 Hermes。它不是任意第三方中转站配置入口，也不改变 Google 对账号、模型、地区与额度的判定。
+AI网关通过单账号、本机运行的 CLIProxyAPI 将 Antigravity 接到 DSH 和 Hermes。它不是任意第三方中转站配置入口，也不改变 Google 对账号、模型、地区与额度的判定。
 
 ```text
 DSH / Hermes
     ↓ 网关推理密钥
-星桥网关 127.0.0.1:19421/v1
+AI网关 127.0.0.1:19421/v1
     ↓ 独立桥接密钥
 Antigravity 协议桥 127.0.0.1:19431/v1
     ↓ 本机保存的 OAuth + 配置的网络出口
