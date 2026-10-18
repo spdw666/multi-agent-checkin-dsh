@@ -8,7 +8,7 @@ export function gatewayRequestPolicy(runtime={},models=[]){
     const declared=m.requestTimeoutMs;
     const knownKimi=m.id==='moonshotai/kimi-k3'||/^nvidia[^/]*\/(?:moonshotai\/)?kimi-k3$/.test(m.id);
     const requested=Number.isSafeInteger(declared)&&declared>0?declared:knownKimi?600000:180000;
-    streamIdleTimeoutMs=Math.max(streamIdleTimeoutMs,Math.min(requested,600000));
+    if(Number.isSafeInteger(declared)&&declared>0||knownKimi)streamIdleTimeoutMs=Math.max(streamIdleTimeoutMs,Math.min(requested,1200000)+10000);
     // Verified relay buffering intentionally hides unsuccessful partial output.
     // Give the server's full bounded request deadline a small error-delivery
     // margin instead of mistaking that silent window for a human cancellation.

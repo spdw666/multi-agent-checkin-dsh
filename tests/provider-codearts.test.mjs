@@ -192,7 +192,7 @@ test('CodeArts models expose the official catalog with honest capacity and calla
   assert.deepEqual(rows.map(r=>r.id),['GLM-5.2','Qwen3-VL-235B','glm-5.2-sft-harmony']);
   assert.equal(rows[0].toolRoundtripVerified,true);assert.ok(rows.slice(1).every(r=>r.toolRoundtripVerified===false));
   const glm=rows[0];
-  assert.equal(glm.contextWindow,16384);assert.equal(glm.maxTokens,2048);assert.equal(glm.tools,true);assert.deepEqual(glm.toolChoiceModes,["auto","none"]);assert.equal(glm.auditToolChoice,"auto");
+  assert.equal(glm.contextWindow,524288);assert.equal(glm.maxTokens,65536);assert.equal(glm.tools,true);assert.deepEqual(glm.toolChoiceModes,["auto","none"]);assert.equal(glm.auditToolChoice,"auto");
   assert.equal(glm.callable,true);assert.equal(glm.callableReason,null);
   assert.equal(glm.enabled,true);assert.equal(glm.verification,'official_catalog');assert.equal(glm.creditRate,0.7);
   assert.equal(rows[1].multimodal,true);assert.equal(rows[1].creditRate,null);assert.equal(rows[2].enabled,false);
@@ -311,6 +311,17 @@ test('CodeArts chat signs the v2 SSE endpoint, keeps securityToken in x-auth-tok
   assert.match(chatId,/^[0-9a-f]{32}$/);
   assert.deepEqual(Object.keys(body).sort(),['chat_id','max_tokens','messages','model','prompt_cache_key','stream','temperature','tool_stream']);
   assert.equal(seen[1].body.toString('utf8').includes(SK),false);
+
+  const wide=await codeartsProvider.chat(null,CREDENTIAL,{model:'GLM-5.2',messages:[{role:'user',content:'ping'}],max_tokens:65536},undefined,
+    {fetchImpl:async(url,o)=>{seen=[url,o];return new Response('data: [DONE]\n\n')}});
+  await wide.response.text();
+  assert.equal(JSON.parse(seen[1].body.toString('utf8')).max_tokens,65536,'measured ceiling must be honoured');
+  assert.equal(wide.chatId!==undefined,true);
+  const defaulted=await codeartsProvider.chat(null,CREDENTIAL,{model:'GLM-5.2',messages:[{role:'user',content:'ping'}]},undefined,
+    {fetchImpl:async(url,o)=>{seen=[url,o];return new Response('data: [DONE]\n\n')}});
+  await defaulted.response.text();
+  assert.equal(JSON.parse(seen[1].body.toString('utf8')).max_tokens,2048,'no budget supplied must keep the conservative default');
+  await assert.rejects(codeartsProvider.chat(null,CREDENTIAL,{model:'GLM-5.2',messages:[],max_tokens:65537},undefined,{fetchImpl:async()=>new Response('data: [DONE]\n\n')}),e=>e.code==='max_tokens_invalid');
 
   const deterministic=await codeartsProvider.chat(null,CREDENTIAL,{model:'GLM-5.2',messages:[{role:'user',content:'ping'}]},undefined,
     {fetchImpl:async(url,o)=>{seen=[url,o];return new Response('data: [DONE]\n\n')}});

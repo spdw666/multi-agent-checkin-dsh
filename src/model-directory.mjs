@@ -1,6 +1,6 @@
 import {AppError,errorView,hash} from './util.mjs';
 import {syncWorkBuddyPools} from './workbuddy-management.mjs';
-export const platformNames={qoder:'Qoder',codebuddy:'CodeBuddy',workbuddyai:'WorkBuddy AI',cline:'Cline',codearts:'CodeArts Agent',lobster:'LobsterAI',raccoon:'商汤小浣熊',loomy:'Loomy'};
+export const platformNames={qoder:'Qoder',codebuddy:'CodeBuddy',workbuddyai:'WorkBuddy AI',cline:'Cline',codearts:'CodeArts Agent',lobster:'LobsterAI',raccoon:'商汤小浣熊',loomy:'Loomy',opencode:'OpenCode Zen'};
 export function importedRouteId(upstreamId,modelId){
  const raw=upstreamId+'/'+modelId;
  if(/^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,127}$/.test(raw)&&!raw.includes('..'))return raw;
@@ -19,7 +19,12 @@ export async function modelDirectory(service,{refresh=false}={}) {
   const providers=await Promise.all(value.upstreams.filter(u=>u.enabled!==false||targets.has(u.id)).map(async u=>{
     const configured=targets.get(u.id)??new Map();let catalog=[],error;
     if(u.enabled!==false)try{catalog=await service.platforms.models(u.id,{refresh});}catch(e){error=errorView(e);}
-    const models=catalog.map(m=>({...m,audit:audit?.results?.find(r=>r.upstreamId===u.id&&r.model===m.id),imported:configured.has(m.id),importedRouteIds:[...(configured.get(m.id)??[])]}));
+    const models=catalog.map(m=>{
+      const tested=audit?.results?.find(r=>r.upstreamId===u.id&&r.model===m.id);
+      const chatVerified=tested?.status==='partial'&&tested.capabilityStatus==='chat_only'&&
+        ['ordinary','stream'].every(stage=>tested.tests?.some(t=>t.stage===stage&&t.ok===true));
+      return {...m,...(chatVerified?{status:'chat_verified'}:{}),audit:tested,imported:configured.has(m.id),importedRouteIds:[...(configured.get(m.id)??[])]};
+    });
     for(const [id,ids]of configured)if(!catalog.some(m=>m.id===id))models.push({id,name:id,source:'configured_route',catalogStatus:u.enabled===false?'upstream_disabled':error?'unavailable':'missing',callable:false,importable:false,imported:true,importedRouteIds:[...ids],unavailableReason:u.enabled===false?'上游已停用；仅保留配置，可取消导入':error?'实时目录获取失败；仅保留配置，可取消导入':'实时目录未提供此模型；仅保留配置，可取消导入'});
     return {...u,models,...(error?{error}:{})};
   }));

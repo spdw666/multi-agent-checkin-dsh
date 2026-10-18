@@ -27,14 +27,16 @@ test('Qoder402 falls to official same-model BigModel and no-tier to tier is real
  const f=fixture(),r={...request(),reasoning_effort:'low',extra_body:{reasoning_effort:null,thinking_config:{thinking_budget:2},vendor_keep:9}};f.platforms.chat=async(t,body)=>{f.calls.push({target:t,request:body});if(t.upstreamId==='q')throw new AppError('credits exhausted',402,'credits_exhausted');return {response:new Response(JSON.stringify({choices:[{message:{content:'SAME_MODEL'},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}})}};
  const result=await collectChat(f.router.chat(r));assert.equal(result.model,routeId);assert.equal(result.choices[0].message.content,'SAME_MODEL');assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['q','w']);assert.equal(f.calls[0].request.reasoning_effort,undefined);assert.equal(f.calls[1].request.reasoning_effort,'max');assert.equal(f.calls[1].request.extra_body.thinking_config,undefined);assert.equal(f.calls[1].request.extra_body.vendor_keep,9);assert.deepEqual(f.calls[1].request.messages,r.messages);assert.deepEqual(f.calls[1].request.tools,r.tools);assert.equal(f.calls[1].request.max_tokens,32768);assert.equal(f.config.value.routes[0].targets[0].upstreamId,'q');
 });
-test('official hard output cap still rejects without shrinking requested budget',async()=>{
+test('official hard output cap skips the final target without rewriting the submitted budget',async()=>{
  const f=fixture();f.catalogs.q[0].maxTokensSource='official_catalog';f.catalogs.q[0].maxTokens=1024;f.config.value.routes[1].enabled=false;
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.code==='relay_capacity_incompatible'&&e.status===400);assert.equal(f.calls.length,0);assert.equal(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}),null);
+ const raw=request(),before=structuredClone(raw);await assert.rejects(collectChat(f.router.chat(raw)),e=>e.status===503&&e.code==='same_model_unavailable'&&e.relayFailure.last.code==='relay_capacity_incompatible'&&e.relayFailure.skippedCount===1&&e.relayFailure.attemptCount===0);
+ assert.equal(f.calls.length,0);assert.deepEqual(raw,before);assert.equal(raw.max_tokens,32768);assert.equal(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}),null);
 });
-test('a capacity rejection on one request never cools a viable smaller request',async()=>{
+test('a skipped excessive budget never cools a viable subsequent smaller request',async()=>{
  const f=fixture();f.catalogs.q[0].maxTokensSource='official_catalog';f.config.value.routes[1].enabled=false;
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.code==='relay_capacity_incompatible');
- const result=await collectChat(f.router.chat({...request(),max_tokens:512}));assert.equal(result.choices[0].message.content,'OK');assert.equal(f.calls.length,1);
+ const raw=request(),before=structuredClone(raw);await assert.rejects(collectChat(f.router.chat(raw)),e=>e.status===503&&e.relayFailure.attemptCount===0);
+ const result=await collectChat(f.router.chat({...request(),max_tokens:512}));assert.equal(result.choices[0].message.content,'OK');assert.equal(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}),null);
+ assert.deepEqual(raw,before);assert.equal(f.calls.length,1);assert.equal(f.calls[0].request.max_tokens,512);
 });
 test('legacy capability cooldown is ignored but true429 credit and auth cooldowns stay',async()=>{
  const f=fixture(),t={upstreamId:'q',model:'gmodel'},key='relay-cooldown:q\0gmodel';f.router.relay.set(key,{until:Date.now()+60000,reasonCode:'capability_unavailable'});
@@ -43,7 +45,7 @@ test('legacy capability cooldown is ignored but true429 credit and auth cooldown
 });
 test('tools incompatibility does not cool plain requests for the same supplier',async()=>{
  const f=fixture();f.catalogs.q[0].tools=false;f.config.value.routes[1].enabled=false;
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.code==='tools_not_supported');
+ await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===503&&e.code==='same_model_unavailable'&&e.relayFailure.last.code==='tools_not_supported');
  const r=request();delete r.tools;assert.equal((await collectChat(f.router.chat(r))).choices[0].message.content,'OK');
 });
 test('all actual cooldowns give truthful503 and nearest finite retry deadline',async()=>{
@@ -96,12 +98,12 @@ test('zero cash and unknown or stale credit balances are not considered generati
 
 for(const [status,code] of [[429,'rate_limited'],[504,'relay_target_timeout'],[402,'credits_exhausted']])test(`supplier ${status} followed by last tools mismatch preserves supplier failure, not caller400`,async()=>{
  const f=fixture();f.catalogs.w[0].tools=false;f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('SAMPLE_SUPPLIER_FAILURE',status,code)};
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===(status===429?429:503)&&e.code===(status===429?'same_model_rate_limited':'same_model_unavailable')&&Number.isFinite(e.retryAfterSeconds)&&!e.message.includes('WorkBuddy'));
+ await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===status&&e.code===(status===429?'same_model_rate_limited':code)&&e.relayFailure.root.status===status&&e.relayFailure.last.code==='tools_not_supported'&&Number.isFinite(e.retryAfterSeconds)&&!e.message.includes('WorkBuddy'));
  assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['q']);assert.equal(f.router.relay.cooldown({upstreamId:'w',model:glm}),null);assert.ok(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}));
 });
-test('all suppliers capability-only mismatches retain caller400 with no outage cooldown',async()=>{
+test('all suppliers capability-only mismatches are a no-eligible503 without caller400 or outage cooldown',async()=>{
  const f=fixture();f.catalogs.q[0].tools=false;f.catalogs.w[0].tools=false;
- await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===400&&e.code==='tools_not_supported');assert.equal(f.calls.length,0);assert.equal(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}),null);assert.equal(f.router.relay.cooldown({upstreamId:'w',model:glm}),null);
+ await assert.rejects(collectChat(f.router.chat(request())),e=>e.status===503&&e.code==='same_model_unavailable'&&e.relayFailure.last.code==='tools_not_supported'&&e.relayFailure.attemptCount===0&&e.relayFailure.skippedCount===2);assert.equal(f.calls.length,0);assert.equal(f.router.relay.cooldown({upstreamId:'q',model:'gmodel'}),null);assert.equal(f.router.relay.cooldown({upstreamId:'w',model:glm}),null);
 });
 test('unrelated invalid request remains400 and never tries standby',async()=>{
  const f=fixture();f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('SAMPLE_INVALID_REQUEST',400,'invalid_request')};

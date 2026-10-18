@@ -476,8 +476,8 @@ export async function codeartsModels(credential, {limit = 500, ...options} = {})
       name: typeof row?.model_name === 'string' && row.model_name ? row.model_name : id,
       // The upstream catalog carries NO context/output fields (verified: the raw row set has no
       // length keys); GLM uses conservative configured limits, other capacities remain null.
-      contextWindow: id === 'GLM-5.2' ? 16384 : null, contextWindowSource: id === 'GLM-5.2' ? 'configured_limit' : 'not_published_by_catalog', officialContextWindow: null,
-      maxTokens: id === 'GLM-5.2' ? 2048 : null, maxTokensSource: id === 'GLM-5.2' ? 'configured_limit' : 'not_published_by_catalog', officialMaxTokens: null,
+      contextWindow: id === 'GLM-5.2' ? 524288 : null, contextWindowSource: id === 'GLM-5.2' ? 'configured_limit' : 'not_published_by_catalog', officialContextWindow: null,
+      maxTokens: id === 'GLM-5.2' ? 65536 : null, maxTokensSource: id === 'GLM-5.2' ? 'configured_limit' : 'not_published_by_catalog', officialMaxTokens: null,
       tools: toolsVerified,
       toolsSource: toolsVerified ? 'live_tool_calls_verified' : 'unproven',
       toolChoiceModes: ['auto','none'], auditToolChoice: 'auto', toolRoundtripVerified: id === 'GLM-5.2',
@@ -573,7 +573,7 @@ export function buildCodeArtsChatBody(input, model, chatId) {
   if(choice==='none') delete body.tools;
   else if(choice==='auto') body.tool_choice='auto';
   if (Array.isArray(body.tools) && body.tools.length === 0) delete body.tools;
-  body.max_tokens = desktopCompletionLimit(input, 2048);
+  body.max_tokens = desktopCompletionLimit(input, 65536, 2048);
   return body;
 }
 

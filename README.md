@@ -1,12 +1,14 @@
 <h1 align="center">AI积分网关</h1>
 
+反代稳定性与错误排查：见 [请求能力、重试和期限说明](docs/reliability.md)、[Windows 运行时与流清理](docs/runtime-reliability.md)，以及 [Hermes 接入](docs/hermes.md)。
 <p align="center">
   <b>桌面账号、每日权益、详细 WB 帐号池与统一模型入口</b><br>
   Windows 原生桌面 · Node.js 本机服务 · OpenAI 兼容 API · DSH · Hermes
 </p>
 
 <p align="center">
-  <a href="package.json"><img alt="Node.js 24+" src="https://img.shields.io/badge/Node.js-24%2B-339933?logo=nodedotjs&logoColor=white"></a>
+  <a href="package.json"><img alt="Node.js 22.23.3+" src="https://img.shields.io/badge/Node.js-%3E%3D22.23.3-339933?logo=nodedotjs&logoColor=white"></a>
+  <a href="package.json"><img alt="Gateway 0.6.0" src="https://img.shields.io/badge/Gateway-0.6.0-blue"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
 </p>
@@ -27,12 +29,13 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 - [产品定位与架构](#产品定位与架构)
 - [快速开始](#快速开始)
 - [Windows 原生桌面](#windows-原生桌面)
-- [七个页面](#七个页面)
+- [八个页面](#八个页面)
 - [wb帐号池详解](#wb帐号池详解)
 - [账号导入、导出与整理](#账号导入导出与整理)
 - [账号自动轮换](#账号自动轮换)
 - [同模型自动接力](#同模型自动接力)
 - [支持的平台与能力边界](#支持的平台与能力边界)
+- [OpenCode 免费模型接入](#opencode-免费模型接入)
 - [OpenAI 兼容客户端接入](#openai-兼容客户端接入)
 - [DSH 与 Hermes 接入](#dsh-与-hermes-接入)
 - [上下文、工具、推理与超时](#上下文工具推理与超时)
@@ -57,7 +60,9 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 | 从账号备份迁入 WB | **wb帐号池 → 导入账号** | 先预览 UID/版本/重复项，再看新增、替换、跳过回执 |
 | 备份 WB 登录快照 | **wb帐号池 → 导出账号**，或每号 **更多操作 → 导出此号** | 保存到你选的文件；这与模型页的“导出”不同 |
 | 把模型交给 DSH/Hermes | **模型路由 → 全部模型 / 选择导入** | 保存后回到主列表，并在调用端刷新模型列表 |
-| 只测试几款模型 | 主列表勾选 **选测**，点 **测试选中模型** | 普通、流式、工具和回传四项结果及失败原因 |
+| 只测试几款模型 | 主列表勾选 **选测**，点 **测试选中模型**；未导入条目用 `scope:models` 管理 API | 普通、流式、工具和回传四项结果及失败原因；测试不自动导入 |
+| 使用 OpenCode 免费模型 | [OpenCode 接入步骤](#opencode-免费模型接入) | 官方本机服务、最近普通/SSE 结果及文本桥接边界 |
+| 检查官方客户端版本或打开软件 | **软件更新 → 刷新 / 立即检查**；双击或右键对应行 | 来源、最后检查时间、缓存与待重启说明；检查不安装更新 |
 | 暂时不发布一款模型 | 模型页取消导入，或 **导出选中模型** | 路由从主列表和 `/v1/models` 隐藏，配置与历史保留 |
 | WB 某账号不再消耗积分 | 浏览该账号，点 **停用该账号** | 显示积分调用已停用；自动签到和任务开关不变 |
 | 运行 WB 已接入的真实任务 | 账号 **积分任务 → 执行可自动任务** | 后台阶段和逐项回执；最终以官方达标、已领取状态为准 |
@@ -128,7 +133,7 @@ DSH / Hermes / 其他客户端 ─ apiKey ─ /v1
 
 | 路径 | 内容 |
 |---|---|
-| `desktop/AiCreditDesktop.cs` | Windows WinForms 桌面源码、七页导航与 WB 详情 |
+| `desktop/AiCreditDesktop.cs` | Windows WinForms 桌面源码、八页导航与 WB 详情 |
 | `desktop/build.ps1` | Windows 本机编译入口 |
 | `bin/ai-credit.mjs` | CLI 与前台/后台服务入口 |
 | `src/` | 服务、路由、适配器、任务、账号池与会话迁移 |
@@ -162,7 +167,7 @@ DSH / Hermes / 其他客户端 ─ apiKey ─ /v1
 
 ### 环境
 
-- Node.js **24+**：服务使用内置 SQLite；npm 构建使用 esbuild。
+- Node.js **最低 22.23.3**：以 `package.json` 的 `engines.node` 为准；服务使用内置 SQLite，npm 构建使用 esbuild。**Windows 推荐配套已验证的官方 22.23.3 LTS**，不是将任意较新大版本视为已验运行时。自然退出与流清理口径见 [运行时说明](docs/runtime-reliability.md)。
 - Git：拉取源码与更新。
 - Windows 原生界面另需本机 C# 编译环境，由 `desktop/build.ps1` 检测。
 - 使用桌面账号的平台先在官方客户端登录；各平台地区、套餐、目录与能力并不相同。
@@ -211,7 +216,7 @@ node bin/ai-credit.mjs records --config C:\Gateway\config.local.json
 
 ### 浏览器管理页与登录后自启
 
-原生桌面之外，CLI 也保留浏览器基础管理页，包含账号与领取、模型与路由、领取记录、配置四区。它连接同一后台，不会另建一套账号或路由；原生七页和 WB 高级任务窗口仍在 Windows 桌面使用。打开浏览器管理页前，需要服务已经启动：
+原生桌面之外，CLI 也保留浏览器基础管理页，包含账号与领取、模型与路由、领取记录、配置四区。它连接同一后台，不会另建一套账号或路由；原生八页和 WB 高级任务窗口仍在 Windows 桌面使用。打开浏览器管理页前，需要服务已经启动：
 
 ```powershell
 node bin/ai-credit.mjs ui --config C:\Gateway\config.local.json
@@ -268,7 +273,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 
 窗口隐藏后暂停界面轮询与动效，后台排程不依赖窗口可见。需要停止 WB 某个批次时，先用任务窗口的停止按钮；“关闭任务窗口”只结束该窗口等待。不要把暂停整个后台当作单账号停用。
 
-## 七个页面
+## 八个页面
 
 | 页面 | 用途 | 关键语义 |
 |---|---|---|
@@ -279,6 +284,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 | 偏好设置 | 每日排程、随机延迟与后台偏好 | 保存配置不等于官方任务已完成 |
 | 活动洞察 | 请求、上下文组成、供给尝试与原因 | 字符估算不冒充官方 Token，只观察本网关流量 |
 | wb帐号池 | 身份、封禁、积分包、完整任务与会话管理 | 封禁、认证失效、停用账号仍保留展示 |
+| 软件更新 | 官方客户端版本监测、启动入口与桌面快捷方式 | 区分缓存、检查失败及待重启；不下载、不安装客户端更新 |
 
 “积分总览”排除 WB 是展示分工，不是从配置、账本或管理 API 删除 WB。管理工具需要全部平台时仍可使用原有未筛选余额接口。
 
@@ -323,7 +329,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 
 体检状态可为全部通过、部分通过、待复测、当前通道未提供或失败。悬停状态列查看原因和时间。普通回答通过不代表工具结果回传也通过；体检为被测供给独立记录，接力成功不替代原供给通过。
 
-要调整优先级，选路由后点 **编辑所选路由**，按想要的顺序排列 `targets` 数组并保存，前面的目标先尝试。表格按列排序只是查看方式，不是保存后的供给优先级；界面没有单独的上移/下移按钮。WB 的 **WorkBuddy账号池** 入口另管理该路由的成员与优先账号，手动池策略会保留。
+**目录里还没导入的型号也能定向核验**：管理 API 接受 `{"scope":"models","items":[{"upstreamId":"SAMPLE","model":"SAMPLE"}]}`，按上游与模型精确选择，不先启用路由、不自动更改导入选择。主列表的“测试选中模型”仍按已启用 `routeIds` 选择。执行中两种精确选择均返回 `409 audit_in_progress`，避免测试集合被悄悄换掉；完整校验、轮询与历史保留规则见 [模型体检 API](docs/api.md#7-模型体检post-adminmodel-tests)。
+
+目录中的 **“对话已验证”**（`chat_verified`）表示最近保存记录的普通与 SSE 均通过、工具未声明；它不是“四项全部通过”，也不是图片或外部工具能力证明。失败阶段、最新时间与先前尝试仍可查，历史通过不保证当前可用。
+
+要调整优先级，选路由后点 **编辑所选路由**，按想要的顺序排列 `targets` 数组并保存，前面的目标先尝试。表格按列排序只是查看方式，不是保存后的供给优先级；界面没有单独的上移/下移按钮。WB 的 **WorkBuddy账号池** 入口另管理该路由的成员与优先账号：池里保存的成员顺序就是优先次序，保存后仍会继续接纳同版新账号，不需要每加一个号就回来重勾一遍。唯一例外是把整个池关掉，那是有意停用，不会被自动打开。
 
 **导出选中模型**的确认框会列出要停用的路由。此处“导出”不是下载文件，也不会删除账号、登录态、目标或历史。恢复时在全部模型窗口重新勾选。账号 JSON/ZIP 备份请到 WB 页操作。
 
@@ -341,7 +351,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 
 ### 6. 活动洞察：定位一次请求的供给与接力原因
 
-选择近 24 小时或 7 天，按来源、模型和文字筛选，再打开时间轴中的记录。可以看到本网关的请求、成功/失败、已返回 Token、输入组成估算，以及供给尝试和接力原因。
+选择 **近 24 小时、近 7 天、近 30 天或累计全部**，按来源、模型和文字筛选，再打开时间轴中的记录。可以看到本网关的请求终局、实际尝试、候选跳过、生成派发、已返回 Token、输入组成估算与接力原因。“累计全部”仍受本机实际保存范围和接口扫描上限约束，查看覆盖提示，不当作全平台全历史。
+
+Token 使用 **K/M/B/T** 短级制（如 `540.6M`）；字符数、请求数与 Token 各有口径，不因为格式缩短而混成同一种数据。`skippedCandidates` 是本地候选跳过，`attempts` 是实际候选尝试，`dispatches` 包含有界传输恢复的实际派发；跳过候选不计成真实上游失败。
 
 例如客户端仍显示原模型 ID，但实际由另一个同款账号回答，可以在这里核对供给变化。活动记录中的工具名和文件操作分类说明请求携带了什么，不证明客户端真正执行过工具。本网关之外的调用不在这里。
 
@@ -352,6 +364,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 宽窗口分栏展示身份资料、登录与封禁、积分包和任务；窄窗口用资料页签。长内容通过“资料 N/M”继续翻看，不需要把十几个账号挤在同一长列表。底部保留切换、积分任务、启停、删除及更多操作。
 
 先查看“积分剩余 / 总额”和数据时间，再操作具体账号。顶部“模型”可展开 WB 聚合型号；查看型号数量不等于每个账号都已通过该型号生成。详细操作见下节。
+
+### 8. 软件更新：查版本、打开客户端、保留状态来源
+
+进入 **软件更新**，先看“最后检查”与“来源”。**刷新**只读取后端保存的上次报告；**立即检查**才向对应官方来源重新核对。同一服务已有检查运行时共用该次任务，不并发重复启动。自动检查默认每 24 小时一次，周期可配置；后台关闭期间不会补造已执行记录。
+
+逐行区分“有新版本”“已是最新”“本地较新”“未检测到”“检查失败”与停用状态。客户端下载已就绪但尚未重启时，说明列标记 **已下载就绪，重启客户端后生效**（`pendingRestart:true`）；这不是当前进程已经运行新版本的证明。旧缓存、读取到的新版本目录与运行中进程各有自己的时间点。
+
+双击行或点 **打开所选** 启动对应客户端；右键可打开安装目录、官网、查看检测详情、复制路径、创建单个/全部桌面快捷方式。快捷方式只是入口，不安装软件。监测本身 **不下载、不安装** 更新，也不结束正在进行的客户端任务；收到新版本后按官方客户端流程升级。已实现接口与后续自动安装调研见 [客户端版本监测](docs/client-updates.md)。
 
 ## wb帐号池详解
 
@@ -493,7 +513,7 @@ POST /admin/workbuddy/task-jobs/JOB_ID/cancel
 }
 ```
 
-身份按**版本 + UID**去重，默认跳过已有；显式替换只更新对应主体的已保存凭据，不覆盖原账号 ID、显示名、备注、整体启用、积分调用开关、任务和路由策略。已有自动维护池可以加入同版新账号，手动池与停用路由保持原样。新增账号按保存回执建立，不用文件内任意路径决定本机落盘位置。
+身份按**版本 + UID**去重，默认跳过已有；显式替换只更新对应主体的已保存凭据，不覆盖原账号 ID、显示名、备注、整体启用、积分调用开关、任务和路由策略。导入的账号会自动加入所有开启中的同版账号池，明确关闭的池与停用路由保持原样。新增账号按保存回执建立，不用文件内任意路径决定本机落盘位置。
 
 ### 导出与本地整理
 
@@ -573,11 +593,15 @@ CLI 检测到心跳新鲜的会话或明确运行进程时推迟，不关闭用�
 
 额度低/耗尽、限流、认证拒绝、目录缺失和通道故障分别分类。候选需满足实际上下文、工具、图片与输出能力；能力不兼容不应写成硬额度耗尽。主供应能力广播与备用筛选分开，备用窗口较小不应压低主供应声明。
 
-直接 SSE 已交付内容后不重放请求。接力模式采用有界完整响应缓冲，所以首批可见输出可能晚于上游首包；正文、推理和工具增量刷新进度计时。取消优先，已交付后不重放。见 [接力说明](docs/model-relay.md) 与 [API 契约](docs/api.md)。
+直接 SSE 已交付内容后不重放请求。接力模式采用有界完整响应缓冲，所以首批可见输出可能晚于上游首包；正文、推理和工具增量刷新进度计时。取消优先，已交付后不重放。
+
+**单一重试所有权**：网关在本次总期限内管理候选接力与有依据的恢复；配套 DSH/Hermes 适配收到 `gatewayManagedRetry` 标记的终局错误后，不再从头执行整个池。Hermes 还需核对其实际流式执行点适配版本，单填 Provider 配置不代替该项集成。`relayFailure.root` 保留原供给 typed 根因，`last`、`skippedCount` 与 `attemptCount` 说明后续经过；后备容量错误不覆盖原认证、限流或上游故障。HTTP 429 / `6004` 长窗口限流与积分余额分开。
+
+活动详情将候选跳过、真实派发、传输恢复与最终请求结果分开显示，不用“跳过了多个候选”冒充“上游失败了多次”。见 [可靠性契约](docs/reliability.md)、[接力说明](docs/model-relay.md) 与 [API 契约](docs/api.md)。
 
 ## 支持的平台与能力边界
 
-16 种专用上游适配如下；`freeapi` 另用于固定官方平台注册表，不接受任意中转站 URL。
+17 种专用上游适配如下；`freeapi` 另用于固定官方平台注册表，不接受任意中转站 URL。
 
 | 平台 | 类型 | 平台 | 类型 |
 |---|---|---|---|
@@ -589,6 +613,7 @@ CLI 检测到心跳新鲜的会话或明确运行进程时推迟，不关闭用�
 | 智谱 BigModel 官方 API | `bigmodel` | LobsterAI | `lobster` |
 | Antigravity 本机桥 | `antigravity` | 小浣熊 Raccoon | `raccoon` |
 | NVIDIA NIM 官方 API | `nvidia` | Loomy | `loomy` |
+| OpenCode Zen 免费文本桥 | `opencode` | — | — |
 
 “适配已实现”不等于每个账号、地区、模型、套餐和工具组合都通过真实调用；登录、目录、余额、签到、推理、工具与流式分别核验。
 
@@ -607,6 +632,22 @@ CLI 检测到心跳新鲜的会话或明确运行进程时推迟，不关闭用�
 提交时会核对本次目录和选择的模型，保存账号隔离的私有凭据文件，普通配置只保留引用。然后检查返回状态：Key 已录入、目录验证通过、真实聊天成功是三个不同结果。鉴权拒绝、网络失败或缺少凭据的账号保留待配置/停用状态，不显示为已连通。
 
 “免费平台”清单说明已有注册适配、接入条件与来源，不承诺你已获得当前免费资格，也不代表每个平台都有自动签到。先看所选平台说明、额度单位和模型目录，再决定是否导入；不接收任意第三方中转站 URL。详见 [直接 API Key 录入](docs/free-provider-key.md)。
+
+## OpenCode 免费模型接入
+
+OpenCode 走 **已安装的官方 CLI / 本机服务**，不是把桌面 OAuth 令牌直接发往公共免费推理 URL。网关读取官方服务状态并验证认证后的本机 API；服务未就绪时调用官方 `service start`，重新发现端口后再调用。首次官方登录仍需在 OpenCode 完成。免费目录从官方本机服务实时读取，仅选择 `providerID:opencode` 的 `-free` 条目，模型下线或改名按本轮目录处理。
+
+1. **安装并登录 OpenCode 官方桌面版。** 保留其登录数据库与本机服务配置；当前自动冷启动使用 Windows 标准安装位置的 `opencode-cli.exe`。
+2. **保存 OpenCode 账号与上游。** 使用 `opencode` 类型和本机回环地址，凭据读取本机登录态；字段片段与路径含义见 [详细接入文档](docs/opencode.md)。
+3. **打开全部模型目录，先核验再按需导入。** 目录出现、余额有值和模型调用成功是不同结果。未导入模型可用 `scope:models` 精确测试，不为体检擅自改变导入开关。
+4. **普通与 SSE 都看最新记录。** OpenCode 每个体检阶段有界 120 秒；超时或上游错误保留具体阶段和原因。“对话已验证”只代表普通 + SSE 通过且工具未声明。
+5. **客户端从最小纯文本请求开始。** 当前桥接只接单条 `user` 字符串消息；不要附显式输出预算、采样参数或外部工具/图片。需要完整历史、工具或预算的原始请求保持原样，由兼容同款供应处理或返回 typed 不兼容结果，不静默删字段制造成功。
+
+OpenCode 当前声明 `tools:false`、`multimodal:false`，不把官方 Agent 自带工具等同于调用端工具透传。SSE 是官方完整回答组装后再映射为单块输出及 `[DONE]`，不是逐 Token 原生直通；等待首块要同时核对客户端与网关总期限。
+
+**可选专用连接**：上游可通过 `networkProfile` 引用本机私有配置，按需启动独立连接进程与独立官方服务；它不改变用户全局代理、官方共享服务配置或其他客户端网络。未设置时沿用默认官方服务发现路径，不把专用连接当作默认必装组件。凭据、节点配置与完整控制口令只留本机；示例和错误分层见 [OpenCode 免费文本桥](docs/opencode.md)。
+
+免费请求剩余数是本机数据库用量结合社区日上限估算，**不是官方实时剩余 API**；Zen 付费余额单独展示。官方免费资格、限流和可用性以实际回执为准，不把估算次数当成成功承诺。
 
 ## OpenAI 兼容客户端接入
 
@@ -648,7 +689,7 @@ $env:AI_CREDIT_NODE = (Get-Command node).Source
 node scripts/install-dsh.mjs --config C:\Gateway\config.local.json
 ```
 
-脚本定位 Desktop CLI，备份实际 `desktop` profile，添加 bundle 并同步代码，记录在数据目录 `dsh-install/`。不自动重启 DSH；worker 用独立 Node 24，不将 Electron 当 Node。
+脚本定位 Desktop CLI，备份实际 `desktop` profile，添加 bundle 并同步代码，记录在数据目录 `dsh-install/`。不自动重启 DSH；worker 使用独立 Node，Windows 推荐已验证的 22.23.3，不将 Electron 当 Node，也不改 DSH 宿主的运行时。
 
 peers 范围见 [package.json](package.json)，安装/回滚见 [DSH](docs/dsh.md)，预算与重试见 [DSH 请求策略](docs/dsh-request-policy.md)。保留已有 profile、默认模型与其他插件。
 
@@ -673,6 +714,8 @@ providers:
 `discover_models:true` 获取启用路由。示例 `extra_body.reasoning_effort:null` 清除 Hermes 统一档位，由网关/上游默认处理，不等于逐平台透传全部菜单档位。显式档位需核对最终序列化请求，避免 `extra_body` 覆盖预期值。Hermes 无需 DSH 插件。见 [Hermes 配置/回滚](docs/hermes.md)。
 
 接入后先刷新 Hermes 模型目录，选择完整路由 ID，完成普通回答和本地工具闭环。保留原默认 Provider，确认新入口可用后再按你的偏好切默认；无需为了接网关删除已有直连账号。
+
+Hermes 模型菜单的 `WB国内 / WB国际 / OpenCode` 等**显示前缀**属于可选配套 UI 补丁，不是所有 Hermes 安装默认已有；适用版本、原文件校验和安装/回滚见 [配套补丁说明](integrations/hermes/ui-model-prefix.md)。前缀只帮助识别入口，不修改真实模型 ID、默认 Provider 或供给证明；同一显示名经哪一个账号/平台回答，仍查网关活动里的实际供给。
 
 ## 上下文、工具、推理与超时
 
@@ -709,7 +752,7 @@ providers:
 | 网关 HTTP | `server.requestTimeoutMs` 或精确路由 `modelRequestTimeouts` |
 | 供给有效进展 | 默认约 30 秒无进展超时，正文/推理/工具增量刷新计时 |
 
-HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较晚不等于上游没进展；延长客户端超时不会修复认证、能力或额度错误。
+HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较晚不等于上游没进展；OpenCode 这类完整回答桥自身有 120 秒生成期限；若启用接力，还要遵守供给无进展与剩余总预算，不能把桥接期限当成客户端和各层预算均已自动延长。连接/TLS、响应头、首个语义输出、持续生成空闲和整轮截止分别判断，SSE 心跳不等于生成进展。延长客户端超时不会修复认证、能力或额度错误，接力共用剩余总预算。详见 [可靠性说明](docs/reliability.md)。
 
 ```json
 {
@@ -777,7 +820,7 @@ HTTP 默认 180000ms，允许 1000–1200000ms。接力缓冲时可见首包较�
 
 ### 加一个 WB 账号，不改现有模型选择
 
-添加登录、保存当前客户端账号或导入备份 → 核对版本/UID → 刷新身份与积分 → 修改名称/备注。自动维护池可接纳同版新号；手动成员、关闭的池和停用路由保持原样。需要新模型时再显式导入，不把账号添加当成已经发布模型。
+添加登录、保存当前客户端账号或导入备份 → 核对版本/UID → 刷新身份与积分 → 修改名称/备注。所有开启中的同版账号池都会自动接纳新号，既有成员的先后次序保留；明确关闭的池和停用路由保持原样。需要新模型时再显式导入，不把账号添加当成已经发布模型。
 
 ### 一个模型不稳定，只做定向排查
 
@@ -999,7 +1042,9 @@ node --test tests/http.test.mjs
 | [WB 轮换](docs/WB_ROTATION.md) | 到期/顺序策略、目标、CLI 存活门控与故障 |
 | [workbuddy-switch 功能对照](docs/WB_SWITCH_COMPARISON.md) | 固定来源、能力矩阵、复用与独立实现选择 |
 | [API](docs/api.md) / [用量](docs/usage.md) | 管理契约、状态、分页与记账 |
-| [同模型接力](docs/model-relay.md) | 候选、缓冲、活动与免费平台 |
+| [同模型接力](docs/model-relay.md) / [可靠性契约](docs/reliability.md) | 候选跳过、真实尝试、单一重试所有权、typed 根因与期限 |
+| [Windows 运行时与流清理](docs/runtime-reliability.md) | 最低 Node 22.23.3、已验运行时与自然退出验证 |
+| [OpenCode 免费文本桥](docs/opencode.md) | 官方 CLI 冷启动、实时免费目录、可选专用连接与纯文本契约 |
 | [DSH](docs/dsh.md) / [请求策略](docs/dsh-request-policy.md) | bundle、profile、预算与回滚 |
 | [Hermes](docs/hermes.md) / [OpenAI 客户端](docs/openai-clients.md) | Provider、helper 与接入 |
 | [FleshOut](docs/fleshout-sync.md) | 同步、整库备份与冲突检测 |
@@ -1009,7 +1054,7 @@ node --test tests/http.test.mjs
 | [BigModel](docs/bigmodel.md) / [免费平台](docs/free-providers.md) | 资源包与固定官方平台 |
 | [直接填写 API Key](docs/free-provider-key.md) / [思考档位转换](docs/relay-reasoning.md) | 本机私有凭据保存、旧文件兼容与实际目标最高档 |
 | [归属](docs/provider-attributions.md) / [第三方声明](THIRD_PARTY_NOTICES.md) | 固定来源与复用边界 |
-| [客户端更新调研](docs/client-updates.md) | 调研不等于已实现自动升级 |
+| [客户端版本监测](docs/client-updates.md) | 已实装监测/缓存/待重启、快捷方式与未启用的自动安装调研 |
 
 ## 许可与致谢
 
@@ -1032,7 +1077,7 @@ node --test tests/http.test.mjs
 | [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | 官方目录/Mavis/Matrix 核对，独立统一映射 |
 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | bundle / Provider / PiAiAdapter 契约 |
 | [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) | 独立 Antigravity 本机桥，不打包 |
-| [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 独立调用端互操作，未打包其实现 |
+| [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) | 可选执行点适配与 UI 差异补丁，保留 MIT；不打包完整客户端/用户数据 |
 | [hucuyuu/zhipu-balance](https://github.com/hucuyuu/zhipu-balance) | 智谱余额端点线索 |
 | [cmochance/codex-app-transfer](https://github.com/cmochance/codex-app-transfer) / [0xgetz/minimax-agent-automation](https://github.com/0xgetz/minimax-agent-automation) | 目录/持久化登录观察，未纳入批量注册 |
 | [jsongo/buddy-proxy](https://github.com/jsongo/buddy-proxy) | Qoder COSY 签名/信封/端点移植，完整许可 |

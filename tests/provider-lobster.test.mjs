@@ -13,6 +13,7 @@ import {
   lobsterClaimCheckin, lobsterHealth, lobsterChat, lobsterFetch, sseErrorOf, transformSse,
   LOBSTER_SERVER_ORIGIN,
 } from '../src/provider-lobster.mjs';
+import {desktopCompletionLimit} from '../src/provider-sse.mjs';
 
 // ------------------------------------------------------------------ helpers
 
@@ -194,7 +195,7 @@ test('models: official context kept; configured output flagged (no fake official
   assert.equal(models.length, 3);
   const flash = models.find(m => m.id === 'deepseek-flash');
   assert.equal(flash.contextWindow, 1000000);
-  assert.equal(flash.maxTokens, 4096);
+  assert.equal(flash.maxTokens, 65536);
   assert.equal(flash.maxTokensSource, 'configured_default');
   assert.equal(flash.officialMaxTokens, null);
   assert.equal(flash.callable, true);
@@ -478,6 +479,29 @@ test('chat: tool definitions pass through unchanged for live validation',async()
  let seen;const tools=[{type:'function',function:{name:'fixture',parameters:{type:'object',properties:{}}}}];
  const {response}=await lobsterChat(null,SECRET_CRED,{model:'deepseek-flash',messages:[],tools,stream:true},undefined,{fetchImpl:async(u,o)=>{seen=JSON.parse(o.body);return new Response('data: [DONE]\n\n');}});
  await response.text();assert.deepEqual(seen.tools,tools);
+});
+
+test('desktopCompletionLimit: cap is a ceiling, fallback is only the no-budget default', () => {
+  assert.equal(desktopCompletionLimit({}, 65536, 4096), 4096);
+  assert.equal(desktopCompletionLimit({max_tokens: 65536}, 65536, 4096), 65536);
+  assert.equal(desktopCompletionLimit({max_completion_tokens: 32768}, 65536, 4096), 32768);
+  assert.equal(desktopCompletionLimit({}, 4096), 4096); // two-argument callers keep the old contract
+  assert.throws(() => desktopCompletionLimit({max_tokens: 65537}, 65536, 4096), e => e.code === 'max_tokens_invalid' && e.status === 400);
+  assert.throws(() => desktopCompletionLimit({max_tokens: 4097}, 4096), e => e.code === 'max_tokens_invalid');
+  assert.throws(() => desktopCompletionLimit({max_tokens: 8, max_completion_tokens: 9}, 65536, 4096), e => e.code === 'max_tokens_conflict');
+});
+
+test('chat: an explicit 65536 budget reaches the wire instead of failing the gateway cap', async () => {
+  let sent;
+  const {response} = await lobsterChat(null, SECRET_CRED, {model: 'deepseek-flash', messages: [{role: 'user', content: 'x'}], max_tokens: 65536}, undefined,
+    {fetchImpl: async (url, init) => { sent = JSON.parse(init.body); return new Response('data: [DONE]\n\n'); }});
+  await response.text();
+  assert.equal(sent.max_tokens, 65536);
+  let defaulted;
+  const again = await lobsterChat(null, SECRET_CRED, {model: 'deepseek-flash', messages: [{role: 'user', content: 'x'}]}, undefined,
+    {fetchImpl: async (url, init) => { defaulted = JSON.parse(init.body); return new Response('data: [DONE]\n\n'); }});
+  await again.response.text();
+  assert.equal(defaulted.max_tokens, 4096, 'no budget supplied must keep the conservative default');
 });
 
 test('chat: missing model and missing fetch are rejected before any network', async () => {

@@ -60,7 +60,7 @@ linguo2625469/workbuddy2api-panel，MIT，commit d66384d9e3d69655f799d7d8f2e5fba
 ## Antigravity 独立协议桥与 Hermes 接入
 
 - [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)：MIT。Antigravity 接入使用独立安装的 CLIProxyAPI 本机进程处理其上游认证及协议转换；本网关的 `src/antigravity.mjs` 为独立实现的本地 HTTP 适配器，不是其 Go 源码移植。本仓库不分发该桥的源码、二进制、配置或凭据；单独部署桥时保留上游发行包中的完整许可证。安装说明见 [docs/antigravity.md](docs/antigravity.md)。
-- [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)：作为独立调用端进行互操作接入，参考其自定义 Provider、模型发现、凭据 helper 与工具调用契约。本仓库提供配置说明及独立的本机密钥读取 helper，不复制或打包 Hermes Agent 实现。配置说明见 [docs/hermes.md](docs/hermes.md)。
+- [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)：作为独立调用端进行互操作接入。除配置说明与独立密钥helper外，本仓库还提供可选的单文件执行点派生适配（integrations/hermes/native-patch/agent/chat_completion_helpers.py）及Desktop显示层差异补丁。参考源码提交 d923a5eb487a17c0a68801bba9ef0f56c81040a8；原Copyright (c) 2025 Nous Research，MIT完整文本保留于 [LICENSE.hermes-agent](integrations/hermes/LICENSE.hermes-agent)。改动限于AI网关终局错误的重试归属及网关模型来源标签，不打包完整Hermes客户端或用户配置/聊天数据；源码版本和基线SHA不符时先合并适配，不覆盖整棵客户端源码。配置说明见 [docs/hermes.md](docs/hermes.md)。
 
 以上“独立组件 / 协议参考”与本文件所列 vendor 代码复用分开记录；仅做可行性调研、尚未接入的服务不列为已集成组件。
 

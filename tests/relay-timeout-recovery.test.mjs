@@ -172,7 +172,7 @@ test('retry exclusions: an official HTTP504 response is not relabeled as a local
   const f=fixture(),normal=f.platforms.chat,raw=request();
   f.platforms.chat=async(t,r,s)=>{if(t.upstreamId==='primary'){logCall(f,t,r,s);throw new AppError('Official HTTP 504 upstream response',504,'upstream_http_error');}return normal(t,r,s);};
   await collectChat(f.router.chat(raw));assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['primary','standby']);
-  const row=f.router.relay.cooldown({upstreamId:'primary',model});assert.ok(row.until>Date.now()+50000);assert.equal(row.errorCode,undefined);
+  const row=f.router.relay.cooldown({upstreamId:'primary',model});assert.ok(row.until>Date.now()+14000&&row.until<=Date.now()+15100);assert.equal(row.errorCode,undefined);
 });
 
 test('zero balance: exhausted primary is never retried or revived by timeout recovery',async()=>{

@@ -1,5 +1,5 @@
 import https from 'node:https';
-import {Readable,PassThrough} from 'node:stream';
+import {Readable} from 'node:stream';
 import {AppError} from './util.mjs';
 const agents=new Map();
 const hosts=new Set(['www.workbuddy.ai','www.codebuddy.ai','www.codebuddy.cn','copilot.tencent.com','openapi.qoder.sh','openapi.qoder.com.cn','api2.qoder.sh','api3.qoder.sh','gateway.qoder.com.cn']);
@@ -14,19 +14,21 @@ export function providerFetch(url,{method='GET',headers={},body,signal,proxyUrl,
   // healthy TLS connection may need much longer to produce its first header.
   const effectiveSignal=signal??AbortSignal.timeout(requestTimeoutMs);
   return new Promise((resolve,reject)=>{
-    let phase='connect',settled=false,finished=false,req,res,socket,timer,bodyStream;
+    let phase='connect',settled=false,finished=false,req,res,socket,timer,lastFailure=null;
     const socketConnect=()=>{phase=socket.encrypted?'tls_handshake':'response_header';if(!socket.encrypted)beginHeaders();};
     const socketSecure=()=>beginHeaders();
     const cleanup=()=>{clearTimeout(timer);effectiveSignal.removeEventListener('abort',abort);socket?.removeListener('connect',socketConnect);socket?.removeListener('secureConnect',socketSecure);res?.setTimeout(0);};
     const fail=(cause,timeoutOrigin)=>{
-      if(finished)return;finished=true;cleanup();
+      if(finished)return null;finished=true;cleanup();
       const timedOut=!!timeoutOrigin||effectiveSignal.reason?.name==='TimeoutError';
-      const error=new AppError(timedOut?'平台官方连接超时':effectiveSignal.aborted?'平台请求已取消':'平台官方连接失败',timedOut?504:effectiveSignal.aborted?499:503,timedOut?'provider_timeout':effectiveSignal.aborted?'request_cancelled':'provider_network_error');
+      const error=new AppError(timedOut?'平台官方连接超时':effectiveSignal.aborted?'平台请求已取消':'平台官方连接失败',timedOut?504:effectiveSignal.aborted?499:503,timedOut?'provider_timeout':effectiveSignal.aborted?'request_cancelled':'provider_network_error');lastFailure=error;
       error.networkPhase=phase;
       error.transportCode=transportCodes.has(cause?.code)?cause.code:null;
       if(timedOut)error.timeoutOrigin=timeoutOrigin??'request_deadline';
-      if(!settled){settled=true;reject(error);}else bodyStream?.destroy(error);
+      if(!settled){settled=true;reject(error);}
+      // Destroying res also ends the Response body bridged in responseHandler.
       res?.destroy();req?.destroy();
+      return error;
     };
     const abort=()=>fail({code:'ABORT_ERR'});
     const deadline=(ms,origin)=>{clearTimeout(timer);timer=setTimeout(()=>fail({code:'ETIMEDOUT'},origin),ms);timer.unref?.();};
@@ -42,15 +44,28 @@ export function providerFetch(url,{method='GET',headers={},body,signal,proxyUrl,
       res.once('close',()=>{if(!finished)fail({code:'ECONNRESET'});});
       try{
         const empty=[204,205,304].includes(res.statusCode);
-        if(!empty){
-          // Isolate body errors so an abort/reset after successful response
-          // headers retains the same bounded, secret-free transport metadata.
-          bodyStream=new PassThrough();
-          bodyStream.once('close',()=>{if(!finished){finished=true;cleanup();res.destroy();req.destroy();}});
-        }
-        const value=new Response(empty?null:Readable.toWeb(bodyStream),{status:res.statusCode,headers:res.headers});
-        settled=true;resolve(value);if(empty)res.resume();else res.pipe(bodyStream);
-      }catch{finished=true;cleanup();bodyStream?.destroy();res.destroy();req.destroy();reject(new AppError('平台响应协议异常',502,'provider_invalid_response'));}
+        // Bridge the socket with an explicit reader instead of piping through a
+        // PassThrough. Piping let upstream bytes reach a web controller the consumer
+        // had already closed; that threw ERR_INVALID_STATE from PassThrough.onData and
+        // killed the whole gateway process. Pull-driven reading also lets a transport
+        // failure surface as the same bounded AppError the header stage reports.
+        const reader=empty?null:res[Symbol.asyncIterator]();
+        const value=new Response(empty?null:new ReadableStream({
+          async pull(controller){
+            try{
+              const step=await reader.next();
+              if(step.done){controller.close();return}
+              controller.enqueue(new Uint8Array(step.value));
+            }catch(cause){
+              // fail() already mapped this transport cause; reuse that view.
+              const mapped=lastFailure??fail(cause)??cause;
+              try{controller.error(mapped)}catch{}
+            }
+          },
+          cancel(){if(!finished){finished=true;cleanup()}res.destroy();req.destroy();}
+        }),{status:res.statusCode,headers:res.headers});
+        settled=true;resolve(value);if(empty)res.resume();
+      }catch{finished=true;cleanup();res.destroy();req.destroy();reject(new AppError('平台响应协议异常',502,'provider_invalid_response'));}
     })}catch(cause){fail(cause);return}
     deadline(20000,'connect_deadline');
     req.on('socket',activeSocket=>{

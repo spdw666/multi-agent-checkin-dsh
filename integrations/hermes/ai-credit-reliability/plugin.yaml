@@ -1,0 +1,6 @@
+name: ai-credit-reliability
+version: 1.0.0
+description: "AI credit gateway owns bounded relay recovery; stop duplicate Hermes pool replays."
+author: "AI Credit Gateway"
+provides_hooks:
+  - transform_api_error_classification

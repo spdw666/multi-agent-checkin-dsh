@@ -96,8 +96,12 @@ export async function importWorkBuddyAccounts(service,body){
     writes.push({id,file,snapshot,original:await bytesIfExists(file)});accounts.push({index:r.index,accountId:id,status:prior?'replaced':'imported',label:redact(account.label??id)});
   }
   if(!writes.length)return {saved:true,imported,replaced,skipped,accounts,backupId:null,tokenReturned:false,desktopLoginChanged:false,routesEnabledChanged:false};
-  // Only explicitly auto-managed pools may acquire newly imported members.
-  const legacyPools=new Map(value.routes.filter(r=>!r.accountPool||r.accountPool.autoManaged!==true).map(r=>[r.id,structuredClone(r.accountPool)]));syncWorkBuddyPools(value);for(const r of value.routes)if(legacyPools.has(r.id)){const p=legacyPools.get(r.id);if(p===undefined)delete r.accountPool;else r.accountPool=p;}
+  // Imported accounts join every pool that is not explicitly switched off.
+  // A route with no pool at all keeps its single-account policy until someone
+  // imports a model for it; an explicit off is a deliberate stop.
+  const singleAccount=new Set(value.routes.filter(r=>!r.accountPool).map(r=>r.id));
+  syncWorkBuddyPools(value);
+  for(const r of value.routes)if(singleAccount.has(r.id))delete r.accountPool;
   const backupId=Date.now()+'-'+randomUUID(),backup=join(service.config.dataDir,'account-transfer-backups',backupId),configOriginal=service.config.file?await bytesIfExists(service.config.file):null;
   await mkdir(backup,{recursive:true,mode:0o700});await atomicJson(join(backup,'manifest.json'),{schemaVersion:1,createdAt:new Date().toISOString(),operation:'workbuddy_import',config:before,files:writes.map((w,i)=>({accountId:w.id,originalExisted:!!w.original,backup:w.original?i+'.bin':null}))});
   for(let i=0;i<writes.length;i++)if(writes[i].original)await writeFile(join(backup,i+'.bin'),writes[i].original,{mode:0o600});

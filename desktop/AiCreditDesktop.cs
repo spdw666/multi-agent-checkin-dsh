@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -278,7 +278,10 @@ namespace AiCreditDesktop {
         internal PageDeck(){DoubleBuffered=true;transition=new SurfaceTransition(this);}
         internal SurfaceTransition Transition {get{return transition;}}
         internal void AddPage(Panel page){Panels.Add(page);page.Dock=DockStyle.Fill;Controls.Add(page);page.Visible=Panels.Count-1==selected;}
-        internal int SelectedIndex {get{return selected;}set{if(value<0||value>=Panels.Count)return;bool changed=selected!=value;if(changed)transition.Capture(Panels[selected]);selected=value;for(int i=0;i<Panels.Count;i++)Panels[i].Visible=i==value;Panels[value].BringToFront();if(changed)transition.Play(Panels[value]);if(SelectedIndexChanged!=null)SelectedIndexChanged(this,EventArgs.Empty);}}
+        // Visibility is switched before the transition runs. When the snapshot
+        // capture threw, the old code left every page visible, so a page that had
+        // crashed stayed painted underneath the newly selected one.
+        internal int SelectedIndex {get{return selected;}set{if(value<0||value>=Panels.Count)return;bool changed=selected!=value;if(changed){try{transition.Capture(Panels[selected]);}catch{}}selected=value;for(int i=0;i<Panels.Count;i++)Panels[i].Visible=i==value;Panels[value].BringToFront();if(changed){try{transition.Play(Panels[value]);}catch{}}if(SelectedIndexChanged!=null)SelectedIndexChanged(this,EventArgs.Empty);}}
         protected override void Dispose(bool disposing){if(disposing)transition.Dispose();base.Dispose(disposing);}
     }
     internal sealed class SnapshotOverlay : Panel {
@@ -404,7 +407,7 @@ namespace AiCreditDesktop {
             new KeyValuePair<string,string>("免费聊天目录",Count(models,"freeChatCount","待同步")+" 个"),
             new KeyValuePair<string,string>("公示速率 / 日上限","最高 "+rpm+" RPM / "+Count(policy,"publishedDailyRequests",Count(quota,"dailyLimit","待同步"))+" 次"),
             new KeyValuePair<string,string>("今日本机请求",Count(usage,"success","—")+" 成功 / "+Count(usage,"failed","—")+" 失败"),
-            new KeyValuePair<string,string>("今日本机 Token",Count(usage,"totalTokens","待记录")),
+            new KeyValuePair<string,string>("今日本机 Token",ActivityData.ShortText(Count(usage,"totalTokens","待记录"))),
             new KeyValuePair<string,string>("限流恢复",Cooldown(a,now))};}
         internal static string CompactSummary(IDictionary<string,object> a){return "免费开发访问 · 动态限流；"+DecisionStatus(a)+"；"+string.Join("；",CompactRows(a,DateTimeOffset.UtcNow).Select(row=>row.Key+"："+row.Value))+"；本网关用量不代表官方剩余额度；积分余额不适用（官方已取消积分制）";}
         internal static string DecisionSummary(IDictionary<string,object> a){return "免费开发访问 · 动态限流；"+DecisionStatus(a)+"；"+string.Join("；",DecisionRows(a,DateTimeOffset.UtcNow).Select(row=>row.Key+"："+row.Value))+"；本网关用量不代表官方剩余额度；积分余额不适用（官方已取消积分制）";}
@@ -580,7 +583,7 @@ namespace AiCreditDesktop {
                 packagePage.Text="官方限额";packages.Rows.Clear();var published=NvidiaPresentation.Object(state,"policy");packages.Rows.Add("官方公示速率","最高 "+NvidiaPresentation.Count(published,"publishedRpm","待同步")+" RPM","NVIDIA Build 通用公示","非账号实时剩余",LocalTime(Json.Get(published,"rateFetchedAt")));packages.Rows.Add("官方公示日请求上限",NvidiaPresentation.Count(published,"publishedDailyRequests","待同步")+" 次","NVIDIA Build 通用公示","可因模型 / 流量调整",LocalTime(Json.Get(published,"rateFetchedAt")));packages.Rows.Add("积分余额","不适用","官方已取消积分制","免费开发访问","—");foreach(var row in NvidiaPresentation.Rows(a).Skip(2))packages.Rows.Add(row.Key,row.Value,NvidiaPresentation.Source(a),"动态限流",LocalTime(Json.Get(NvidiaPresentation.Quota(a),"observedAt")));
                 var decisionPage=new TabPage("决策状态");var decision=Theme.Grid("项目","值","口径");decision.DefaultCellStyle.WrapMode=DataGridViewTriState.True;decision.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.AllCells;var quotaObject=NvidiaPresentation.Quota(a);foreach(var row in NvidiaPresentation.DecisionRows(a,DateTimeOffset.UtcNow))decision.Rows.Add(row.Key,row.Value,"决策摘要 · 主卡只显示关键量");foreach(var row in NvidiaPresentation.Rows(a)){bool already=false;foreach(DataGridViewRow existing in decision.Rows)if(Convert.ToString(existing.Cells[0].Value)==row.Key)already=true;if(!already)decision.Rows.Add(row.Key,row.Value,NvidiaPresentation.Source(a));}decision.Rows.Add("限流状态",NvidiaPresentation.Cooldown(a,DateTimeOffset.UtcNow),"官方动态限流");decision.Rows.Add("额度观测时间",NvidiaPresentation.LocalStamp(quotaObject,"observedAt"),NvidiaPresentation.Source(a));decision.Rows.Add("未返回字段",Json.Get(quotaObject,"requestLimit","").Length==0?"响应头窗口上限未返回，保持未知而非 0":"已返回","错误/未知保持原样");decisionPage.Controls.Add(decision);decisionPage.Controls.Add(new Label{Dock=DockStyle.Top,Height=52,ForeColor=Theme.Muted,Text="主卡是等高紧凑视图；这里是完整字段。缺失或错误字段保持未知/错误，不补造数值。"});tabs.TabPages.Add(decisionPage);
                 var policy=NvidiaPresentation.Object(state,"policy");string sourceUrl=Json.Get(policy,"rateSourceUrl",Json.Get(policy,"sourceUrl"));Uri uri;if(Uri.TryCreate(sourceUrl,UriKind.Absolute,out uri)&&uri.Scheme=="https"&&((uri.Host=="nvidia.com"||uri.Host.EndsWith(".nvidia.com")))){var link=new LinkLabel{Dock=DockStyle.Bottom,Height=30,Text=Json.Get(policy,"sourceLabel","NVIDIA 官方额度说明")};link.LinkClicked+=(sender,args)=>Process.Start(new ProcessStartInfo(uri.AbsoluteUri){UseShellExecute=true});packagePage.Controls.Add(link);}
-                balancePage.Text="本网关用量";balancePage.Controls.Clear();var usage=Theme.Grid("指标","记录值","统计口径");string scope=Json.Get(local,"date","待记录")+" / "+Json.Get(local,"timeZone","本机时区");foreach(var pair in new[]{new[]{"请求数","requests"},new[]{"成功","success"},new[]{"失败","failed"},new[]{"输入 Token","inputTokens"},new[]{"输出 Token","outputTokens"},new[]{"总 Token","totalTokens"},new[]{"未返回 Token 的请求","unknownTokenRequests"}})usage.Rows.Add(pair[0],NvidiaPresentation.Count(local,pair[1],"待记录"),scope+" · 网关账本");usage.Rows.Add("认证历史",object.Equals(auth.ContainsKey("everAuthenticated")?auth["everAuthenticated"]:false,true)?"曾成功调用":"尚无成功记录","目录刷新不清除成功历史");usage.Rows.Add("最近成功",NvidiaPresentation.LocalStamp(auth,"lastSuccessAt"),"本网关调用记录");usage.Rows.Add("最近失败",NvidiaPresentation.LocalStamp(auth,"lastFailureAt"),Json.Get(auth,"lastFailureCode")+" "+Json.Get(auth,"lastFailureMessage"));usage.Rows.Add("本机并发上限",NvidiaPresentation.Count(settings,"maxConcurrent","未设置"),"仅限当前网关进程，非官方限额");usage.Rows.Add("本机请求间隔",NvidiaPresentation.Count(settings,"minIntervalMs","未设置")+" 毫秒","仅限当前网关进程，非官方限额");balancePage.Controls.Add(usage);balancePage.Controls.Add(new Label{Dock=DockStyle.Top,Height=55,ForeColor=Theme.Muted,Text="仅统计经过本网关的请求与 Token；不代表官方剩余额度，也不包括绕过本网关的调用。"});
+                balancePage.Text="本网关用量";balancePage.Controls.Clear();var usage=Theme.Grid("指标","记录值","统计口径");string scope=Json.Get(local,"date","待记录")+" / "+Json.Get(local,"timeZone","本机时区");foreach(var pair in new[]{new[]{"请求数","requests"},new[]{"成功","success"},new[]{"失败","failed"},new[]{"输入 Token","inputTokens"},new[]{"输出 Token","outputTokens"},new[]{"总 Token","totalTokens"},new[]{"未返回 Token 的请求","unknownTokenRequests"}})usage.Rows.Add(pair[0],pair[0].Contains("Token")?ActivityData.ShortText(NvidiaPresentation.Count(local,pair[1],"待记录")):NvidiaPresentation.Count(local,pair[1],"待记录"),scope+" · 网关账本");usage.Rows.Add("认证历史",object.Equals(auth.ContainsKey("everAuthenticated")?auth["everAuthenticated"]:false,true)?"曾成功调用":"尚无成功记录","目录刷新不清除成功历史");usage.Rows.Add("最近成功",NvidiaPresentation.LocalStamp(auth,"lastSuccessAt"),"本网关调用记录");usage.Rows.Add("最近失败",NvidiaPresentation.LocalStamp(auth,"lastFailureAt"),Json.Get(auth,"lastFailureCode")+" "+Json.Get(auth,"lastFailureMessage"));usage.Rows.Add("本机并发上限",NvidiaPresentation.Count(settings,"maxConcurrent","未设置"),"仅限当前网关进程，非官方限额");usage.Rows.Add("本机请求间隔",NvidiaPresentation.Count(settings,"minIntervalMs","未设置")+" 毫秒","仅限当前网关进程，非官方限额");balancePage.Controls.Add(usage);balancePage.Controls.Add(new Label{Dock=DockStyle.Top,Height=55,ForeColor=Theme.Muted,Text="仅统计经过本网关的请求与 Token；不代表官方剩余额度，也不包括绕过本网关的调用。"});
                 var modelsPage=new TabPage("逐模型状态");var models=Theme.Grid("模型 ID","类型","状态","最近成功","最近失败 / 原因");models.DefaultCellStyle.WrapMode=DataGridViewTriState.True;models.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.AllCells;foreach(var m in Json.Rows(modelState,"items"))models.Rows.Add(Json.Get(m,"id",Json.Get(m,"model")),NvidiaPresentation.ModelCategory(m),NvidiaPresentation.ModelStatus(m),NvidiaPresentation.LocalStamp(m,"lastSuccessAt"),NvidiaPresentation.LocalStamp(m,"lastFailureAt")+" / "+Json.Get(m,"reason",Json.Get(NvidiaPresentation.Object(m,"audit"),"reason")));if(models.Rows.Count==0)models.Rows.Add("尚未同步模型目录","—","待核验","—","刷新目录后查看；目录发现不等于通过调用测试");modelsPage.Controls.Add(models);modelsPage.Controls.Add(new Label{Dock=DockStyle.Top,Height=55,ForeColor=Theme.Muted,Text="聊天模型可批量选择导入待核验；非聊天类型保留在目录，使用对应专用 API。一次超时不等于永久失效。"});tabs.TabPages.Add(modelsPage);usagePage.Text="本网关调用明细";tabs.SelectedTab=balancePage;
             }
             Controls.Add(tabs);Controls.Add(title);more.Enabled=false;refresh.Click+=async(s,e)=>await LoadUsage(false);more.Click+=async(s,e)=>await LoadUsage(true);export.Click+=(s,e)=>Export();
@@ -643,10 +646,10 @@ namespace AiCreditDesktop {
             var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = UiMetrics.Footer, Padding = new Padding(24,6,20,0), BackColor = Theme.Background };
             AddButton(bar,"启动后台",async()=>{backendPaused=false;await Backend.Connect(true);await LoadAll();});AddButton(bar,"暂停后台",async()=>{await Backend.Request("POST","/admin/shutdown",new object());backendPaused=true;status.Text="后台已暂停 · 自动重连已停止";});bar.Controls.Add(status);
             body.Controls.Add(tabs);body.Controls.Add(bar);body.Controls.Add(head);
-            BuildOverview();BuildAccounts();BuildRoutes();BuildRecords();BuildConfig();BuildActivity();BuildWorkBuddy();
-            var links=new FlowLayoutPanel {Location=new Point(14,122),Width=196,Height=400,Padding=new Padding(0),FlowDirection=FlowDirection.TopDown,WrapContents=false,BackColor=Color.Transparent};rail.Controls.Add(links);
-            string[] titles={"积分总览","账号管理","模型路由","领取记录","偏好设置","活动洞察","wb帐号池"};string[] subtitles={"查看平台余额，管理每日领取。","维护本机登录态与账号领取规则。","手动指定模型，按优先级配置回退。","查询领取结果与失败原因。","设置每日时间、随机延迟与平台开关。","查看本网关请求、上下文组成与接力原因。","多账号常驻登录、聊天迁移与积分任务。"};
-            for(int i=0;i<titles.Length;i++){int index=i;var nav=new StudioButton {Text=titles[i],Navigation=true,Glyph=i,Selected=i==0,Width=196,Height=44,Margin=new Padding(0,0,0,8),AccessibleName=titles[i]};nav.Click+=async(sender,e)=>{tabs.SelectedIndex=index;if(index==3&&Backend!=null&&Backend.BaseUrl!=null)try{await LoadRecords();}catch(Exception x){ShowError(x);}if(index==5&&Backend!=null&&Backend.BaseUrl!=null)await activityBoard.LoadAsync();if(index==6&&Backend!=null&&Backend.BaseUrl!=null)try{await wbBoard.LoadAsync();}catch(Exception x){ShowError(x);}};navigation.Add(nav);links.Controls.Add(nav);}
+            BuildOverview();BuildAccounts();BuildRoutes();BuildRecords();BuildConfig();BuildActivity();BuildWorkBuddy();BuildClientUpdates();
+            var links=new FlowLayoutPanel {Location=new Point(14,122),Width=196,Height=440,Padding=new Padding(0),FlowDirection=FlowDirection.TopDown,WrapContents=false,BackColor=Color.Transparent};rail.Controls.Add(links);
+            string[] titles={"积分总览","账号管理","模型路由","领取记录","偏好设置","活动洞察","wb帐号池","软件更新"};string[] subtitles={"查看平台余额，管理每日领取。","维护本机登录态与账号领取规则。","手动指定模型，按优先级配置回退。","查询领取结果与失败原因。","设置每日时间、随机延迟与平台开关。","查看本网关请求、上下文组成与接力原因。","多账号常驻登录、聊天迁移与积分任务。","每天检查被反代的客户端是否有新版本。"};
+            for(int i=0;i<titles.Length;i++){int index=i;var nav=new StudioButton {Text=titles[i],Navigation=true,Glyph=i,Selected=i==0,Width=196,Height=44,Margin=new Padding(0,0,0,8),AccessibleName=titles[i]};nav.Click+=async(sender,e)=>{tabs.SelectedIndex=index;if(index==3&&Backend!=null&&Backend.BaseUrl!=null)try{await LoadRecords();}catch(Exception x){ShowError(x);}if(index==5&&Backend!=null&&Backend.BaseUrl!=null)await activityBoard.LoadAsync();if(index==6&&Backend!=null&&Backend.BaseUrl!=null)try{await wbBoard.LoadAsync();}catch(Exception x){ShowError(x);}if(index==7&&Backend!=null&&Backend.BaseUrl!=null)try{await clientUpdatesBoard.LoadAsync();}catch(Exception x){ShowError(x);}};navigation.Add(nav);links.Controls.Add(nav);}
             tabs.SelectedIndexChanged+=(sender,e)=>{for(int i=0;i<navigation.Count;i++){navigation[i].Selected=i==tabs.SelectedIndex;navigation[i].Invalidate();}pageTitle.Text=titles[tabs.SelectedIndex];pageSubtitle.Text=subtitles[tabs.SelectedIndex];};tabs.SelectedIndex=0;
             var menu = new ContextMenuStrip(); menu.Items.Add("打开主窗口", null, (s, e) => Restore()); menu.Items.Add("退出窗口，后台继续", null, (s, e) => { quit = true; Close(); });
             menu.Items.Add("停止后台并退出", null, async (s, e) => { try { await Backend.Request("POST", "/admin/shutdown", new object()); quit = true; Close(); } catch (Exception x) { ShowError(x); } });
@@ -669,6 +672,7 @@ namespace AiCreditDesktop {
                     else if(tabs.SelectedIndex==2)await LoadAuditStatuses();
                     else if(tabs.SelectedIndex==5)await activityBoard.LoadAsync();
                     else if(tabs.SelectedIndex==6)await wbBoard.LoadAsync();
+                    else if(tabs.SelectedIndex==7)await clientUpdatesBoard.LoadAsync();
                     reconnectFailures=0;refreshTimer.Interval=30000;
                 } catch(Exception x){recover=true;reconnectFailures++;status.Text="连接检查中 · 第 "+reconnectFailures+" 次 · "+x.Message;}
                 if(recover&&!backendPaused){
@@ -693,6 +697,8 @@ namespace AiCreditDesktop {
         internal async Task TestOperationLifecycle(){await Run(()=>Task.FromResult(0));if(busy!=0||status.Text.StartsWith("正在处理"))throw new Exception("Busy lifecycle did not complete");await Run(()=>{throw new Exception("FIXTURE_FAILURE");});if(busy!=0||!status.Text.StartsWith("操作失败"))throw new Exception("Failure status lost");await Run(()=>Task.FromResult(0));}
         private void ShowError(Exception e) { status.Text = "操作失败：" + e.Message; details.Text = e.Message; }
         private WbPoolBoard wbBoard;
+        private ClientUpdatesBoard clientUpdatesBoard;
+        private void BuildClientUpdates(){var p=Page("软件更新");p.Padding=Padding.Empty;clientUpdatesBoard=new ClientUpdatesBoard(Backend){Dock=DockStyle.Fill};p.Controls.Add(clientUpdatesBoard);}
         private void BuildWorkBuddy(){var p=Page("wb帐号池");p.Padding=Padding.Empty;wbBoard=new WbPoolBoard(Backend,LoadAll){Dock=DockStyle.Fill};p.Controls.Add(wbBoard);}
         private void BuildActivity(){var p=Page("活动洞察");p.Padding=Padding.Empty;activityBoard=new ActivityBoard(Backend){Dock=DockStyle.Fill};p.Controls.Add(activityBoard);}
         private void BuildOverview() { var p = Page("积分中心"); p.Controls.Add(overviewHost); overviewHost.Controls.Add(creditCards); overviewHost.Controls.Add(summary); creditCards.SizeChanged += (s,e) => ResizeCards(); overviewHost.ScrollMoved += (s,e) => RememberAnchor(); }
@@ -721,7 +727,7 @@ namespace AiCreditDesktop {
         private async Task LoadBalances(bool force=false) {
             var result=await Backend.Request("GET","/admin/balances"+(force?"?refresh=1":""));string snapshot=Json.Text(result);if(!force&&snapshot==lastBalances){foreach(Control card in creditCards.Controls)card.Invalidate();return;}
             if(!force)RememberAnchor();else anchor=CaptureAnchor();
-            lastBalances=snapshot;var data=Json.Rows(result,"accounts").Where(a=>WbPoolUi.ShowInOverview(a)).ToArray();
+            lastBalances=snapshot;var data=Json.Rows(result,"accounts").Where(a=>WbPoolUi.ShowInOverview(a)).OrderBy(a=>Json.Get(a,"platform")=="opencode"?0:1).ToArray();
             // 数组项复用：同 accountId 的卡片就地更新内容，避免重建丢失滚动位置与焦点。
             bool reuse=data.Length==creditCards.Controls.Count;
             if(reuse)foreach(var a in data){if(!creditCards.Controls.Cast<CreditCard>().Any(c=>c.AccountKey==Json.Get(a,"accountId",Json.Get(a,"label","card")))){reuse=false;break;}}
@@ -1066,6 +1072,30 @@ namespace AiCreditDesktop {
             if (Math.Abs(value - Math.Round(value)) < 0.0001) return ((long)Math.Round(value)).ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
             return value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         }
+        // Token 等大数字用美式短级制（K=千、M=百万、B=十亿、T=万亿），省横向位置。
+        internal static string Shorten(double value) {
+            double abs = Math.Abs(value);
+            double scaled = value;
+            string suffix = string.Empty;
+            if (abs >= 1e12) { scaled = value / 1e12; suffix = "T"; }
+            else if (abs >= 1e9) { scaled = value / 1e9; suffix = "B"; }
+            else if (abs >= 1e6) { scaled = value / 1e6; suffix = "M"; }
+            else if (abs >= 1e3) { scaled = value / 1e3; suffix = "K"; }
+            else return value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+            return scaled.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + suffix;
+        }
+        internal static string Tokens(IDictionary<string, object> o, string key) {
+            if (o == null || !o.ContainsKey(key) || o[key] == null) return "未返回";
+            string raw = Convert.ToString(o[key], System.Globalization.CultureInfo.InvariantCulture);
+            if (string.IsNullOrEmpty(raw)) return "未返回";
+            double value;
+            if (!double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out value)) return raw;
+            return Shorten(value);
+        }
+        internal static string ShortText(string raw) {
+            double value;
+            return double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out value) ? Shorten(value) : raw;
+        }
         internal static int Int(IDictionary<string, object> o, string key, int fallback) {
             if (o == null || !o.ContainsKey(key) || o[key] == null) return fallback;
             double value;
@@ -1112,6 +1142,8 @@ namespace AiCreditDesktop {
         private readonly FlowLayoutPanel toolbar;
         private readonly Button rangeDay;
         private readonly Button rangeWeek;
+        private readonly Button rangeMonth;
+        private readonly Button rangeAll;
         private readonly TextBox search;
         private readonly ComboBox sourceBox;
         private readonly ComboBox modelBox;
@@ -1140,6 +1172,8 @@ namespace AiCreditDesktop {
             toolbar = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, BackColor = Color.Transparent, Margin = Padding.Empty };
             rangeDay = Theme.Button("近 24 小时"); rangeDay.AccessibleName = "查看近 24 小时";
             rangeWeek = Theme.Button("近 7 天"); rangeWeek.AccessibleName = "查看近 7 天";
+            rangeMonth = Theme.Button("近 30 天"); rangeMonth.AccessibleName = "查看近 30 天";
+            rangeAll = Theme.Button("累计全部"); rangeAll.AccessibleName = "查看累计全部记录";
             var refresh = Theme.Button("刷新"); refresh.AccessibleName = "刷新活动数据";
             search = new TextBox { Width = 150, Font = Theme.Body, BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(6, 9, 8, 8), AccessibleName = "搜索文本", AccessibleDescription = "按文本过滤请求与领取记录" };
             sourceBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 132, Font = Theme.Body, Margin = new Padding(6, 7, 8, 8), AccessibleName = "来源筛选" };
@@ -1148,10 +1182,12 @@ namespace AiCreditDesktop {
             detailToggle = new CheckBox { Text = "显示详情", Checked = true, AutoSize = true, Font = Theme.Body, ForeColor = Theme.Ink, Margin = new Padding(10, 11, 6, 8), AccessibleName = "显示选中行详情" };
             rangeDay.Click += async delegate { range = "24h"; SyncRange(); await LoadAsync(); };
             rangeWeek.Click += async delegate { range = "7d"; SyncRange(); await LoadAsync(); };
+            rangeMonth.Click += async delegate { range = "30d"; SyncRange(); await LoadAsync(); };
+            rangeAll.Click += async delegate { range = "all"; SyncRange(); await LoadAsync(); };
             refresh.Click += async delegate { await LoadAsync(); };
             apply.Click += async delegate { await LoadAsync(); };
             detailToggle.CheckedChanged += delegate { LayoutBoard(); };
-            toolbar.Controls.Add(rangeDay); toolbar.Controls.Add(rangeWeek); toolbar.Controls.Add(refresh);
+            toolbar.Controls.Add(rangeDay); toolbar.Controls.Add(rangeWeek); toolbar.Controls.Add(rangeMonth); toolbar.Controls.Add(rangeAll); toolbar.Controls.Add(refresh);
             toolbar.Controls.Add(new Label{Text="搜索",AutoSize=true,ForeColor=Theme.Muted,Margin=new Padding(2,11,2,8)}); toolbar.Controls.Add(search); toolbar.Controls.Add(sourceBox); toolbar.Controls.Add(modelBox); toolbar.Controls.Add(apply); toolbar.Controls.Add(detailToggle);
 
             status = new Label {
@@ -1226,17 +1262,25 @@ namespace AiCreditDesktop {
         internal string State { get { return state; } }
         private string state = "idle";
 
-        private string RangeText() { return range == "7d" ? "近 7 天" : "近 24 小时"; }
+        private static readonly string[] RangeKeys = { "24h", "7d", "30d", "all" };
+        private static readonly string[] RangeLabels = { "近 24 小时", "近 7 天", "近 30 天", "累计全部" };
 
+        private string RangeText() {
+            int index = Array.IndexOf(RangeKeys, range);
+            return index >= 0 ? RangeLabels[index] : "近 24 小时";
+        }
+
+        // One loop over the four buttons keeps label, colour and accessibility in
+        // step; four hand-written pairs is where a fifth range would get missed.
         private void SyncRange() {
-            bool day = range != "7d";
-            rangeDay.BackColor = day ? Theme.Accent : Theme.Surface;
-            rangeDay.ForeColor = day ? Color.White : Theme.Ink;
-            rangeWeek.BackColor = day ? Theme.Surface : Theme.Accent;
-            rangeWeek.ForeColor = day ? Theme.Ink : Color.White;
-            rangeDay.Invalidate(); rangeWeek.Invalidate();
-            rangeDay.AccessibleDescription = day ? "当前范围：近 24 小时" : "切换到近 24 小时";
-            rangeWeek.AccessibleDescription = day ? "切换到近 7 天" : "当前范围：近 7 天";
+            var buttons = new[] { rangeDay, rangeWeek, rangeMonth, rangeAll };
+            for (int i = 0; i < buttons.Length; i++) {
+                bool active = range == RangeKeys[i];
+                buttons[i].BackColor = active ? Theme.Accent : Theme.Surface;
+                buttons[i].ForeColor = active ? Color.White : Theme.Ink;
+                buttons[i].Invalidate();
+                buttons[i].AccessibleDescription = active ? "当前范围：" + RangeLabels[i] : "切换到" + RangeLabels[i];
+            }
         }
 
         private void SetState(string kind, string text) {
@@ -1258,8 +1302,8 @@ namespace AiCreditDesktop {
                     if (!claim && model.Length == 0) model = "未返回";
                     string token = "未返回";
                     if (!claim) {
-                        string known = ActivityData.Number(item, "knownTokens");
-                        string estimated = ActivityData.Number(item, "estimatedInputTokens");
+                        string known = ActivityData.Tokens(item, "knownTokens");
+                        string estimated = ActivityData.Tokens(item, "estimatedInputTokens");
                         token = known + (estimated == "未返回" ? "" : " · 估 " + estimated);
                     }
                     int index = grid.Rows.Add(new object[] {
@@ -1401,7 +1445,8 @@ namespace AiCreditDesktop {
                 var cell = new RectangleF(18 + (i % columns) * cellWidth, y + (i / columns) * cellHeight, cellWidth - 10f, cellHeight - 10f);
                 UiMetrics.Box(g, cell, Theme.Soft, 10);
                 UiMetrics.Text(g, KpiNames[i], 11, Theme.Muted, new RectangleF(cell.X + 12, cell.Y + 8, cell.Width - 24, 18));
-                UiMetrics.Text(g, ActivityData.Number(kpis, KpiKeys[i]), 19, Theme.Ink, new RectangleF(cell.X + 12, cell.Y + 26, cell.Width - 24, 28), true, "Segoe UI");
+                string kpiValue = KpiKeys[i].IndexOf("Tokens", StringComparison.Ordinal) >= 0 ? ActivityData.Tokens(kpis, KpiKeys[i]) : ActivityData.Number(kpis, KpiKeys[i]);
+                UiMetrics.Text(g, kpiValue, 19, Theme.Ink, new RectangleF(cell.X + 12, cell.Y + 26, cell.Width - 24, 28), true, "Segoe UI");
             }
             y += rows * cellHeight + 16f;
             UiMetrics.Text(g, "输入组成（字符 → 估算 Token）", 14, Theme.Ink, new RectangleF(18, y, w - 36, 24), true);
@@ -1416,7 +1461,7 @@ namespace AiCreditDesktop {
             for (int i = 0; i < PartNames.Length; i++) {
                 var segment = ActivityData.Child(composition, PartNames[i]);
                 string chars = ActivityData.Number(segment, "chars");
-                string tokensText = ActivityData.Number(segment, "estimatedTokens");
+                string tokensText = ActivityData.Tokens(segment, "estimatedTokens");
                 float row = y + i * 26f;
                 if (narrow) {
                     UiMetrics.Text(g, PartNames[i] + " · " + chars + " 字符 · ≈ " + tokensText + " Token", 11, Theme.Muted, new RectangleF(18, row, w - 36, 20));
@@ -1444,13 +1489,30 @@ namespace AiCreditDesktop {
 
         internal ActivityChart() {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            BackColor = Theme.Surface; AccessibleRole = AccessibleRole.Chart; AccessibleName = "近 7 日网关请求柱状图";
+            BackColor = Theme.Surface; AccessibleRole = AccessibleRole.Chart; AccessibleName = "网关请求柱状图";
         }
         internal void Bind(Dictionary<string, object> value) { data = value; AccessibleDescription = Summary(); Invalidate(); }
 
+        // Both helpers run from OnPaint before any data has arrived, so they must
+        // tolerate data == null: Json.Get dereferences its dictionary and threw
+        // NullReferenceException, which WinForms painted as the red cross.
+        private int BucketDays() {
+            if (data == null) return 7;
+            int days = ActivityData.Int(data, "bucketDays", 7);
+            return days == 30 ? 30 : 7;
+        }
+
+        private string RangeLabel() {
+            if (data == null) return "近 7 日";
+            string value = Json.Get(data, "range", "24h");
+            if (value == "30d") return "近 30 天";
+            if (value == "all") return "累计全部（仅近 30 天按日）";
+            return "近 7 日";
+        }
+
         internal string Summary() {
             var rows = data == null ? new Dictionary<string, object>[0] : Json.Rows(data, "daily").ToArray();
-            var text = new StringBuilder("近 7 日网关请求次数：");
+            var text = new StringBuilder(RangeLabel() + "网关请求次数：");
             if (rows.Length == 0) text.Append("暂无记录。");
             else {
                 foreach (var row in rows) text.Append(Json.Get(row, "date", "未知日期")).Append(" ").Append(ActivityData.Number(row, "requests")).Append(" 次；");
@@ -1466,7 +1528,7 @@ namespace AiCreditDesktop {
             float w = Width / scale, h = Height / scale;
             UiMetrics.Card(g, new RectangleF(0.5f, 0.5f, w - 1, h - 1), 12);
             var kpis = ActivityData.Child(data, "kpis");
-            UiMetrics.Text(g, "近 7 日网关请求次数", 14, Theme.Ink, new RectangleF(18, 10, w - 36, 24), true);
+            UiMetrics.Text(g, RangeLabel() + "网关请求次数", 14, Theme.Ink, new RectangleF(18, 10, w - 36, 24), true);
             UiMetrics.Text(g, "仅本网关记录，不含绕过调用；次数不代表计费或用户完成的工作。", 10, Theme.Muted, new RectangleF(18, 32, w - 36, 20));
             if (w >= 320f) {
                 float legendX = 18f;
@@ -1476,9 +1538,10 @@ namespace AiCreditDesktop {
                 UiMetrics.Text(g, "失败", 10, Theme.Muted, new RectangleF(legendX + 71, 53, 42, 20));
                 UiMetrics.Box(g, new RectangleF(legendX + 116, 59, 8, 8), UiMetrics.AccentMid, 4);
                 UiMetrics.Text(g, "其他", 10, Theme.Muted, new RectangleF(legendX + 129, 53, 42, 20));
-                UiMetrics.Text(g, "七日 " + (data==null?0:Json.Rows(data,"daily").Sum(d=>ActivityData.Int(d,"requests",0))) + " 次", 10, Theme.Muted, new RectangleF(legendX + 174, 53, 126, 20));
+                UiMetrics.Text(g, "合计 " + (data==null?0:Json.Rows(data,"daily").Sum(d=>ActivityData.Int(d,"requests",0))) + " 次", 10, Theme.Muted, new RectangleF(legendX + 174, 53, 126, 20));
             }
             var rows = data == null ? new Dictionary<string, object>[0] : Json.Rows(data, "daily").ToArray();
+            int buckets = BucketDays();
             var plot = new RectangleF(48, 84, Math.Max(40f, w - 68f), Math.Max(52f, h - 130f));
             int peak = 1;
             foreach (var row in rows) { int value = ActivityData.Int(row, "requests", 0); if (value > peak) peak = value; }
@@ -1488,9 +1551,11 @@ namespace AiCreditDesktop {
                 using (var pen = new Pen(UiMetrics.Line)) g.DrawLine(pen, plot.X, lineY, plot.Right, lineY);
                 UiMetrics.Text(g, (peak - peak * i / 4).ToString(System.Globalization.CultureInfo.InvariantCulture), 9, Theme.Muted, new RectangleF(6, lineY - 8, 36, 16), false, "Segoe UI", StringAlignment.Far);
             }
-            float slot = plot.Width / 7f;
-            int offset = Math.Max(0, 7 - rows.Length);
-            for (int i = 0; i < 7; i++) {
+            float slot = plot.Width / buckets;
+            int offset = Math.Max(0, buckets - rows.Length);
+            // 30 buckets leave too little room for a centred label under every bar.
+            bool labelEveryBucket = buckets <= 7;
+            for (int i = 0; i < buckets; i++) {
                 int index = i - offset;
                 var row = index >= 0 && index < rows.Length ? rows[index] : null;
                 float barWidth = slot * 0.46f, centerX = plot.X + slot * i + slot / 2f;
@@ -1505,13 +1570,13 @@ namespace AiCreditDesktop {
                 if (successHeight > 0) { UiMetrics.Box(g, new RectangleF(bar.X, cursor - successHeight, barWidth, successHeight), Theme.Accent, 6); cursor -= successHeight; }
                 if (failedHeight > 0) { UiMetrics.Box(g, new RectangleF(bar.X, cursor - failedHeight, barWidth, failedHeight), Theme.Danger, 6); cursor -= failedHeight; }
                 if (otherHeight > 0) { UiMetrics.Box(g, new RectangleF(bar.X, cursor - otherHeight, barWidth, otherHeight), UiMetrics.AccentMid, 6); cursor -= otherHeight; }
-                if (row != null) {
+                if (row != null && (labelEveryBucket || i == buckets - 1 || i % 5 == 0)) {
                     string label = ActivityData.DayLabel(Json.Get(row, "date"));
-                    if (label.Length > 0) UiMetrics.Text(g, label, 9, Theme.Muted, new RectangleF(centerX - slot / 2f, plot.Bottom + 4, slot, 16), false, "Segoe UI", StringAlignment.Center);
+                    if (label.Length > 0) UiMetrics.Text(g, label, 9, Theme.Muted, new RectangleF(centerX - Math.Max(slot, 28f) / 2f, plot.Bottom + 4, Math.Max(slot, 28f), 16), false, "Segoe UI", StringAlignment.Center);
                 }
                 if (total > 0) UiMetrics.Text(g, total.ToString(System.Globalization.CultureInfo.InvariantCulture), 10, Theme.Ink, new RectangleF(centerX - slot / 2f, bar.Y - 20f, slot, 18), false, "Segoe UI", StringAlignment.Center);
             }
-            if (rows.Length == 0) UiMetrics.Text(g, "暂无请求记录（本网关近 7 日）", 12, Theme.Muted, new RectangleF(plot.X, plot.Y + plot.Height / 2f - 12f, plot.Width, 24), false, "Microsoft YaHei UI", StringAlignment.Center);
+            if (rows.Length == 0) UiMetrics.Text(g, "暂无请求记录（本网关 " + RangeLabel() + "）", 12, Theme.Muted, new RectangleF(plot.X, plot.Y + plot.Height / 2f - 12f, plot.Width, 24), false, "Microsoft YaHei UI", StringAlignment.Center);
         }
     }
 
@@ -1547,9 +1612,9 @@ namespace AiCreditDesktop {
                 lines.Add("领取记录由调度器观察，不计入请求数，也不代表模型调用。");
                 return lines;
             }
-            lines.Add("模型 " + Json.Get(item, "model", "未返回") + " · 路由别名 " + Json.Get(item, "routeId", "未返回") + " · 接力 " + ActivityData.Number(item, "relays") + " · 已知 Token " + ActivityData.Number(item, "knownTokens") + " · 估算输入 Token " + ActivityData.Number(item, "estimatedInputTokens"));
+            lines.Add("模型 " + Json.Get(item, "model", "未返回") + " · 路由别名 " + Json.Get(item, "routeId", "未返回") + " · 接力 " + ActivityData.Number(item, "relays") + " · 已知 Token " + ActivityData.Tokens(item, "knownTokens") + " · 估算输入 Token " + ActivityData.Tokens(item, "estimatedInputTokens"));
             var context = ActivityData.Child(item, "context");
-            foreach(string part in new[]{"system","user","assistant","toolSchemas","toolResults"}){var section=ActivityData.Child(ActivityData.Child(context,"composition"),part);lines.Add(part+" · "+ActivityData.Number(section,"chars")+" 字符 · 估算 "+ActivityData.Number(section,"estimatedTokens")+" Token");}
+            foreach(string part in new[]{"system","user","assistant","toolSchemas","toolResults"}){var section=ActivityData.Child(ActivityData.Child(context,"composition"),part);lines.Add(part+" · "+ActivityData.Number(section,"chars")+" 字符 · 估算 "+ActivityData.Tokens(section,"estimatedTokens")+" Token");}
             lines.Add("工具名：" + ActivityData.Join(Json.Strings(context, "toolNames")));
             var fileActivity = ActivityData.Child(context, "fileActivity");
             lines.Add("文件活动计数：读 " + ActivityData.Number(fileActivity, "read") + " · 写 " + ActivityData.Number(fileActivity, "write") + " · 搜索 " + ActivityData.Number(fileActivity, "search") + " · 其他 " + ActivityData.Number(fileActivity, "other"));
@@ -1597,6 +1662,11 @@ namespace AiCreditDesktop {
         internal static string Time(IDictionary<string,object> row,string key){string value=Json.Get(row,key);DateTimeOffset parsed;if(string.IsNullOrWhiteSpace(value))return "未返回";if(DateTimeOffset.TryParse(value,out parsed))return parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");long millis;if(long.TryParse(value,out millis)&&millis>1000000000){try{return new DateTimeOffset(1970,1,1,0,0,0,TimeSpan.Zero).AddSeconds(millis>100000000000?millis/1000d:millis).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");}catch{}}return value;}
         internal static string Error(IDictionary<string,object> row,string key){var error=NvidiaPresentation.Object(row,key);return error.Count>0?Json.Get(error,"message",Json.Get(error,"code","未返回原因")):Json.Get(row,key,"");}
         internal static bool IsBanned(IDictionary<string,object> row){return Json.Get(NvidiaPresentation.Object(row,"ban"),"status")=="banned"||Json.Get(row,"credentialStatus")=="banned";}
+        internal static Color StateColor(IDictionary<string,object> row){
+            string credential=Json.Get(row,"credentialStatus",Json.Get(NvidiaPresentation.Object(row,"credential"),"status")),ban=Json.Get(NvidiaPresentation.Object(row,"ban"),"status");
+            if(IsBanned(row)||ban=="auth_rejected")return Theme.Danger;
+            switch(credential){case "banned":case "auth_rejected":case "expired":case "rejected":case "login_required":case "missing":return Theme.Danger;default:return Theme.Accent;}
+        }
         internal static string State(IDictionary<string,object> row){
             string credential=Json.Get(row,"credentialStatus",Json.Get(NvidiaPresentation.Object(row,"credential"),"status")),usage=Json.Get(row,"usageStatus"),ban=Json.Get(NvidiaPresentation.Object(row,"ban"),"status");
             if(IsBanned(row))return "账号已封禁";
@@ -1640,7 +1710,7 @@ namespace AiCreditDesktop {
         internal string AccountId {get;private set;}internal bool Compact {get{return compact;}}
         internal WbAccountCard(Dictionary<string,object> row){Dock=DockStyle.Fill;BackColor=Theme.Surface;Padding=new Padding(12);Margin=Padding.Empty;AccessibleName=Json.Get(row,"label","WorkBuddy 账号");AccountId=Json.Get(row,"accountId",Json.Get(row,"id"));
             var identity=NvidiaPresentation.Object(row,"identity");var profile=NvidiaPresentation.Object(row,"profile");var credential=NvidiaPresentation.Object(row,"credential");var ban=NvidiaPresentation.Object(row,"ban");var balance=NvidiaPresentation.Object(row,"balance");var tasks=NvidiaPresentation.Object(row,"tasks");var packages=Json.Rows(balance,"packages").ToArray();
-            string label=Json.Get(row,"label","WorkBuddy 账号");name.Text=label.Length>28?label.Substring(0,22)+"…（完整见身份页）":label;name.Font=new Font(Theme.Body.FontFamily,12F,FontStyle.Bold);name.AutoSize=false;name.AutoEllipsis=true;name.AccessibleDescription=label;actionTips.SetToolTip(name,label);name.ForeColor=Theme.Ink;state.Text=WbPoolUi.State(row)+" · "+(Json.Get(row,"edition","cn")=="cn"?"国内版 CN":"国际版 Global")+" · "+(Json.Enabled(row)?"启用":"停用");state.AutoSize=false;state.AutoEllipsis=true;state.AccessibleDescription=state.Text;actionTips.SetToolTip(state,state.Text);state.ForeColor=WbPoolUi.IsBanned(row)?Theme.Danger:Theme.Accent;credit.Text=WbPoolUi.Credits(row);credit.Font=WbPoolUi.CreditFont;credit.AutoSize=false;credit.TextAlign=ContentAlignment.MiddleRight;credit.ForeColor=Theme.Ink;credit.AccessibleName="账号积分剩余 / 总额";header.Controls.Add(name);header.Controls.Add(state);header.Controls.Add(credit);
+            string label=Json.Get(row,"label","WorkBuddy 账号");name.Text=label.Length>28?label.Substring(0,22)+"…（完整见身份页）":label;name.Font=new Font(Theme.Body.FontFamily,12F,FontStyle.Bold);name.AutoSize=false;name.AutoEllipsis=true;name.AccessibleDescription=label;actionTips.SetToolTip(name,label);name.ForeColor=Theme.Ink;state.Text=WbPoolUi.State(row)+" · "+(Json.Get(row,"edition","cn")=="cn"?"国内版 CN":"国际版 Global")+" · "+(Json.Enabled(row)?"启用":"停用");state.AutoSize=false;state.AutoEllipsis=true;state.AccessibleDescription=state.Text;actionTips.SetToolTip(state,state.Text);state.ForeColor=WbPoolUi.StateColor(row);credit.Text=WbPoolUi.Credits(row);credit.Font=WbPoolUi.CreditFont;credit.AutoSize=false;credit.TextAlign=ContentAlignment.MiddleRight;credit.ForeColor=Theme.Ink;credit.AccessibleName="账号积分剩余 / 总额";header.Controls.Add(name);header.Controls.Add(state);header.Controls.Add(credit);
             string identityText="账号 ID："+AccountId+"\nUID："+WbPoolUi.Uid(row)+"\n用户 ID："+Json.Get(identity,"userId","未返回")+"\n昵称："+Json.Get(profile,"nickname",Json.Get(row,"nickname","未返回"))+"\n用户名："+Json.Get(identity,"username",Json.Get(profile,"username","未返回"))+"\n邮箱："+Json.Get(row,"email",Json.Get(identity,"email","未返回"))+"\n区域："+Json.Get(row,"region",Json.Get(identity,"domain","未返回"))+"\n显示名称："+Json.Get(row,"label","未返回")+"\n备注："+Json.Get(row,"notes","未填写")+"\n版本："+Json.Get(row,"edition","cn")+" · "+(Json.Enabled(row)?"已启用":"已停用")+" · "+(WbPoolUi.Flag(row,"current")?"当前使用账号":"非当前账号");
             identityText+="\n积分与模型调用："+(WbPoolUi.InferenceEnabled(row)?"已启用":"已停用，模型切换与接力跳过此号")+"\n自动签到与自动任务：保持账号池原设置，不受积分调用开关影响";string reason=Json.Get(ban,"reason",WbPoolUi.Error(row,"error"));string loginText=WbPoolUi.CredentialState(row)+"\n登录核验："+WbPoolUi.Time(credential,"checkedAt")+"\nAccess 到期："+WbPoolUi.Time(credential,"accessExpiresAt")+"\nRefresh 到期："+WbPoolUi.Time(credential,"refreshExpiresAt")+"\n封禁状态："+(WbPoolUi.IsBanned(row)?"账号已封禁":Json.Get(ban,"status")=="auth_rejected"?"认证被拒绝，尚未判定封禁":"未确认封禁")+"\n状态原因："+(string.IsNullOrWhiteSpace(reason)?"未返回":reason)+"\n来源："+Json.Get(ban,"source","未返回")+"\nHTTP："+Json.Get(ban,"httpStatus","未返回")+" · 官方代码："+Json.Get(ban,"upstreamCode","未返回")+"\n状态更新时间："+WbPoolUi.Time(ban,"checkedAt");
             var balanceText=new StringBuilder();balanceText.AppendLine("积分剩余 / 总额："+WbPoolUi.Credits(row));balanceText.AppendLine("已消耗："+WbPoolUi.Amount(balance,"consumed")+" · 积分包 "+packages.Length+" 个");balanceText.AppendLine(WbPoolUi.Daily(row));balanceText.AppendLine(WbPoolUi.TaskSummary(row));balanceText.AppendLine("任务查询："+WbPoolUi.Time(tasks,"checkedAt"));string taskError=WbPoolUi.Error(tasks,"error");if(!string.IsNullOrWhiteSpace(taskError))balanceText.AppendLine("任务错误："+taskError+"；上次成功任务保留");balanceText.AppendLine("余额核验："+WbPoolUi.Time(balance.Count>0?balance:row,"checkedAt")+(WbPoolUi.Flag(balance,"stale")||WbPoolUi.Flag(row,"stale")?" · 上次成功数据":""));balanceText.AppendLine("全部积分包（资料分页，不省略包）");if(packages.Length==0)balanceText.AppendLine("官方尚未返回积分包明细；不按零处理。");foreach(var package in packages){balanceText.AppendLine(Json.Get(package,"name",Json.Get(package,"id","积分包"))+"  "+WbPoolUi.Amount(package,package.ContainsKey("remaining")?"remaining":"balance")+" / "+WbPoolUi.Amount(package,package.ContainsKey("total")?"total":"size"));balanceText.AppendLine("包 ID："+Json.Get(package,"id","未返回")+" · 到期："+WbPoolUi.Time(package,"expiresAt"));}
@@ -2009,6 +2079,234 @@ namespace AiCreditDesktop {
         }
         protected override void OnFormClosing(FormClosingEventArgs e) {closing=true;ClearCredentials();base.OnFormClosing(e);if(e.Cancel){closing=false;ClearCredentials();}}
         protected override void Dispose(bool disposing) {if(disposing){closing=true;ClearCredentials();}base.Dispose(disposing);}
+    }
+    internal sealed class ClientUpdatesBoard : Panel {
+        private readonly Gateway backend;
+        private readonly DataGridView grid;
+        private readonly Label summary;
+        private readonly Button refresh, check;
+        private bool loading;
+
+        internal ClientUpdatesBoard(Gateway backend) {
+            this.backend = backend;
+            DoubleBuffered = true; BackColor = Theme.Background; Padding = new Padding(Theme.Padding);
+            AccessibleRole = AccessibleRole.Grouping; AccessibleName = "软件更新监测";
+            AccessibleDescription = "每天检查被反代的桌面客户端是否有新版本；只读取版本信息，不下载、不安装。";
+
+            var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, BackColor = Theme.Background, WrapContents = false };
+            refresh = Theme.Button("刷新");
+            check = Theme.Button("立即检查");
+            check.BackColor = Theme.Accent; check.ForeColor = Color.White;
+            var openButton = Theme.Button("打开所选");
+            var shortcutButton = Theme.Button("创建桌面快捷方式");
+            summary = new Label { AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Body, Margin = new Padding(16, 14, 0, 0), Text = "尚未读取" };
+            refresh.Click += async (s, e) => await LoadAsync();
+            check.Click += async (s, e) => await CheckAsync();
+            openButton.Click += (s, e) => OpenSelected();
+            shortcutButton.Click += (s, e) => CreateShortcuts(false);
+            bar.Controls.Add(refresh); bar.Controls.Add(check); bar.Controls.Add(openButton); bar.Controls.Add(shortcutButton); bar.Controls.Add(summary);
+
+            grid = Theme.Grid("软件", "已装版本", "最新版本", "状态", "来源", "最后检查", "说明");
+            grid.CellFormatting += (s, e) => {
+                if (e.RowIndex < 0 || e.ColumnIndex != 3) return;
+                string state = Convert.ToString(grid.Rows[e.RowIndex].Cells[3].Value);
+                if (state == "有新版本") { e.CellStyle.ForeColor = Theme.Warning; e.CellStyle.Font = new Font(Theme.Body, FontStyle.Bold); }
+                else if (state == "已是最新") e.CellStyle.ForeColor = Theme.Success;
+                else if (state == "检查失败") e.CellStyle.ForeColor = Theme.Danger;
+                else e.CellStyle.ForeColor = Theme.Muted;
+            };
+            grid.CellDoubleClick += (s, e) => {
+                if (e.RowIndex < 0) return;
+                OpenTarget(grid.Rows[e.RowIndex].Tag as Dictionary<string, object>);
+            };
+            grid.CellMouseDown += (s, e) => {
+                if (e.Button != MouseButtons.Right || e.RowIndex < 0) return;
+                grid.ClearSelection(); grid.Rows[e.RowIndex].Selected = true; grid.CurrentCell = grid.Rows[e.RowIndex].Cells[0];
+            };
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("打开软件", null, (s, e) => OpenSelected());
+            menu.Items.Add("打开安装目录", null, (s, e) => OpenFolder());
+            menu.Items.Add("打开官网", null, (s, e) => OpenHomepage());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("创建桌面快捷方式", null, (s, e) => CreateShortcuts(false));
+            menu.Items.Add("为全部客户端创建快捷方式", null, (s, e) => CreateShortcuts(true));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("复制安装路径", null, (s, e) => CopyPath());
+            menu.Items.Add("查看检测详情", null, (s, e) => ShowDetail());
+            grid.ContextMenuStrip = menu;
+
+            var hint = new Label {
+                Dock = DockStyle.Bottom, Height = 46, ForeColor = Theme.Muted, Font = Theme.Body, Padding = new Padding(2, 8, 2, 0),
+                Text = "每天自动检查一次；只读取官方版本信息，不下载、不安装。双击一行直接打开对应软件；右键可打开安装目录、官网，或创建桌面快捷方式。"
+            };
+            Controls.Add(grid); Controls.Add(bar); Controls.Add(hint);
+        }
+
+        private Dictionary<string, object> SelectedTarget() {
+            return grid.CurrentRow == null ? null : grid.CurrentRow.Tag as Dictionary<string, object>;
+        }
+
+        private void OpenSelected() {
+            var target = SelectedTarget();
+            if (target == null) { summary.Text = "请先选中一行"; return; }
+            OpenTarget(target);
+        }
+
+        private void OpenTarget(Dictionary<string, object> target) {
+            if (target == null) return;
+            string exe = Json.Get(target, "executable");
+            if (string.IsNullOrEmpty(exe) || !File.Exists(exe)) {
+                summary.Text = "未找到启动程序：" + (string.IsNullOrEmpty(exe) ? "该客户端未配置启动入口，可右键打开安装目录" : exe);
+                return;
+            }
+            try {
+                Process.Start(new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe), UseShellExecute = true });
+                summary.Text = "已启动 " + Json.Get(target, "name") + " · " + DateTime.Now.ToString("HH:mm:ss");
+            } catch (Exception e) { summary.Text = "启动失败：" + e.Message; }
+        }
+
+        private void OpenFolder() {
+            var target = SelectedTarget(); if (target == null) return;
+            string dir = Json.Get(target, "installPath");
+            if (Directory.Exists(dir)) Process.Start("explorer.exe", "\"" + dir + "\"");
+            else summary.Text = "安装目录不存在：" + dir;
+        }
+
+        private void OpenHomepage() {
+            var target = SelectedTarget(); if (target == null) return;
+            string url = Json.Get(target, "homepage");
+            if (string.IsNullOrEmpty(url)) { summary.Text = "该客户端没有配置官网"; return; }
+            try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
+            catch (Exception e) { summary.Text = "打开官网失败：" + e.Message; }
+        }
+
+        private void CopyPath() {
+            var target = SelectedTarget(); if (target == null) return;
+            string exe = Json.Get(target, "executable");
+            if (string.IsNullOrEmpty(exe)) { summary.Text = "该客户端没有启动路径"; return; }
+            Clipboard.SetText(exe); summary.Text = "已复制安装路径";
+        }
+
+        private void ShowDetail() {
+            var target = SelectedTarget(); if (target == null) return;
+            using (var d = new JsonDialog(Json.Get(target, "name") + " · 检测详情", target)) d.ShowDialog(this);
+        }
+
+        private void CreateShortcuts(bool all) {
+            var targets = new List<Dictionary<string, object>>();
+            if (all) {
+                foreach (DataGridViewRow row in grid.Rows) {
+                    var item = row.Tag as Dictionary<string, object>;
+                    if (item != null) targets.Add(item);
+                }
+            } else {
+                var item = SelectedTarget(); if (item != null) targets.Add(item);
+            }
+            if (targets.Count == 0) { summary.Text = "请先选中一行"; return; }
+            int done = 0; var failed = new List<string>();
+            foreach (var item in targets) {
+                string exe = Json.Get(item, "executable");
+                if (string.IsNullOrEmpty(exe) || !File.Exists(exe)) { failed.Add(Json.Get(item, "name")); continue; }
+                if (CreateShortcut(exe, Json.Get(item, "name"))) done++; else failed.Add(Json.Get(item, "name"));
+            }
+            summary.Text = "已创建 " + done + " 个桌面快捷方式" + (failed.Count > 0 ? "；跳过/失败：" + string.Join("、", failed) : "");
+        }
+
+        private static bool CreateShortcut(string exe, string name) {
+            try {
+                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string link = Path.Combine(desktop, name + ".lnk");
+                object shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+                object shortcut = shell.GetType().InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { link });
+                shortcut.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { exe });
+                shortcut.GetType().InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { Path.GetDirectoryName(exe) });
+                shortcut.GetType().InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { exe + ",0" });
+                shortcut.GetType().InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { name + " · 由 AI网关创建" });
+                shortcut.GetType().InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+                return File.Exists(link);
+            } catch { return false; }
+        }
+
+        internal async Task LoadAsync() {
+            if (loading || backend == null) return;
+            loading = true;
+            try { Fill(await backend.Request("GET", "/admin/client-updates")); }
+            catch (Exception e) { summary.Text = "读取失败：" + e.Message; }
+            finally { loading = false; }
+        }
+
+        private async Task CheckAsync() {
+            if (loading || backend == null) return;
+            loading = true; check.Enabled = false; summary.Text = "正在检查…（联网查询官方版本，约需 10-60 秒）";
+            try {
+                var report = await backend.Request("POST", "/admin/client-updates/check", new Dictionary<string, object>());
+                Fill(report);
+            } catch (Exception e) { summary.Text = "检查失败：" + e.Message; }
+            finally { loading = false; check.Enabled = true; }
+        }
+
+        private static string StateLabel(string status) {
+            switch (status) {
+                case "update_available": return "有新版本";
+                case "current": return "已是最新";
+                case "ahead": return "高于官方源";
+                case "no_source": return "无公开来源";
+                case "not_detected": return "未检测到安装";
+                case "disabled": return "已停用";
+                case "error": return "检查失败";
+                default: return status;
+            }
+        }
+
+        private static string SourceLabel(string source) {
+            switch (source) {
+                case "genie_update_api": return "官方更新接口";
+                case "electron_updater_feed": return "官方更新源";
+                case "official_json_api": return "官方接口";
+                case "github_releases": return "GitHub 发布";
+                case "none": return "—";
+                default: return string.IsNullOrEmpty(source) ? "—" : source;
+            }
+        }
+
+        private static string When(string iso) {
+            DateTimeOffset value;
+            return DateTimeOffset.TryParse(iso, out value) ? value.ToLocalTime().ToString("MM-dd HH:mm") : "—";
+        }
+
+        private void Fill(Dictionary<string, object> report) {
+            grid.Rows.Clear();
+            string state = Json.Get(report, "status");
+            if (state == "not_started") {
+                summary.Text = "尚未检查；每天会自动检查一次，也可点「立即检查」";
+                return;
+            }
+            if (state == "running") { summary.Text = "正在检查…"; return; }
+            int updates = 0, total = 0, noSource = 0;
+            foreach (var target in Json.Rows(report, "targets")) {
+                total++;
+                string status = Json.Get(target, "status");
+                if (status == "update_available") updates++;
+                if (status == "no_source") noSource++;
+                string installed = Json.Get(target, "installed", "—");
+                string apiVersion = Json.Get(target, "apiVersion");
+                if (!string.IsNullOrEmpty(apiVersion) && apiVersion != installed) installed += "（内部 " + apiVersion + "）";
+                string detail = Json.Get(target, "error");
+                if (string.IsNullOrEmpty(detail)) detail = Json.Get(target, "note");
+                int index = grid.Rows.Add(
+                    Json.Get(target, "name"),
+                    installed,
+                    Json.Get(target, "latest", "—"),
+                    StateLabel(status),
+                    SourceLabel(Json.Get(target, "source")),
+                    When(Json.Get(target, "checkedAt")),
+                    detail);
+                grid.Rows[index].Tag = target;
+            }
+            if (total == 0) { summary.Text = "清单为空"; return; }
+            summary.Text = total + " 个客户端 · " + updates + " 个有新版本" + (noSource > 0 ? " · " + noSource + " 个无公开来源" : "") + " · 检查于 " + When(Json.Get(report, "checkedAt"));
+            if (updates > 0) summary.ForeColor = Theme.Warning; else summary.ForeColor = Theme.Success;
+        }
     }
 }
 

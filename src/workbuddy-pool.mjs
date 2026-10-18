@@ -74,7 +74,9 @@ export async function configureWorkBuddyPool(service,{routeId,accountIds,enabled
   if(accountIds.some(id=>workBuddyEdition(value.accounts.find(a=>a.id===id))!==edition))throw new AppError('WB 帐号池按国内版与国际版分别接力',400,'invalid_pool_edition');
   if(!Number.isInteger(cooldownSeconds)||cooldownSeconds<60||cooldownSeconds>86400)throw new AppError('Cooldown must be 60–86400 seconds',400,'invalid_pool_cooldown');
   for(const id of accountIds)if(!value.upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===id&&u.enabled!==false))throw new AppError('Account needs an enabled WorkBuddy upstream: '+id,400,'pool_upstream_missing');
-  route.accountPool={enabled:enabled!==false,accountIds,cooldownSeconds};
+  // Saving a subset means "these accounts now, keep following new ones".
+  // Losing autoManaged here silently froze the pool at today's members.
+  route.accountPool={enabled:enabled!==false,accountIds,cooldownSeconds,autoManaged:true};
   await service.config.save(value);return {saved:true,...service.router.pool.status(route)};
 }
 export async function captureWorkBuddyAccount(service,{id,label},{readCurrent}={}) {

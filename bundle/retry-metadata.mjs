@@ -2,12 +2,13 @@
 // Restore our own gateway's typed fields, never interpret another provider's text.
 import {randomUUID,createHash} from 'node:crypto';
 import {rateLimitMetadata} from '../src/rate-limit-metadata.mjs';
+import {relayFailureMetadata,validGatewayRequestId} from '../src/client-contract.mjs';
 const gatewayCodes=new Set(['provider_chat_rejected','provider_rate_limited','upstream_rate_limited','same_model_rate_limited','same_model_timeout','same_model_cooldown','same_model_unavailable','same_model_credits_exhausted','relay_context_incompatible','relay_attempt_timeout','request_timeout','request_deadline_exceeded','account_pool_unavailable']);
 // The official AssistantStreamAccumulator deliberately JSON-detaches chunks.
 // A bounded, random, locally minted label survives that copy; a private Symbol
 // or WeakMap alone does not. No timers, request bodies or credentials are held.
 const controls=new Map();
-const fingerprint=f=>createHash('sha256').update(JSON.stringify([f.code,f.status,f.providerRetryAfterMs,f.message])).digest('hex');
+const fingerprint=f=>createHash('sha256').update(JSON.stringify([f.code,f.status,f.providerRetryAfterMs,f.message,f.gatewayCode,f.gatewayRequestId,f.relayFailure])).digest('hex');
 function markFailure(failure){
   const now=Date.now();for(const [id,entry]of controls){if(entry.until<=now||controls.size>=2048)controls.delete(id);else break;}
   const marked={...failure,gatewayFailureId:'aigw-'+randomUUID()};controls.set(marked.gatewayFailureId,{until:now+300000,fingerprint:fingerprint(marked)});return marked;
@@ -25,8 +26,10 @@ export function parseGatewayRetryMetadata(message){
       try{return visit(JSON.parse(value),depth+1)}catch{return}
     }
     if(!value||typeof value!=='object'||Array.isArray(value))return;
-    if(gatewayCodes.has(value.code)&&(!value.type||value.type===value.code)){
-      const meta={gatewayCode:value.code,...validStatus(status)?{status}:{}};
+    const owned=value.gatewayManagedRetry===true&&value.gatewayRetryOwner==='gateway'&&validGatewayRequestId(value.gatewayRequestId);
+    if((gatewayCodes.has(value.code)||owned)&&(!value.type||value.type===value.code)){
+      const relayFailure=relayFailureMetadata(value.relayFailure);
+      const meta={gatewayCode:gatewayCodes.has(value.code)?value.code:'gateway_terminal_error',...validStatus(status)?{status}:{},...(owned?{gatewayManagedRetry:true,gatewayRetryOwner:'gateway',gatewayRequestId:value.gatewayRequestId}:{}),...(relayFailure?{relayFailure}:{})};
       // Share the server's numeric business-code whitelist and public schema.
       Object.assign(meta,rateLimitMetadata(value));
       return meta;
@@ -42,7 +45,7 @@ export function enrichGatewayFailure(failure,{ownedRelay=false,partial=false,abo
   const official=meta.retryAfterSource==='official_header'&&meta.retryAfterSeconds!==undefined;
   const transient=meta.rateLimitKind==='transient'&&meta.rateLimitRetryable===true&&official&&meta.retryAfterSeconds>0;
   // No untrusted upstream prose/body survives into durable client history.
-  const message=[`${meta.status??failure.status??'HTTP'}: 网关请求失败（${meta.gatewayCode}）`,meta.upstreamCode!==undefined?`上游代码 ${meta.upstreamCode}`:null,meta.rateLimitKind?`限流类别 ${meta.rateLimitKind}`:null,official?`官方等待 ${meta.retryAfterSeconds} 秒`:null].filter(Boolean).join('；');
+  const message=[`${meta.status??failure.status??'HTTP'}: 网关请求失败（${meta.gatewayCode}）`,meta.upstreamCode!==undefined?`上游代码 ${meta.upstreamCode}`:null,meta.rateLimitKind?`限流类别 ${meta.rateLimitKind}`:null,meta.relayFailure?.root?`主因 ${meta.relayFailure.root.platform??'upstream'}/${meta.relayFailure.root.code??'upstream_error'} HTTP ${meta.relayFailure.root.status??'unknown'}`:null,meta.relayFailure?`已发出 ${meta.relayFailure.attemptCount??0} 次；跳过 ${meta.relayFailure.skippedCount??0} 个不适用候选`:null,meta.gatewayRequestId?`请求 ${meta.gatewayRequestId}`:null,official?`官方等待 ${meta.retryAfterSeconds} 秒`:null].filter(Boolean).join('；');
   const enriched={...failure,...meta,message};
   // Zero is valid protocol metadata, but DSH's LlmFailure only admits positive ms.
   if(official&&meta.retryAfterSeconds>0)enriched.providerRetryAfterMs=meta.retryAfterSeconds*1000;
@@ -66,10 +69,10 @@ export function registerGatewayRetryRecovery(ctx){
   return ctx.effect(()=>ctx.on('agent/request-error',gatewayRetryRecovery,true));
 }
 
-export function wrapGatewayRetryMetadata(adapter,{models}){
+export function wrapGatewayRetryMetadata(adapter,{models,ownedGateway=false}){
   const stream=adapter.streamWithSnapshot;
   adapter.streamWithSnapshot=async function*(options,snapshot){
-    const ownedRelay=models().find(m=>m.id===options.model)?.modelRelay?.deliveryMode==='verified_request_buffer';
+    const ownedRelay=ownedGateway||models().find(m=>m.id===options.model)?.modelRelay?.deliveryMode==='verified_request_buffer';
     let partial=false;
     for await(const chunk of stream.call(this,options,snapshot)){
       if(chunk.type==='finish'&&chunk.reason?.failure){

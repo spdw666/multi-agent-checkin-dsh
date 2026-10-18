@@ -65,7 +65,7 @@ export class Platforms {
     const a=this.account(id);
     if(a.platform==='freeapi')return freeProviderHealth(await this.credentials.resolve(id));
     if(desktopProviderKinds.has(a.platform)){
-      const p=await desktopProvider(a.platform),c=await this.credentials.resolve(id);let h=await p.health(c,{account:a});
+      const p=await desktopProvider(a.platform),c=await this.credentials.resolve(id);const ups=this.config?.value?.upstreams;const up=Array.isArray(ups)?ups.find(u=>u.kind===a.platform&&u.accountId===id&&u.enabled!==false):undefined;let h=await p.health(c,{account:a,upstream:up});
       if(a.platform==='loomy'&&c.principalHash&&this.credentials.ledger?.claimReceipt){
         const ledger=this.credentials.ledger,day=dayIn(new Date(),'Asia/Shanghai');
         for(const task of a.tasks??[])if(task.enabled&&['daily-quota','daily-checkin'].includes(task.id)){

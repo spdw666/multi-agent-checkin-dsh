@@ -111,11 +111,13 @@ test('request-aware context: upstream calls preserve all messages, tool IDs, too
   assert.equal(sent.max_completion_tokens,12000);assert.equal(sent.model,routeId);assert.equal(out.model,routeId);
 });
 
-test('request-aware context: a context-window fix does not waive a declared output-token limit',async()=>{
+test('request-aware context: a declared insufficient output-token limit skips without changing the submitted budget',async()=>{
   const f=fixture();preferOnlyStandby(f);f.metadata.standby.maxTokens=1024;
   const raw=request(),before=JSON.stringify(raw);
-  await assert.rejects(collectChat(f.router.chat(raw)),e=>e.code==='relay_capacity_incompatible'&&e.status===400);
-  assert.equal(f.calls.length,0);assert.equal(JSON.stringify(raw),before);
+  await assert.rejects(collectChat(f.router.chat(raw)),e=>e.status===503&&e.code==='same_model_unavailable'&&e.relayFailure.skippedCount===1&&e.relayFailure.attemptCount===0);
+  assert.equal(f.calls.length,0);assert.equal(JSON.stringify(raw),before);assert.equal(raw.max_tokens,4096);
+  assert.equal(f.usages[0].status,'skipped');assert.equal(f.usages[0].dispatched,false);assert.equal(f.usages[0].dispatchCount,0);
+  assert.equal(f.usages[0].requestContract.outputBudget,4096);assert.equal(f.usages[0].outputClamped,undefined);
 });
 
 test('transient network retry: the same supplier succeeds on exactly one retry without switching',async()=>{

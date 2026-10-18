@@ -64,8 +64,8 @@ helper 子任务基线在独立 `baseline` 副本运行已有 13 项档位／元
 初版 helper 41 项通过；自审补充实际档位与开关并存、合法 native disabled、原生同值别名、显式 binary wire 四项，独立审查再补充 native/camel-case 控制清理、合法嵌套低档及元数据固定枚举三项。helper 共 48 项；同时已有 13 项仍通过，共 61 项、0 失败、0 跳过，退出 0。
 
 ```powershell
-Set-Location 'D:/Codex/2026-10-13/ai-gateway-relay-continuation/work/reasoning-relay/stage'
-& 'C:/Users/ms/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' `
+Set-Location 'C:/Projects/ai-credit-gateway'
+& 'C:/Tools/node/node.exe' `
   --test --test-timeout=45000 `
   tests/relay-reasoning.test.mjs tests/fixes-v6.test.mjs tests/provider-client-metadata.test.mjs
 ```

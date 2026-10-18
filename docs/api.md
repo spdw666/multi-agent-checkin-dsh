@@ -119,17 +119,27 @@
 | `imported` | 已启用路由的**实际目标**：含账号池候选、按 `upstreamId+model` 去重、忽略冷却；合并同模型在多条路由下的 `routeIds` |
 | `retry` | 上次报告中 `failed` / `partial` / `uncertain` / `unavailable` 且上游与账号仍启用的条目 |
 | `selected` | 显式 `routeIds`，仅接受**已启用**路由；路由必须至少有一个活动目标 |
+| `models` | 显式 `items:[{upstreamId,model}]`，精确核验已启用上游中的所选型号，**包括未导入/路由未启用的模型**；不先导入，不改导入开关 |
 
 校验失败一律 `400`：非对象或数组 body、未知 `scope` 为 `invalid_audit_scope`；`routeIds` 为空数组、含空白字符串、路由不存在/已停用/无活动目标为 `invalid_audit_selection`。
+
+`scope:models` 的 `items` 必须是 **1–500** 条数组；每条需包含非空字符串 `upstreamId` 与 `model`。上游不存在/已停用、对应账号已停用、字段类型错误、空白 ID 或重复的 `upstreamId+model` 均返回 `400 invalid_audit_selection`；整个选择先校验，不启动部分任务，不改变已有体检状态。ID 按原值精确使用。模型是否仍在目录中由随后**刷新实时目录**决定；缺失条目记为 `unavailable`，不把“能填一个 ID”当成可调用。
+
+```json
+{"scope":"models","items":[{"upstreamId":"opencode-SAMPLE","model":"space-bunny-free"}]}
+```
+
+示例上游 ID 需替换成当前配置的真实 ID；`model` 必须来自当前目录。`items` 与 `routeIds` 分属各自 scope，`models` 不借用已启用路由选择，也不把 `model:"catalog"` 解释成扩展全目录。
 
 ### 7.2 202 不是成功
 
 `POST` 返回 **`202` 只表示任务已开始**，不代表体检通过。判定结果必须轮询 `GET /admin/model-tests`：
 
 - 首次运行前返回 `{status:"not_started",results:[]}`。
-- 报告字段：`scope`、`routeIds`、`startedAt`、`updatedAt`、`status`、`total`、`completed`、`results`、`jobKeys`、`summary`（完成后），异常时为 `error`。
+- 报告字段：`scope`、`routeIds`（selected）或 `items`（models）、`startedAt`、`updatedAt`、`status`、`total`、`completed`、`results`、`jobKeys`、`summary`（完成后），异常时为 `error`。
+- 精确测试的所选条目立即显示本轮 `running`，不继续借用旧绿色状态；未选模型保留原时间、阶段和原因。最新选择不会清空其他模型的结果。
 - **`results` 可能保留历史条目**（含 `previousAttempts`，最多 5 条先前尝试）。不要用 `results.length` 计本轮进度——本轮目标以 `jobKeys` 为准，`summary` 也仅统计本轮键。
-- 已有体检在运行时：`selected` 返回 `409 audit_in_progress`；其他 scope 不会并发写，而是排队到当前任务之后，并在当前报告中以 `queuedScope` 标记。
+- 已有体检在运行时：`selected` 和 `models` 返回 `409 audit_in_progress`，不排队或改写精确选择；同一非精确 scope 返回当前报告，其他非精确 scope 只记录一个后续 `queuedScope`（后来的选择可更新它），不并发写体检记录。
 
 ### 7.3 状态语义（不把未验证当通过）
 
@@ -143,13 +153,18 @@
 
 `capabilityStatus` 另行区分 `full` / `chat_only`（仅聊天通过） / `tools_undeclared`（上游未声明结构化工具）。**聊天通过不等于 Agent 工具链通过。**
 
+目录展示的 `status:chat_verified`（“对话已验证”）是最近体检记录的展示映射：`audit.status:partial`、`capabilityStatus:chat_only`，且普通 `ordinary` 和 SSE `stream` 两阶段均 `ok:true`。底层审计仍保留 `partial/chat_only`；工具与回传标记 `unsupported`、理由为未声明，不改成 `passed`。只有普通通过、SSE 超时/报错时不满足映射，也不凭旧单次成功显示已验证。此状态不证明外部工具、图片或未来可用性。
+
 ### 7.4 阶段、超时与并发
 
 - 四个阶段：普通回复、流式、工具调用、工具结果回传。流式要求拿到完整文本与结束事件；工具阶段要求真实结构化 `tool_calls`（名称与参数需匹配）且参数一致；回传阶段要求模型确认本地工具结果。上游未声明工具能力时标记 `unsupported` 并跳过，不伪造通过。
-- 阶段超时：NVIDIA 普通模型 `120000`；NVIDIA `moonshotai/kimi-k3` 与 `deepseek-ai/deepseek-v4.1-flash` 为有界 `600000`；其他上游 `45000`。阶段计时从**真正开始请求**时计起，排队不消耗阶段预算。
+- 阶段超时：**OpenCode 每阶段 `120000`**；精确 `trae-code-cn/deepseek-v4.1-flash` 为 `120000`；NVIDIA 普通模型 `120000`，NVIDIA `moonshotai/kimi-k3` 与 `deepseek-ai/deepseek-v4.1-flash` 为有界 `600000`；其他上游 `45000`。阶段计时从**真正开始请求**时计起，排队不消耗阶段预算。目录刷新另有 45000ms 有界等待，不与阶段生成时间混用。
+- 本地阶段预算耗尽保存 `error.code:audit_stage_timeout`、`error.status:408`、`timeoutSource:local_audit_deadline` 和实际 `timeoutMs`；它不是官方返回的 HTTP 408。真正上游错误仍保存其 typed 错误与原因，不能统一改成“模型不可用”。
+- OpenCode 体检使用桥接支持的单条用户纯文本，不带 `max_tokens`；这只调整体检探针形状，真实客户端的历史、工具、采样或显式输出预算不会被静默删除。桥接契约见 [OpenCode](opencode.md)。
 - 并发上限 2；同一 NVIDIA 账号的体检串行执行（按账号分道），避免互相挤占限流窗口。
 - 仅支持自动选工具的上游会在记录中标明 `auditToolChoice`，仍要求结构化工具与回传成功。
-- 报告落盘到 `AI_CREDIT_MEMORY`（默认 `D:/AI Memory/AI积分网关-多平台签到与DSH反代`）下 `测试记录/` 的 JSON、Markdown 与 `体检事件.jsonl`。体检不修改导入选择、不改变路由启用开关、不改变账号池偏好。
+- 报告同时写入服务账本的 `model-audit` 状态，并落盘到 `AI_CREDIT_MEMORY`（默认 `D:/AI Memory/AI积分网关-多平台签到与DSH反代`）下 `测试记录/模型全量体检.json`、`模型全量体检.md`；每个本轮完成结果追加到 `体检事件.jsonl`。相同 `upstreamId+model` 的当前记录更新时，通过 `previousAttempts` 保留最多 5 条先前尝试，失败阶段与原因不以新一次成功抹去。定向测试之外的模型记录保持原样。
+- API 和原生目录读取同一服务保存的最新体检状态；重开目录可读取新结果，不把外部一次探针未写入该来源的成功冒充界面已验证。体检不修改导入选择、不改变路由启用开关、不改变账号池偏好。
 
 ## 8. 余额（`GET /admin/balances`）
 
@@ -223,7 +238,7 @@ HTTP `200` 不等于权益已发放，必须逐账号看 `status`。真实代码
 
 旧 `/admin/model-import` 的取消条目可携带 `importedRouteIds`；服务端逐一核对这些现存路由仍包含该 upstream/model，全部匹配才停用指定路由，其他别名/多目标路由保持不变。未携带该字段的旧客户端沿用原单目标匹配行为。请优先使用 `/admin/model-export` 明确选择 routeIds。
 
-体检预算独立于模型请求服务器预算：`trae-code-cn/deepseek-v4.1-flash` 的每一体检阶段为 120000ms，耗尽本地预算标记 `audit_stage_timeout`（HTTP 408），并不当作官方接口返回；其他普通体检维持 45000ms，NVIDIA 专属预算与服务器请求截止保持各自策略。
+体检预算独立于模型请求服务器预算：OpenCode 与精确 `trae-code-cn/deepseek-v4.1-flash` 的每一体检阶段为 120000ms，耗尽本地预算标记 `audit_stage_timeout`（HTTP 408），并不当作官方接口返回；其他普通体检维持 45000ms，NVIDIA 专属预算与服务器请求截止保持各自策略，完整表见第 7.4 节。
 
 ### 同模型接力 活动与免费平台
 

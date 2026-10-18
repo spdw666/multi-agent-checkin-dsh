@@ -103,13 +103,13 @@ test('guard only owns its real failure references, preserves unrelated providers
   await dispose();await ctx.waterfall('agent/request-error',{provider:'ai-credit',failure:owned},()=>{order.push('terminal')});assert.deepEqual(order,['downstream','terminal']);await ctx.fiber.dispose();
 });
 
-test('nonrelay ordinary 500 retains official retry scheduling, but explicit false/unknown never repeats',async t=>{
+test('all gateway routes own retries: even nonrelay ordinary500 never schedules another pool',async t=>{
   const p=await peers(t);if(!p)return;
   for(const body of [{message:'sample ordinary server failure'},rate({rateLimitKind:'unknown',rateLimitRetryable:false})]){
     const status=body.code?429:500,server=await mockGateway(t,(_req,res)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify({error:body}));});
     const plain={...relay};delete plain.modelRelay;const gateway=p.createGatewayAdapter({runtime:{baseUrl:server.baseUrl,key:'SAMPLE'},models:[plain]}),controller=new AbortController();const {failure}=await collect(gateway,p,controller.signal);
     const harness=recoveryHarness(t,p,{onAppend:e=>{if(e.type==='llm/retry')controller.abort()}});await harness.run(failure,gateway.adapter.providerRetryPolicy('ai-credit'),controller.signal);
-    if(body.code)assert.equal(harness.events.length,0);else {assert.equal(harness.events[0].type,'llm/retry');assert.equal(harness.events[0].data.delayMs,500);assert.equal(gateway.adapter.providerRetryPolicy('ai-credit').maxRetries,5);}
+    assert.equal(harness.events.length,0);assert.equal(gateway.adapter.providerRetryPolicy('ai-credit').maxRetries,1);
     assert.equal(server.hits(),1);
   }
 });
@@ -117,8 +117,8 @@ test('nonrelay ordinary 500 retains official retry scheduling, but explicit fals
 test('model refresh retains wrapper and exact-model ownership instead of some-model heuristic',async t=>{
   const p=await peers(t);if(!p)return;const server=await mockGateway(t,(_req,res)=>{res.writeHead(503,{'content-type':'application/json'});res.end(JSON.stringify({error:{code:'same_model_cooldown',type:'same_model_cooldown',message:'SAMPLE'}}));});
   const plain={...relay};delete plain.modelRelay;const gateway=p.createGatewayAdapter({runtime:{baseUrl:server.baseUrl,key:'SAMPLE'},models:[plain,{...relay,id:'another'}]});
-  let result=await collect(gateway,p,new AbortController().signal),calls=0;await gatewayRetryRecovery({provider:'ai-credit',failure:result.failure},()=>{calls++;return Promise.resolve()});assert.equal(calls,1,'another relay model does not claim this plain request');
-  assert.equal(gateway.update([relay]),true);result=await collect(gateway,p,new AbortController().signal);await gatewayRetryRecovery({provider:'ai-credit',failure:result.failure},()=>{calls++;return Promise.resolve()});assert.equal(calls,1,'refreshed exact relay request is tagged');assert.equal(gateway.update([relay]),false);
+  let result=await collect(gateway,p,new AbortController().signal),calls=0;await gatewayRetryRecovery({provider:'ai-credit',failure:result.failure},()=>{calls++;return Promise.resolve()});assert.equal(calls,0,'the dedicated gateway adapter owns plain requests too');
+  assert.equal(gateway.update([relay]),true);result=await collect(gateway,p,new AbortController().signal);await gatewayRetryRecovery({provider:'ai-credit',failure:result.failure},()=>{calls++;return Promise.resolve()});assert.equal(calls,0,'refreshed gateway request remains owned');assert.equal(gateway.update([relay]),false);
 });
 
 test('wrapper does not replace caller signal/deadline or replay partial content',async()=>{

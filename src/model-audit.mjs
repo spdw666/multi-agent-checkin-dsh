@@ -16,6 +16,7 @@ export function auditStageTimeout(upstream,model){
  // This exact native route has measured first tool output near the old 45s
  // ceiling. Match its native 120s budget without changing unrelated audits.
  if(upstream.kind==='trae'&&upstream.id==='trae-code-cn'&&model?.id==='deepseek-v4.1-flash')return 120000;
+ if(upstream.kind==='opencode')return 120000;
  return upstream.kind==='nvidia'?(['moonshotai/kimi-k3','deepseek-ai/deepseek-v4.1-flash'].includes(model?.id)?600000:120000):45000;
 }
 export function auditRoundtripMatches(text){const value=String(text??'').trim();return /^(?:5|`5`|\*\*5\*\*|\*5\*|__5__|_5_)$/.test(value)||/^```(?:text|plaintext|json)?[ \t]*\r?\n[ \t]*5[ \t]*\r?\n```$/i.test(value);}
@@ -28,7 +29,9 @@ export async function testModel(service,u,m,{timeoutMs=auditStageTimeout(u,m)}={
  for(const stage of ['ordinary','stream','tools','roundtrip']){
   if((stage==='tools'||stage==='roundtrip')&&m.tools!==true){result.tests.push({stage,ok:false,status:'unsupported',reason:'上游未声明结构化工具调用'});continue;}
   if(stage==='roundtrip'&&!toolMessage){result.tests.push({stage,ok:false,status:'skipped',reason:'前一步未产生有效工具调用'});continue;}
-  const request={model:routeId,messages:[user],max_tokens:Math.min(4096,m.maxTokens??4096)};
+  // Probe the bridge's actual supported contract. Do not weaken the provider's
+  // validation of explicit parameters in real client requests.
+  const request={model:routeId,messages:[user],...(u.kind==='opencode'?{}:{max_tokens:Math.min(4096,m.maxTokens??4096)})};
   if(m.auditReasoningEffort)request.reasoning_effort=m.auditReasoningEffort;
   if(stage==='tools'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3. You must call the tool, not calculate it yourself.'}];request.tools=[tool];request.tool_choice=m.auditToolChoice==='auto'?'auto':{type:'function',function:{name:'audit_add'}};}
   if(stage==='roundtrip'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3.'},toolMessage,{role:'tool',tool_call_id:toolMessage.tool_calls[0].id,content:'5'},{role:'user',content:'The local tool returned 5. Reply with only 5; do not call another tool.'}];request.tools=[tool];request.tool_choice='none';}
@@ -52,6 +55,20 @@ export function importedTargets(service,routeIds=null){
   for(const t of rows){const key=jobKey(t),prior=targets.get(key);if(prior)prior.routeIds.push(route.id);else targets.set(key,{...t,routeIds:[route.id]});}
  }
  return [...targets.values()];
+}
+// Directory models can be tested without importing/enabling their saved routes.
+// Validate the selection before mutating audit state; the live catalog is still
+// refreshed below and a missing model is recorded as unavailable.
+export function selectedModels(service,items){
+ if(!Array.isArray(items)||!items.length||items.length>500)throw new AppError('Select 1–500 models',400,'invalid_audit_selection');
+ const seen=new Set();
+ return items.map(item=>{
+  if(!item||typeof item.upstreamId!=='string'||!item.upstreamId.trim()||typeof item.model!=='string'||!item.model.trim())throw new AppError('Invalid audit model selection',400,'invalid_audit_selection');
+  const u=service.config.value.upstreams.find(u=>u.id===item.upstreamId&&u.enabled!==false);
+  if(!u||service.config.value.accounts?.find(a=>a.id===u.accountId)?.enabled===false)throw new AppError('Selected upstream/account is absent or disabled',400,'invalid_audit_selection');
+  const key=jobKey(item);if(seen.has(key))throw new AppError('Duplicate audit model selection',400,'invalid_audit_selection');seen.add(key);
+  return {upstreamId:u.id,model:item.model,routeIds:[]};
+ });
 }
 export function selectedTargets(service,routeIds){
  if(!Array.isArray(routeIds)||!routeIds.length||routeIds.some(id=>typeof id!=='string'||!id.trim()))throw new AppError('Select at least one enabled route',400,'invalid_audit_selection');
@@ -88,18 +105,19 @@ function preserveAttempt(row,previous){
 }
 export function startModelAudit(service,options={}){
  if(!options||typeof options!=='object'||Array.isArray(options))throw new AppError('Audit body must be an object',400,'invalid_audit_scope');
- const {scope='all',routeIds}=options;
- if(!['all','imported','retry','selected'].includes(scope))throw new AppError('scope must be all, imported, retry or selected',400,'invalid_audit_scope');
- const selection=scope==='selected'?selectedTargets(service,routeIds):null;
+ const {scope='all',routeIds,items}=options;
+ const targeted=scope==='selected'||scope==='models';
+ if(!['all','imported','retry','selected','models'].includes(scope))throw new AppError('scope must be all, imported, retry, selected or models',400,'invalid_audit_scope');
+ const selection=scope==='selected'?selectedTargets(service,routeIds):scope==='models'?selectedModels(service,items):null;
  if(service.auditPromise){
-  if(scope==='selected')throw new AppError('Model audit already running',409,'audit_in_progress');
+  if(targeted)throw new AppError('Model audit already running',409,'audit_in_progress');
   const active=service.auditReport??service.ledger.get('model-audit');
   if(active.scope!==scope){service.auditQueued=scope;active.queuedScope=scope;service.ledger.set('model-audit',active);}
   return active;
  }
  const previous=service.ledger.get('model-audit');
  const oldRows=new Map((previous?.results??[]).map(r=>[jobKey(r),r]));
- const report={scope,...(selection?{routeIds:[...new Set(routeIds)]}:{}),startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),status:'running',total:0,completed:0,results:structuredClone(previous?.results??[]),jobKeys:[]};
+ const report={scope,...(scope==='selected'?{routeIds:[...new Set(routeIds)]}:scope==='models'?{items:selection.map(({upstreamId,model})=>({upstreamId,model}))}:{}),startedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),status:'running',total:0,completed:0,results:structuredClone(previous?.results??[]),jobKeys:[]};
  if(scope!=='all'){
   const pending=(selection??(scope==='imported'?importedTargets(service):retryTargets(service,previous))).map(t=>({...t,status:'running',reason:'刷新目录并准备本轮体检',tests:[]}));
   report.jobKeys=pending.map(jobKey);report.total=pending.length;const keys=new Set(report.jobKeys);
@@ -115,7 +133,7 @@ export function startModelAudit(service,options={}){
     if(u.enabled===false||c.accounts?.find(a=>a.id===u.accountId)?.enabled===false)throw new AppError('Route account/upstream is disabled',409,'upstream_disabled');
     const catalog=await service.platforms.models(u.id,{refresh:true,signal:AbortSignal.timeout(45000)});
     resolvedCatalogKeys.add(jobKey({upstreamId:u.id,model:'catalog'}));
-    if(wanted){for(const t of wanted){if(t.model==='catalog'){for(const m of catalog)jobs.push([u,m,t.routeIds]);continue;}const m=catalog.find(m=>m.id===t.model)??{id:t.model,callable:false,unavailableReason:'Model absent from refreshed live catalog'};jobs.push([u,m,t.routeIds]);}}
+    if(wanted){for(const t of wanted){if(t.model==='catalog'&&scope!=='models'){for(const m of catalog)jobs.push([u,m,t.routeIds]);continue;}const m=catalog.find(m=>m.id===t.model)??{id:t.model,callable:false,unavailableReason:'Model absent from refreshed live catalog'};jobs.push([u,m,t.routeIds]);}}
     else for(const m of catalog)jobs.push([u,m,[]]);
    }catch(e){for(const t of wanted??[{model:'catalog',routeIds:[]}]){const row={upstreamId:u.id,platform:u.kind,model:t.model,routeIds:t.routeIds,status:e.code==='zcode_no_active_entitlement'?'unavailable':'uncertain',reason:errorView(e).message,error:errorView(e),tests:[],finishedAt:new Date().toISOString()};fresh.push(preserveAttempt(row,oldRows.get(jobKey(row))));}}
   }
@@ -123,7 +141,7 @@ export function startModelAudit(service,options={}){
   const running=jobs.map(([u,m,routeIds])=>({upstreamId:u.id,platform:u.kind,model:m.id,name:m.name,routeIds,status:'running',reason:'本轮体检排队中',tests:[]}));
   report.jobKeys=[...running,...fresh].map(jobKey);const replace=new Set(report.jobKeys);
   // Unrelated models retain their timestamped history; selected models lose stale green badges immediately.
-  report.results=report.results.filter(r=>!replace.has(jobKey(r))&&(scope==='selected'||!resolvedCatalogKeys.has(jobKey(r)))).concat(running,fresh);
+  report.results=report.results.filter(r=>!replace.has(jobKey(r))&&(targeted||!resolvedCatalogKeys.has(jobKey(r)))).concat(running,fresh);
   report.total=report.jobKeys.length;report.completed=fresh.length;await saveAudit(service,report);
   let saving=Promise.resolve();const persist=()=>{const snapshot=structuredClone(report);saving=saving.then(()=>saveAudit(service,snapshot));return saving;};
   const worker=async([u,m,routeIds])=>{const row={...await testModel(service,u,m),routeIds},r=preserveAttempt(row,oldRows.get(jobKey(row)));report.results[report.results.findIndex(old=>jobKey(old)===jobKey(r))]=r;report.completed++;report.updatedAt=new Date().toISOString();await persist();await appendFile(join(memoryRoot,'测试记录','体检事件.jsonl'),JSON.stringify(r)+'\n','utf8');};

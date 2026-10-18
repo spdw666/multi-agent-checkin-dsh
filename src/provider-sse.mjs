@@ -48,8 +48,11 @@ export async function desktopSseResponse(response,{stream=true,model='',signal,p
  }
  return Response.json({id,object:'chat.completion',model,choices:[...choices.values()].map(({tools,...c})=>{if(tools.size)c.message.tool_calls=[...tools.values()];return c;}),...(usage?{usage}:{})});
 }
-export function desktopCompletionLimit(input,cap){
+// cap is the hard ceiling an upstream was measured to accept; fallback is the conservative default used
+// only when the caller sends no budget at all. Splitting the two stops an honest default from rejecting
+// explicit budgets the upstream happily serves.
+export function desktopCompletionLimit(input,cap,fallback=cap){
  const a=input?.max_tokens,b=input?.max_completion_tokens;
  if(a!==undefined&&b!==undefined&&a!==b)throw new AppError('输出上限字段冲突',400,'max_tokens_conflict');
- const value=a??b??cap;if(!Number.isSafeInteger(value)||value<1||value>cap)throw new AppError('输出上限超出网关配置',400,'max_tokens_invalid');return value;
+ const value=a??b??fallback;if(!Number.isSafeInteger(value)||value<1||value>cap)throw new AppError('输出上限超出网关配置',400,'max_tokens_invalid');return value;
 }

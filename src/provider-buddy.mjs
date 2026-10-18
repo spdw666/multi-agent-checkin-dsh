@@ -2,7 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {homedir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
-import {createDecipheriv} from 'node:crypto';
+import {createDecipheriv,randomUUID} from 'node:crypto';
 import {dpapiUnprotect} from './windows-crypto.mjs';
 import {runNativeHelper} from './credentials.mjs';
 import {AppError,rememberSecret} from './util.mjs';
@@ -35,7 +35,7 @@ async function readBuddyCredential(account,config={}){
   return normalizeBuddyCredential(raw,{expectedDomain:domain,filePath:file,proxyUrl:account.credentials?.proxyUrl});
 }
 export async function resolveBuddyCredential(account,config={}){try{return await readBuddyCredential(account,config)}catch(e){if(e.code==='ENOENT'||e.code==='ERR_SQLITE_ERROR')throw new AppError('Buddy本机登录文件待就绪',401,'provider_login_required');throw e}}
-function headers(c){return {Authorization:'Bearer '+c.accessToken,Accept:'application/json','Content-Type':'application/json','X-User-Id':c.uid,'X-Domain':c.domain,'X-Product':'SaaS','X-Requested-With':'XMLHttpRequest','User-Agent':endpoints(c).global?'WorkBuddy/5.5.2':'CLI/2.63.2 CodeBuddy/2.63.2'}}
+function headers(c){const global=endpoints(c).global,base={Authorization:'Bearer '+c.accessToken,Accept:'application/json','Content-Type':'application/json','X-User-Id':c.uid,'X-Domain':c.domain,'X-Product':'SaaS','X-Requested-With':'XMLHttpRequest','User-Agent':global?'WorkBuddy/5.5.2':'CLI/2.63.2 CodeBuddy/2.63.2'};if(global){base['X-Conversation-ID']=randomUUID();base['X-Conversation-Request-ID']=randomUUID();base['X-Conversation-Message-ID']=randomUUID()}return base}
 async function api(c,path,body,options={},surface='billing'){const data=await providerJson(endpoints(c)[surface]+path,c,{...options,body,headers:headers(c)});if(data.code!==0){const e=new AppError(`Buddy业务接口返回 ${typeof data.code==='number'?data.code:'异常'}`,502,'provider_business_error');e.upstreamCode=data.code;throw e}return data.data}
 export async function buddyModels(c,options={}){const data=await api(c,'/v3/config',undefined,options,'chat');return selectCliModels(data?.models,data?.agents).map(m=>({...m,tools:m.supportsToolCall===true,multimodal:m.supportsImages===true,callable:true,source:'buddy-official-config'}))}
 export async function buddyStatus(c,task='daily-checkin',options={}){

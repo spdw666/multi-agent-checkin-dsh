@@ -23,7 +23,9 @@ import {relayPolicy,validateRelay} from './model-relay.mjs';
 import {freeProviderMetadata,freeProviderList,prepareFreeProviderConfig,resolveFreeCredential,freeProviderModels} from './free-providers.mjs';
 import {importedRouteId} from './model-directory.mjs';
 import {gatewayRequestTimeout} from './request-timeouts.mjs';
+import {clientUpdatesReport,runClientUpdateCheck} from './client-updates.mjs';
 import {rateLimitMetadata} from './rate-limit-metadata.mjs';
+import {gatewayRequestContext,gatewayFailureContract} from './client-contract.mjs';
 export {gatewayRequestTimeout} from './request-timeouts.mjs';
 function equal(a,b){const x=Buffer.from(a??''),y=Buffer.from(b??'');return x.length===y.length&&timingSafeEqual(x,y);}
 function authorized(req,token){const h=req.headers.authorization;return typeof h==='string'&&h.startsWith('Bearer ')&&equal(h.slice(7),token);}
@@ -53,7 +55,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
   const controllers=new Set();let baseUrl;
   const server=http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
-    let url;
+    let url,requestContext;
     try{
       const local=`http://${req.headers.host}`;url=new URL(req.url,local);
       const origin=req.headers.origin;
@@ -121,6 +123,8 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='POST'&&url.pathname==='/admin/restart-dsh')return json(res,200,await restartDsh());
         if(req.method==='GET'&&url.pathname==='/admin/model-tests')return json(res,200,service.ledger.get('model-audit')??{status:'not_started',results:[]});
         if(req.method==='POST'&&url.pathname==='/admin/model-tests')return json(res,202,startModelAudit(service,await readBody(req,4194304,{allowEmpty:true})));
+        if(req.method==='GET'&&url.pathname==='/admin/client-updates')return json(res,200,clientUpdatesReport(service));
+        if(req.method==='POST'&&url.pathname==='/admin/client-updates/check'){await readBody(req,4194304,{allowEmpty:true});return json(res,200,await runClientUpdateCheck(service,{force:true}));}
         if(req.method==='GET'&&url.pathname==='/admin/balances')return json(res,200,await balances(service,{refresh:url.searchParams.get('refresh')==='1'}));
         if(req.method==='GET'&&url.pathname==='/admin/usage'){
           const options=Object.fromEntries(['accountId','model','status','from','to','beforeId','limit'].map(k=>[k,url.searchParams.get(k)??'']));
@@ -140,7 +144,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
           });return json(res,200,{saved:true,serverRestartRequired:value.server.host!==host||value.server.port!==port});
         }
         if(req.method==='GET'&&url.pathname==='/admin/records')return json(res,200,{records:service.ledger.records({limit:url.searchParams.get('limit')??100,accountId:url.searchParams.get('accountId')??'',platform:url.searchParams.get('platform')??''})});
-        if(req.method==='GET'&&url.pathname==='/admin/state')return json(res,200,{baseUrl,keysFile:service.keysFile,configFile:service.config.file,schedule:service.ledger.get('schedule-plan'),lastRun:service.ledger.get('schedule-last')});
+        if(req.method==='GET'&&url.pathname==='/admin/state')return json(res,200,{baseUrl,keysFile:service.keysFile,configFile:service.config.file,schedule:service.ledger.get('schedule-plan'),lastRun:service.ledger.get('schedule-last'),degraded:service.config.value?.skipped??[]});
         if(req.method==='POST'&&url.pathname==='/admin/doctor'){
           const results=[];for(const a of service.config.value.accounts){if(a.enabled!==false)results.push(await service.credentials.doctor(a.id));}return json(res,200,{results});
         }
@@ -155,13 +159,15 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
       if(req.method==='GET'&&url.pathname==='/v1/models')return json(res,200,await service.router.models());
       if(req.method==='POST'&&url.pathname==='/v1/chat/completions'){
         // Read live policy on every request, including the private DSH worker after config reload.
+        requestContext=gatewayRequestContext(req.headers,admin);
+        res.setHeader('X-Request-Id',requestContext.requestId);res.setHeader('X-AI-Credit-Request-Id',requestContext.requestId);res.setHeader('X-AI-Credit-Source',requestContext.source);
         const policy=service.config.value.server;
         const body=validateChat(await readBody(req,policy.bodyLimitBytes??67108864));const controller=new AbortController();controllers.add(controller);
+        res.setHeader('X-AI-Credit-Request-Timeout-Ms',String(gatewayRequestTimeout(policy,body.model)));
         const timeout=setTimeout(()=>controller.abort(new DOMException('Gateway request deadline exceeded','TimeoutError')),gatewayRequestTimeout(policy,body.model));
         const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnect);
         try {
-          const source=!admin?'dsh':['dsh','hermes'].includes(req.headers['x-ai-credit-source'])?req.headers['x-ai-credit-source']:'api';
-          const stream=service.router.chat(body,controller.signal,{source});
+          const stream=service.router.chat(body,controller.signal,requestContext);
           if(!body.stream)return json(res,200,await collectChat(stream));
           let first=true;
           for await(const chunk of stream){if(first){first=false;res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});}
@@ -171,7 +177,7 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         }catch(e){if(controller.signal.aborted&&controller.signal.reason?.name==='TimeoutError')throw new AppError('Gateway request deadline exceeded',504,'request_timeout');throw e;}finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
       }
       throw new AppError('Endpoint not found',404,'not_found');
-    }catch(e){const error=errorView(e),retry=[429,503,504].includes(error.status)&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0&&e.retryAfterSeconds<=86400?{retryAfterSeconds:e.retryAfterSeconds}:{};const metadata=rateLimitMetadata(e);if(![429,503,504].includes(error.status)){delete metadata.retryAfterSeconds;delete metadata.retryAfterSource;}const payload={message:error.message,type:error.code,code:error.code,...retry,...metadata,...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})};if(res.destroyed)return;if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:payload})}\n\n`);}else {if(retry.retryAfterSeconds!==undefined)res.setHeader('Retry-After',String(Math.ceil(retry.retryAfterSeconds)));json(res,error.status,{error:payload});}}
+    }catch(e){const error=errorView(e),retry=[429,503,504].includes(error.status)&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0&&e.retryAfterSeconds<=86400?{retryAfterSeconds:e.retryAfterSeconds}:{};const metadata=rateLimitMetadata(e);if(![429,503,504].includes(error.status)){delete metadata.retryAfterSeconds;delete metadata.retryAfterSource;}const payload={message:error.message,type:error.code,code:error.code,...retry,...metadata,...gatewayFailureContract(e,requestContext),...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})};if(res.destroyed)return;if(requestContext&&!res.headersSent){res.setHeader('X-AI-Credit-Retry-Owner','gateway');res.setHeader('X-Should-Retry','false');}if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:payload})}\n\n`);}else {if(retry.retryAfterSeconds!==undefined)res.setHeader('Retry-After',String(Math.ceil(retry.retryAfterSeconds)));json(res,error.status,{error:payload});}}
   });
   server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.off('error',reject);resolve()})});

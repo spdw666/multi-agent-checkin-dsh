@@ -1,0 +1,146 @@
+--- a/apps/desktop/src/lib/model-status-label.ts
++++ b/apps/desktop/src/lib/model-status-label.ts
+@@ -176,9 +176,44 @@
+   return { base, variant, quant }
+ }
+ 
++// AI网关 ids carry a route source, not just a model vendor. Keep it visible
++// only for the named gateway provider; ordinary vendor ids stay unchanged.
++const GATEWAY_MODEL_SOURCES: Readonly<Record<string, string>> = {
++  "workbuddy": "WB国内",
++  "workbuddy-ai": "WB国际",
++  "trae-code-cn": "Trae国内",
++  "trae": "Trae国际",
++  "minimax": "MiniMax",
++  "minimax-native": "MiniMax客户端",
++  "codebuddy-cn": "CodeBuddy国内",
++  "qoder-cn": "Qoder国内",
++  "qoder-global": "Qoder国际",
++  "qwenwork-native": "千问办公",
++  "zcode-native": "ZCode",
++  "nvidia-main": "NVIDIA",
++  "cline-main": "Cline",
++  "kilo-free": "Kilo",
++  "opencode-zen": "OpenCode",
++  "lobster-main": "Lobster",
++  "loomy-main": "Loomy",
++  "raccoon-main": "小浣熊",
++  "antigravity-main": "Antigravity",
++  "bigmodel-official": "智谱官方",
++  "codearts-main": "CodeArts"
++}
++
++function gatewayModelSource(model: string, provider?: string): string {
++  if (provider !== 'ai-credit' && provider !== 'custom:ai-credit') return ''
++  const trimmed = model.trim()
++  const slash = trimmed.indexOf('/')
++  if (slash < 1) return ''
++  const source = trimmed.slice(0, slash)
++  return GATEWAY_MODEL_SOURCES[source] ?? (source.startsWith('wb-') ? 'WB国内独立号' : source)
++}
++
+ /** Split a model id into a clean display name plus an optional grayed variant
+  *  tag, so distinct ids (e.g. `…-4.8` vs `…-4.8-fast`) don't collapse. */
+-export function modelDisplayParts(model: string): { name: string; tag: string } {
++export function modelDisplayParts(model: string, provider?: string): { name: string; tag: string } {
+   let { base, variant, quant } = splitTrailingTags(modelBaseId(model))
+ 
+   const tags = [variant, quant].filter(Boolean)
+@@ -196,14 +231,16 @@
+   // Drop a trailing date-pin (`…-20251101`) — snapshot noise, not a name.
+   base = base.replace(/-\d{8}$/, '')
+ 
+-  return { name: prettifyBase(base) || model.trim() || 'No model', tag: tags.join(' ') }
++  const name = prettifyBase(base) || model.trim() || 'No model'
++  const source = gatewayModelSource(model, provider)
++  return { name: source ? `${source} · ${name}` : name, tag: tags.join(' ') }
+ }
+ 
+ /** Friendly one-line model name for menus and the status bar. The variant
+  *  tag is part of the name: `…-4.8` vs `…-4.8-thinking` must never collapse
+  *  to the same label on any surface (#88597). */
+-export function displayModelName(model: string): string {
+-  const { name, tag } = modelDisplayParts(model)
++export function displayModelName(model: string, provider?: string): string {
++  const { name, tag } = modelDisplayParts(model, provider)
+ 
+   return tag ? `${name} ${tag}` : name
+ }
+@@ -225,8 +262,8 @@
+  *  own pill (`ReasoningPill`), so a long model name can no longer push the
+  *  effort out of the truncating span. Fast shows when the speed=fast param is
+  *  on OR the active model is a `…-fast` variant — never both. */
+-export function formatModelPillLabel(model: string, options?: { fastMode?: boolean; serviceTier?: string }): string {
+-  const name = modelDisplayParts(model).name
++export function formatModelPillLabel(model: string, options?: { fastMode?: boolean; serviceTier?: string; provider?: string }): string {
++  const name = modelDisplayParts(model, options?.provider).name
+ 
+   const tag = model.trim()
+     ? options?.serviceTier === 'ultrafast'
+--- a/apps/desktop/src/app/shell/model-catalog-menu.tsx
++++ b/apps/desktop/src/app/shell/model-catalog-menu.tsx
+@@ -1016,7 +1016,7 @@
+       : null
+ 
+   const isCurrent = activeId !== null
+-  const { name, tag } = modelDisplayParts(family.id)
++  const { name, tag } = modelDisplayParts(family.id, provider.slug)
+   const decoration = useModelMenuRowDecoration({ label: name, model: family.id, provider: provider.slug })
+   const caps = provider.capabilities?.[family.id]
+   const limit = familyLimit(provider, family, isCurrent)
+@@ -1348,7 +1348,7 @@
+ 
+     const matches = (family: ModelFamily) =>
+       foldIncludes(
+-        `${family.id} ${family.fastId ?? ''} ${provider.name} ${provider.slug} ${displayModelName(family.id)}`,
++        `${family.id} ${family.fastId ?? ''} ${provider.name} ${provider.slug} ${displayModelName(family.id, provider.slug)}`,
+         q
+       )
+ 
+--- a/apps/desktop/src/app/chat/composer/model-pill.tsx
++++ b/apps/desktop/src/app/chat/composer/model-pill.tsx
+@@ -144,7 +144,7 @@
+   ) : (
+     <>
+       {currentModel.trim() ? (
+-        <span className="truncate">{pillLabel ?? formatModelPillLabel(currentModel, { fastMode, serviceTier })}</span>
++        <span className="truncate">{pillLabel ?? formatModelPillLabel(currentModel, { fastMode, serviceTier, provider: currentProvider })}</span>
+       ) : (
+         <GlyphSpinner className="opacity-50" spinner="braille" />
+       )}
+--- /dev/null
++++ b/apps/desktop/src/lib/model-status-label-gateway.test.ts
+@@ -0,0 +1,33 @@
++import { describe, expect, it } from 'vitest'
++import {modelDisplayParts, displayModelName, formatModelPillLabel} from './model-status-label'
++const labels = {"workbuddy": "WB国内", "workbuddy-ai": "WB国际", "trae-code-cn": "Trae国内", "trae": "Trae国际", "minimax": "MiniMax", "minimax-native": "MiniMax客户端", "codebuddy-cn": "CodeBuddy国内", "qoder-cn": "Qoder国内", "qoder-global": "Qoder国际", "qwenwork-native": "千问办公", "zcode-native": "ZCode", "nvidia-main": "NVIDIA", "cline-main": "Cline", "kilo-free": "Kilo", "opencode-zen": "OpenCode", "lobster-main": "Lobster", "loomy-main": "Loomy", "raccoon-main": "小浣熊", "antigravity-main": "Antigravity", "bigmodel-official": "智谱官方", "codearts-main": "CodeArts"}
++describe('gateway source prefixes', () => {
++ for (const [source, label] of Object.entries(labels)) {
++  it(`menu and composer distinguish ${source}`, () => {
++   const id = `${source}/deepseek-v4.1-flash`
++   expect(modelDisplayParts(id, 'custom:ai-credit')).toEqual({name:`${label} · DeepSeek V4.1`, tag:'Flash'})
++   expect(displayModelName(id, 'ai-credit')).toBe(`${label} · DeepSeek V4.1 Flash`)
++   expect(formatModelPillLabel(id, {provider:'custom:ai-credit'})).toBe(`${label} · DeepSeek V4.1 · Flash`)
++  })
++ }
++ it('keeps duplicate GLM entries distinct by source', () => {
++  expect(displayModelName('workbuddy/glm-5.3','custom:ai-credit')).not.toBe(displayModelName('trae-code-cn/glm-5.3','custom:ai-credit'))
++ })
++ it('preserves tags and nested vendor model ids', () => {
++  expect(modelDisplayParts('cline-main/deepseek/deepseek-v4.1-flash','custom:ai-credit')).toEqual({name:'Cline · DeepSeek V4.1',tag:'Flash'})
++  expect(formatModelPillLabel('minimax-native/MiniMax-M3.1-Flash-Preview',{provider:'custom:ai-credit'})).toBe('MiniMax客户端 · MiniMax M3.1 Flash · Preview')
++  expect(formatModelPillLabel('workbuddy/glm-5.3',{provider:'custom:ai-credit',serviceTier:'ultrafast'})).toBe('WB国内 · GLM 5.3 · Ultrafast')
++ })
++ it('does not expose individual WorkBuddy account aliases', () => {
++  expect(displayModelName('wb-SAMPLE_ACCOUNT/glm-5.3','custom:ai-credit')).toBe('WB国内独立号 · GLM 5.3')
++ })
++ it('keeps unknown gateway namespaces visible instead of guessing a platform', () => {
++  expect(displayModelName('SAMPLE-new-agent/glm-5.3','custom:ai-credit')).toBe('SAMPLE-new-agent · GLM 5.3')
++ })
++ it('leaves ordinary providers and unscoped model labels unchanged', () => {
++  expect(displayModelName('minimax/minimax-01')).toBe('MiniMax 01')
++  expect(displayModelName('workbuddy/glm-5.3','openrouter')).toBe('GLM 5.3')
++  expect(displayModelName('anthropic/claude-opus-4.8-fast','custom:other')).toBe('Opus 4.8 Fast')
++  expect(displayModelName('glm-5.3','custom:ai-credit')).toBe('GLM 5.3')
++ })
++})

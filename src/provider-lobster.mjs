@@ -37,9 +37,10 @@ export const LOBSTER_SERVER_ORIGIN = 'https://lobsterai-server.youdao.com';
 export const LOBSTER_LOCAL_GATEWAY = 'http://127.0.0.1:55647';
 export const LOBSTER_CLIENT_VERSION = '2026.9.23';
 export const LOBSTER_CLIENT_CAPABILITIES = 'kimi-k3-agentic-v1,thinking-level-control-v1';
-// Conservative UI fallback. NOT an official limit: the catalog carries no output cap, so officialMaxTokens
-// stays null and this value is tagged maxTokensSource:'configured_default' — never presented as official.
-const CONFIGURED_OUTPUT_TOKENS = 4096;
+// Measured ceiling (live probe: 4096/8192/16384/32768/65536 all HTTP 200). Still NOT an official limit:
+// the catalog carries no output cap, so officialMaxTokens stays null and the value is tagged
+// maxTokensSource:'configured_default' — never presented as official.
+const CONFIGURED_OUTPUT_TOKENS = 65536;
 const JSON_LIMIT = 1024 * 1024;
 const SSE_LIMIT = 8 * 1024 * 1024; // a long model output can never buffer unboundedly
 const SSE_MAX_RECORDS = 200000;
@@ -578,7 +579,7 @@ export async function lobsterChat(upstream, secret, input, signal, options = {})
    }
   }
   if(model==='deepseek-flash' && input.reasoning_effort == null && !body.lobsterai_options)body.lobsterai_options={version:1,thinking:{level:'off'}}; // Verified gateway runtime default; explicit user settings win.
-  body.max_tokens = desktopCompletionLimit(input,4096);
+  body.max_tokens = desktopCompletionLimit(input,CONFIGURED_OUTPUT_TOKENS,4096);
   body.model = model;
   body.messages = Array.isArray(input?.messages) ? input.messages : [];
   body.stream = true;

@@ -22,14 +22,22 @@ export function currentWorkBuddyAccount(service){
 const number=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0?x:null;
 export function syncWorkBuddyPools(value,{routeIds}={}) {
   const selected=routeIds?new Set(routeIds):null;
-  for(const route of value.routes){if(route.enabled===false||selected&&!selected.has(route.id))continue;const primary=value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId);if(primary?.kind!=='workbuddy'||primary.enabled===false)continue;
-    // Existing unmarked pools are user/legacy policy, not an invitation to
-    // replace their chosen members. Explicit off always wins, even on an
-    // automatically-created pool. Only a missing pool is upgraded by default.
-    if(route.accountPool&&(route.accountPool.enabled===false||route.accountPool.autoManaged!==true))continue;
-    const primaryAccount=(value.accounts??[]).find(a=>a.id===primary.accountId);if(!primaryAccount||primaryAccount.enabled===false)continue;const edition=workBuddyEdition(primaryAccount);
+  for(const route of value.routes){if(route.enabled===false||selected&&!selected.has(route.id))continue;const primary=value.upstreams.find(u=>u.id===route.targets[0]?.upstreamId);if(primary?.kind!=='workbuddy')continue;
+    // Explicit off always wins: a switched-off pool is a deliberate stop, not a
+    // stale default. Everything else follows additions automatically, or the
+    // user re-adds every new account to every model by hand.
+    if(route.accountPool?.enabled===false)continue;
+    // The primary remains the edition/model anchor while disabled. Enabled
+    // standbys still serve this route; do not freeze additions to their pool
+    // or change the primary/account enable switches to make it participate.
+    const primaryAccount=(value.accounts??[]).find(a=>a.id===primary.accountId);if(!primaryAccount)continue;const edition=workBuddyEdition(primaryAccount);
     const ids=(value.accounts??[]).filter(a=>a.platform==='workbuddy'&&a.enabled!==false&&workBuddyEdition(a)===edition&&value.upstreams.some(u=>u.kind==='workbuddy'&&u.accountId===a.id&&u.enabled!==false)).map(a=>a.id);
-    if(ids.length)route.accountPool={...route.accountPool,enabled:true,autoManaged:true,accountIds:ids,cooldownSeconds:route.accountPool?.cooldownSeconds??3600};
+    if(!ids.length)continue;
+    // Append newcomers after the existing members so a hand-picked priority
+    // order survives. Ineligible leftovers stay listed; candidates() filters
+    // them, and a re-enabled account must not silently lose its place.
+    const prior=route.accountPool?.accountIds??[],merged=[...new Set([...prior,...ids])];
+    route.accountPool={...route.accountPool,enabled:true,autoManaged:true,accountIds:merged,cooldownSeconds:route.accountPool?.cooldownSeconds??3600};
   }return value;
 }
 export function workBuddyModelGroups(service) {
@@ -112,7 +120,16 @@ export async function deleteGatewayAccount(service,accountId,{confirm}={}) {
   const prior=service.config.value.accounts.find(a=>a.id===accountId);if(!prior)throw new AppError('帐号不存在',404,'account_not_found');
   const value=structuredClone(service.config.value),upstreamIds=new Set(value.upstreams.filter(u=>u.accountId===accountId).map(u=>u.id)),removedRouteIds=[];
   for(const r of value.routes){if(r.accountPool){r.accountPool.accountIds=r.accountPool.accountIds.filter(id=>id!==accountId);if(!r.accountPool.accountIds.length)delete r.accountPool;}
-    if(upstreamIds.has(r.targets[0]?.upstreamId)&&r.accountPool?.accountIds.length){const successor=value.upstreams.find(u=>u.kind==='workbuddy'&&u.enabled!==false&&u.accountId===r.accountPool.accountIds[0]);if(successor)r.targets[0]={...r.targets[0],upstreamId:successor.id};}
+    if(upstreamIds.has(r.targets[0]?.upstreamId)&&r.accountPool?.accountIds.length){
+      const anchor=value.upstreams.find(u=>u.id===r.targets[0].upstreamId),edition=workBuddyEdition(value.accounts.find(a=>a.id===anchor?.accountId));
+      // Ineligible retained members preserve priority for later re-enabling,
+      // but must not hide a viable successor farther down the saved order.
+      const successor=r.accountPool.accountIds.map(id=>{
+        const account=value.accounts.find(a=>a.id===id&&a.platform==='workbuddy'&&a.enabled!==false&&a.inferenceEnabled!==false&&workBuddyEdition(a)===edition);
+        return account&&!isWorkBuddyBlocked(service,id)?value.upstreams.find(u=>u.kind==='workbuddy'&&u.enabled!==false&&u.accountId===id):undefined;
+      }).find(Boolean);
+      if(successor)r.targets[0]={...r.targets[0],upstreamId:successor.id};
+    }
     r.targets=r.targets.filter(t=>!upstreamIds.has(t.upstreamId));if(!r.targets.length)removedRouteIds.push(r.id);
   }
   value.accounts=value.accounts.filter(a=>a.id!==accountId);value.upstreams=value.upstreams.filter(u=>!upstreamIds.has(u.id));value.routes=value.routes.filter(r=>r.targets.length);

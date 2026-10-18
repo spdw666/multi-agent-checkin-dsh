@@ -38,6 +38,13 @@ export class ModelRelay{
  partition(route){return relayPartition(this.config.value,route.targets[0]);}
  active(route,source='api'){const p=relayPolicy(this.config.value);return source!=='audit'&&p.enabled===true&&p.partitions?.[this.partition(route)]!==false&&route.relay!==false&&route.targets.every(t=>modelFamily(t.model)===modelFamily(route.targets[0].model));}
  enabled(target){const u=this.config.value.upstreams.find(u=>u.id===target.upstreamId),a=this.config.value.accounts?.find(a=>a.id===u?.accountId);return !!u&&u.enabled!==false&&a?.enabled!==false&&(u.kind!=='workbuddy'||a?.inferenceEnabled!==false);}
+  // relayStandby:false keeps a supplier usable as a route primary while excluding it
+  // from relay handoff. A supplier that answers a large request with HTTP 400 in under
+  // a second must never be picked as an automatic standby.
+  relayStandby(target,route){const u=this.config.value.upstreams.find(u=>u.id===target.upstreamId);if(u?.relayStandby!==false)return true;
+    // The exclusion applies to standbys only. A route whose own primary lives on
+    // this upstream must keep serving it, otherwise the route has no target at all.
+    const primary=route?.targets?.[0];return !!primary&&primary.upstreamId===target.upstreamId&&primary.model===target.model;}
  cooldown(target){
   const u=this.config.value.upstreams.find(u=>u.id===target.upstreamId),rows=[this.get('relay-cooldown:'+target.upstreamId+'\0'+target.model)];
   if(u?.kind==='workbuddy'&&u.accountId)rows.push((this.pool??this).get('wb-pool-cooldown:'+u.accountId));
@@ -51,7 +58,7 @@ export class ModelRelay{
   if(!this.active(route,source))return base;
   const value=this.config.value,family=modelFamily(route.targets[0].model),partition=this.partition(route),targets=[...base];
   for(const r of value.routes)if(r.enabled!==false&&modelFamily(r.targets[0]?.model)===family)for(const t of r.targets)if(modelFamily(t.model)===family)targets.push(t);
-  const seen=new Set();return targets.filter(t=>{const key=t.upstreamId+'\0'+t.model;if(!this.enabled(t)||relayPartition(value,t)!==partition||seen.has(key))return false;seen.add(key);return ignoreCooldown||!this.cooldown(t);});
+  const seen=new Set();return targets.filter(t=>{const key=t.upstreamId+'\0'+t.model;if(!this.enabled(t)||!this.relayStandby(t,route)||relayPartition(value,t)!==partition||seen.has(key))return false;seen.add(key);return ignoreCooldown||!this.cooldown(t);});
  }
  async discover(route,base,signal,{source='api',ignoreCooldown=false}={}){
   base=base.filter(t=>relayPartition(this.config.value,t)===this.partition(route)&&(relayPartition(this.config.value,t)!=='workbuddy'||this.enabled(t)));
@@ -62,7 +69,7 @@ export class ModelRelay{
   const read=this.catalogRead??this.platforms.models.bind(this.platforms);
   await Promise.all(qoderIds.map(async id=>{try{catalogs.set(id,await read(id,{signal}));}catch{if(signal?.aborted)throw new AppError('Request cancelled',499,'request_cancelled');catalogs.set(id,[]);}}));
   const familyOf=t=>catalogModelFamily(t.model,catalogs.get(t.upstreamId)?.find(m=>m.id===t.model)),family=familyOf(route.targets[0]),seen=new Set();
-  const targets=all.filter(t=>{const key=t.upstreamId+'\0'+t.model;if(!this.enabled(t)||seen.has(key)||familyOf(t)!==family)return false;seen.add(key);return ignoreCooldown||!this.cooldown(t);});
+  const targets=all.filter(t=>{const key=t.upstreamId+'\0'+t.model;if(!this.enabled(t)||!this.relayStandby(t,route)||seen.has(key)||familyOf(t)!==family)return false;seen.add(key);return ignoreCooldown||!this.cooldown(t);});
   return {targets,catalogs,family,partition};
  }
  async balance(target,signal){
@@ -113,8 +120,9 @@ export class ModelRelay{
  }
  failure(route,target,error,{source='api'}={}){
   if(error.code==='wb_inference_disabled')return null; // A local user switch is not a supplier outage.
+  if(error.code==='reasoning_budget_exhausted')return null; // Caller budget too small for the reasoning tier; the supplier is healthy.
   if(!this.active(route,source))return null;const v=errorView(error),status=Number(error.status??v.status),context=isContextWindowError(error),depleted=!context&&isCreditExhausted(error);let reason=context||['relay_capacity_incompatible','relay_context_incompatible','tools_not_supported','images_not_supported','reasoning_effort_not_supported','reasoning_parameter_not_supported'].includes(error.code)?'capability_unavailable':depleted?'credits_exhausted':[401,403].includes(status)?'authentication_unavailable':status===404?'model_unavailable':status===429?'rate_limited':[408,500,502,503,504].includes(status)?'upstream_unavailable':null;
-  if(reason&&reason!=='capability_unavailable'){const rate=reason==='rate_limited'?relayRateLimitMetadata(error):null,seconds=rate?rate.retryAfterSeconds:depleted?300:isRelayTransportFailure(error)?5:60;this.set('relay-cooldown:'+target.upstreamId+'\0'+target.model,{until:Date.now()+seconds*1000,reasonCode:reason,status,...(rate?{...rate,errorCode:rateErrorCodes.has(error.code)?error.code:'provider_rate_limited'}:isRelayTransportFailure(error)?{errorCode:error.code}:{})});}
+  if(reason&&reason!=='capability_unavailable'){const rate=reason==='rate_limited'?relayRateLimitMetadata(error):null,seconds=rate?rate.retryAfterSeconds:depleted?300:isRelayTransportFailure(error)?5:reason==='upstream_unavailable'?15:60;this.set('relay-cooldown:'+target.upstreamId+'\0'+target.model,{until:Date.now()+seconds*1000,reasonCode:reason,status,...(rate?{...rate,errorCode:rateErrorCodes.has(error.code)?error.code:'provider_rate_limited'}:isRelayTransportFailure(error)?{errorCode:error.code}:{})});}
   return reason;
  }
  status(){const p=relayPolicy(this.config.value);return {...p,partitions:{workbuddy:p.enabled,other:p.enabled,...p.partitions},strictSameModel:true,partitioned:true,historyPreserved:true,groups:this.config.value.routes.filter(r=>r.enabled!==false).map(r=>({routeId:r.id,modelFamily:modelFamily(r.targets[0].model),partition:this.partition(r),enabled:this.active(r),selectedUpstreamId:this.get('relay-preferred:'+r.id)?.upstreamId??r.targets[0].upstreamId,targets:this.candidates(r,r.targets,{ignoreCooldown:true}).map(t=>{const u=this.config.value.upstreams.find(u=>u.id===t.upstreamId),cooldown=this.cooldown(t);return {...t,platform:u?.kind,accountId:u?.accountId,state:cooldown?'cooldown':'eligible',reasonCode:cooldown?.reasonCode??cooldown?.reason??null,...(cooldown?{retryAfterSeconds:Math.max(1,Math.ceil((cooldown.until-Date.now())/1000))}:{})};})}))};}

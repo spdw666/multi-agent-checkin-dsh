@@ -60,8 +60,9 @@ test('one-million-token primary keeps its actual capacity instead of a 32K stand
 });
 test('a standby below the actual requested output envelope is skipped without trimming',async()=>{
  const f=fixture();f.metadata.cb.contextWindow=32768;f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('down',503,'unavailable');};
- const raw=request('ca'),before=JSON.stringify(raw);await assert.rejects(collectChat(f.router.chat(raw)),e=>e.code==='same_model_unavailable'&&e.status===503);
+ const raw=request('ca'),before=JSON.stringify(raw);await assert.rejects(collectChat(f.router.chat(raw)),e=>e.code==='unavailable'&&e.status===503&&e.relayFailure.root.code==='unavailable'&&e.relayFailure.last.code==='relay_context_incompatible'&&e.relayFailure.skippedCount===1&&e.relayFailure.attemptCount===1);
  assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['ca']);assert.equal(JSON.stringify(raw),before);assert.equal(f.router.relay.cooldown({upstreamId:'cb',model}),null);assert.equal(f.rows[1].error.code,'relay_context_incompatible');
+ assert.equal(f.rows[1].status,'skipped');assert.equal(f.rows[1].dispatched,false);assert.equal(f.rows[1].dispatchCount,0);
 });
 test('unknown standby capacity delegates unchanged payload to the authoritative upstream',async()=>{
  const f=fixture();delete f.metadata.cb.contextWindow;f.platforms.chat=async(t,r)=>{f.calls.push({target:t,request:r});throw new AppError('credits exhausted',402,'credits_exhausted');};
@@ -102,7 +103,10 @@ test('supplier rate limit followed by incompatible tools still reports supplier 
  await assert.rejects(collectChat(f.router.chat(request('ca'))),e=>e.status===429&&e.code==='same_model_rate_limited');assert.equal(f.router.relay.cooldown({upstreamId:'cb',model}),null);
 });
 test('default no-progress supplier wait is 30 seconds rather than fixed90 complete-result timeout',async()=>{
- const f=fixture(),router=new Router(f.config,f.platforms);assert.equal(router.relayAttemptTimeoutMs,30000);const row=await router.routeInfo(f.config.value.routes[2]);assert.equal(row.modelRelay.attemptTimeoutMode,'prefill_then_progress_idle');assert.equal(row.modelRelay.prefillTimeoutMs,90000);
+ const f=fixture(),router=new Router(f.config,f.platforms);assert.equal(router.relayAttemptTimeoutMs,30000);const row=await router.routeInfo(f.config.value.routes[2]);assert.equal(row.modelRelay.attemptTimeoutMode,'prefill_then_progress_idle');
+ // A 1,200-turn request can spend minutes in prefill before its first semantic
+ // delta; a fixed 90s cut it off with relay_target_timeout.
+ assert.equal(row.modelRelay.prefillTimeoutMs,240000);
 });
 test('continuous stream progress can exceed the initial idle budget without being killed and replayed',async()=>{
  const f=fixture({idle:70}),normal=f.platforms.chat;f.platforms.chat=async(t,r,signal)=>{if(t.upstreamId!=='ca')return normal(t,r);f.calls.push({target:t,request:r});let n=0,timer;const body=new ReadableStream({start(controller){timer=setInterval(()=>{n++;const done=n===5;controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify({choices:[{delta:{content:'S'+n},finish_reason:done?'stop':null}]})+'\n\n'));if(done){clearInterval(timer);controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));controller.close();}},25);signal.addEventListener('abort',()=>{clearInterval(timer);controller.error(new Error('aborted'));},{once:true});},cancel(){clearInterval(timer);}});return {response:new Response(body,{headers:{'content-type':'text/event-stream'}})};};

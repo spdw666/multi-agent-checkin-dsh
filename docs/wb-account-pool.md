@@ -260,7 +260,7 @@ WB 只接 WB，其他供应之间接力排除 WB，手工混合配置同样被�
 | `POST /admin/workbuddy/accounts/ACCOUNT/switch` | `{switchClient,migrate?}` 切号 |
 | `POST /admin/workbuddy/sessions/merge` | `{targetAccountId,sourceAccountIds?}` 合并本机副本 |
 | `POST /admin/workbuddy/settings` | `{autoTasks?,autoMigrateSessions?}`，仅布尔 |
-| `POST /admin/workbuddy/pool/normalize` | 同版本同型号池，保留旧路由 ID 与停用项 |
+| `POST /admin/workbuddy/pool/normalize` | 同版本同型号池，保留旧路由 ID、成员顺序与停用项；开启中的池自动补入新账号 |
 | `GET /admin/workbuddy/tasks?accountId=ACCOUNT` | 查询官方任务 |
 | `POST /admin/workbuddy/tasks` | `{action:"query"\|"accept"\|"run"\|"claim",accountId?,taskCodes?}` |
 | `DELETE /admin/accounts/ACCOUNT` | `{confirm:true}` 删除并清引用，保留历史/聊天 |

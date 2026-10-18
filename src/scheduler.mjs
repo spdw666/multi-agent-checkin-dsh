@@ -2,6 +2,7 @@ import {randomInt} from 'node:crypto';
 import {dayIn} from './util.mjs';
 import {runAutomaticWorkBuddyTasks} from './workbuddy-management.mjs';
 import {evaluateWorkBuddyRotation} from './workbuddy-rotation.mjs';
+import {clientUpdateDue,runClientUpdateCheck,cancelClientUpdateCheck} from './client-updates.mjs';
 export function dailyPlan(now,schedule,jitter=0) {
   // Search local wall-clock minutes. This also handles DST folds/gaps on a future VPS timezone.
   const fmt=new Intl.DateTimeFormat('en-GB',{timeZone:schedule.timezone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
@@ -16,6 +17,9 @@ export class Scheduler {
   track(promise){this.jobs.add(promise);void promise.finally(()=>this.jobs.delete(promise)).catch(()=>{});return promise;}
   async tick() {
     if(this.stopped||this.running)return;
+    if(this.service&&clientUpdateDue(this.service)){
+      this.track(runClientUpdateCheck(this.service).catch(error=>{this.ledger.set('client-updates',{status:'error',error:error.message,checkedAt:new Date().toISOString()});}));
+    }
     // WB automatic tasks are a separate user toggle from the daily check-in
     // schedule. Reuse this scheduler's lifecycle and tracked shutdown jobs.
     if(this.service?.config?.value?.workbuddy?.autoTasks===true&&Date.now()-(this.automaticWorkBuddyTasksAt??0)>=1800000){
@@ -38,5 +42,5 @@ export class Scheduler {
     this.running=true;try{const results=await this.claims.all();const windows=results.map(r=>Date.parse(r.nextClaimAt)).filter(t=>Number.isFinite(t)&&t>Date.now());this.ledger.set('schedule-last',{day,signature,at:Date.now(),nextClaimAt:windows.length?Math.min(...windows):null,complete:results.every(r=>!['error','uncertain','busy','action_required'].includes(r.status)),results:results.map(r=>({accountId:r.accountId,task:r.task,status:r.status,nextClaimAt:r.nextClaimAt}))});}finally{this.running=false;}
   }
   start(){if(!this.stopped)return;this.stopped=false;const tick=()=>this.track(this.tick()).catch(()=>{});this.timer=setInterval(tick,30000);this.timer.unref();void this.track((async()=>{if(this.config.value.scheduler.startup){this.running=true;try{await this.claims.all();}finally{this.running=false;}}await this.tick()})()).catch(()=>{});}
-  stop(){this.stopped=true;clearInterval(this.timer);return Promise.allSettled([...this.jobs]);}
+  stop(){this.stopped=true;clearInterval(this.timer);const monitor=this.service&&cancelClientUpdateCheck(this.service);return Promise.allSettled([...this.jobs,...(monitor?[monitor]:[])]);}
 }
