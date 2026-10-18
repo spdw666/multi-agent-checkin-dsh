@@ -642,7 +642,7 @@ namespace AiCreditDesktop {
 
             var body=new Panel {Dock=DockStyle.Fill,BackColor=Theme.Background};var rail=new RailPanel {Dock=DockStyle.Left,Width=UiMetrics.Sidebar};Controls.Add(body);Controls.Add(rail);
             var head=new WorkbenchHeader {Dock=DockStyle.Top,Height=UiMetrics.Header,BackColor=Theme.Surface};pageTitle.BackColor=Color.Transparent;pageSubtitle.BackColor=Color.Transparent;pageTitle.Location=new Point(28,12);pageSubtitle.Location=new Point(29,47);head.Controls.Add(pageTitle);head.Controls.Add(pageSubtitle);
-            var headerActions=new FlowLayoutPanel {Dock=DockStyle.Right,Width=340,BackColor=Color.Transparent,Padding=new Padding(8,24,8,0)};AddButton(headerActions,"全部账号签到",ClaimAllAccounts);AddButton(headerActions,"刷新全部余额",async()=>{await Backend.Connect(false);await LoadBalances(true);status.Text="余额刷新完成 · "+DateTime.Now.ToString("HH:mm:ss");});((Button)headerActions.Controls[0]).BackColor=Theme.Accent;((Button)headerActions.Controls[0]).ForeColor=Color.White;head.Controls.Add(headerActions);
+            var headerActions=new FlowLayoutPanel {Dock=DockStyle.Right,Width=340,BackColor=Color.Transparent,Padding=new Padding(8,24,8,0)};AddButton(headerActions,"全部账号签到",ClaimAllAccounts);AddButton(headerActions,"刷新全部余额",async()=>{await Backend.Connect(false);await LoadBalances(true);});((Button)headerActions.Controls[0]).BackColor=Theme.Accent;((Button)headerActions.Controls[0]).ForeColor=Color.White;head.Controls.Add(headerActions);
             var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = UiMetrics.Footer, Padding = new Padding(24,6,20,0), BackColor = Theme.Background };
             AddButton(bar,"启动后台",async()=>{backendPaused=false;await Backend.Connect(true);await LoadAll();});AddButton(bar,"暂停后台",async()=>{await Backend.Request("POST","/admin/shutdown",new object());backendPaused=true;status.Text="后台已暂停 · 自动重连已停止";});bar.Controls.Add(status);
             body.Controls.Add(tabs);body.Controls.Add(bar);body.Controls.Add(head);
@@ -745,6 +745,12 @@ namespace AiCreditDesktop {
             }
             balanceCardCount=data.Length;summary.Platforms=data.Length;summary.Verified=data.Count(a=>!a.ContainsKey("error")&&!object.Equals(a.ContainsKey("stale")?a["stale"]:false,true));summary.Routes=routes.Rows.Count;summary.Invalidate();ResizeCards();creditCards.ResumeLayout();
             ApplyAnchor(anchor);if(!reuse&&balanceTransition!=null)balanceTransition.Play(overviewHost);
+            // The forced balance query has already contacted providers. Re-read only the shared WB cache;
+            // never repeat an upstream refresh or query task state just to update the visible daily badge.
+            if(force&&wbBoard!=null&&!IsDisposed){
+                try{await wbBoard.LoadAsync(false);bool attention;string receipt=WbPoolUi.BalanceRefreshReceipt(result,wbBoard.LastSummary,out attention);status.Text=WbPoolUi.BalanceRefreshStatus(result,wbBoard.LastSummary);status.AccessibleDescription=receipt;wbBoard.PresentBalanceRefreshReceipt(receipt,attention);}
+                catch(Exception error){status.Text="余额已返 · WB签到同步失败";status.AccessibleDescription="余额结果已返回；WB今日签到明细同步失败："+error.Message+"；原账号页保留，请刷新重试";}
+            }
         }
         private async void RunRefresh(){await Run(async()=>await LoadBalances(true));}
         private void ShowBalanceDetails(Dictionary<string,object> a){using(var d=new UsageDetailsForm(Backend,a))d.ShowDialog(this);}
@@ -1773,6 +1779,29 @@ namespace AiCreditDesktop {
             if(!(bool)flag&&status=="not_claimed"&&!object.Equals(daily.ContainsKey("active")?daily["active"]:null,false))return "今日未签到";
             return "今日签到待核验";
         }
+        private static string RefreshFailure(IDictionary<string,object> row,string key){var error=NvidiaPresentation.Object(row,key);return Json.Get(error,"code",Json.Get(error,"message",Error(row,key)));}
+        private static string PendingCheckinReason(IDictionary<string,object> row){
+            var daily=NvidiaPresentation.Object(row,"dailyCheckin");var balance=NvidiaPresentation.Object(row,"balance");string credential=Json.Get(row,"credentialStatus",Json.Get(NvidiaPresentation.Object(row,"credential"),"status"));
+            if(new[]{"expired","rejected","auth_rejected","login_required","missing","check_failed","banned"}.Contains(credential))return "登录待更新（"+credential+"）";
+            string reason=RefreshFailure(daily,"error");if(reason.Length>0)return "签到查询失败（"+reason+"）";
+            reason=RefreshFailure(balance,"error");if(reason.Length==0)reason=RefreshFailure(row,"error");if(reason.Length>0)return "余额或登录核验失败（"+reason+"）";
+            if(Flag(row,"stale")||Flag(balance,"stale")||Flag(daily,"stale"))return "上次成功缓存，待重新核验";
+            DateTimeOffset checkedAt;if(!DateTimeOffset.TryParse(Json.Get(daily,"checkedAt"),out checkedAt))return "缺少签到核验时间";
+            if(checkedAt.ToOffset(DateTimeOffset.Now.Offset).Date!=DateTimeOffset.Now.Date)return "签到核验不在今日";
+            if(object.Equals(daily.ContainsKey("active")?daily["active"]:null,false))return "签到活动未开放";
+            return "服务端未确认签到状态（"+Json.Get(daily,"status","unknown")+"）";
+        }
+        internal static string BalanceRefreshStatus(Dictionary<string,object> balances,Dictionary<string,object> summary){var rows=Json.Rows(summary??new Dictionary<string,object>(),"accounts").ToArray();return "余额"+Json.Rows(balances,"accounts").Count()+" · WB 已"+rows.Count(r=>DailyBadge(r)=="今日已签到")+"/未"+rows.Count(r=>DailyBadge(r)=="今日未签到")+"/待核"+rows.Count(r=>DailyBadge(r)=="今日签到待核验");}
+        internal static string BalanceRefreshReceipt(Dictionary<string,object> balances,Dictionary<string,object> summary,out bool attention){
+            var balanceRows=Json.Rows(balances,"accounts").ToArray();var balanceErrors=balanceRows.Where(r=>RefreshFailure(r,"error").Length>0||Flag(r,"stale")).ToArray();
+            string receipt="余额返回 "+balanceRows.Length+" 项"+(balanceErrors.Length>0?"，失败 "+balanceErrors.Length:"");
+            if(summary==null){attention=true;return receipt+" · WB今日签到明细待同步";}
+            var rows=Json.Rows(summary,"accounts").ToArray();var pending=rows.Where(r=>DailyBadge(r)=="今日签到待核验").ToArray();int signed=rows.Count(r=>DailyBadge(r)=="今日已签到"),unsigned=rows.Count(r=>DailyBadge(r)=="今日未签到");
+            receipt+=" · WB今日签到：已签 "+signed+" · 未签 "+unsigned+" · 待核验 "+pending.Length;
+            if(pending.Length>0)receipt+="；原因："+string.Join("；",pending.Select(PendingCheckinReason).GroupBy(x=>x).Select(g=>g.Key+" ×"+g.Count()));
+            if(balanceErrors.Length>0)receipt+="；余额失败原因："+string.Join("；",balanceErrors.Select(r=>RefreshFailure(r,"error").Length>0?RefreshFailure(r,"error"):"缓存待核验").Distinct());
+            attention=pending.Length>0||balanceErrors.Length>0;return receipt;
+        }
         internal static string Daily(IDictionary<string,object> row){string badge=DailyBadge(row);var daily=NvidiaPresentation.Object(row,"dailyCheckin");return badge=="今日已签到"?badge+" · 今日到账 "+Amount(daily,"todayCredit")+" 积分":badge;}
         internal static string TaskState(IDictionary<string,object> task){if(Flag(task,"claimed"))return "已领取";if(Flag(task,"locked"))return "未解锁";if(Flag(task,"claimable")||Flag(task,"qualified"))return "已达标 · 待领取";if(Flag(task,"accepted"))return "已接受 · 进行中";string state=Json.Get(task,"status",Json.Get(task,"acceptStatus","not_accepted"));switch(state){case "claimed":return "已领取";case "not_accepted":return "尚未接受";case "accepted":case "in_progress":case "progress":return "进行中";case "completed":return "已完成 · 领取待核验";case "locked":return "未解锁";default:return state;}}
         internal static string TaskSummary(IDictionary<string,object> row){var block=NvidiaPresentation.Object(row,"tasks");var items=Json.Rows(block,"items").ToArray();if(items.Length==0)return "任务列表待查询 · 不把未返回状态算完成";return items.Length+" 项任务 · 已领取 "+items.Count(t=>Flag(t,"claimed"))+" · 达标待领 "+items.Count(t=>!Flag(t,"claimed")&&(Flag(t,"claimable")||Flag(t,"qualified")))+" · 进行中 "+items.Count(t=>!Flag(t,"claimed")&&!Flag(t,"locked")&&Flag(t,"accepted"))+" · 未接受 "+items.Count(t=>!Flag(t,"claimed")&&!Flag(t,"locked")&&!Flag(t,"accepted"));}
@@ -1885,6 +1914,7 @@ namespace AiCreditDesktop {
         }
         private async Task SaveSettings(){await backend.Request("POST","/admin/workbuddy/settings",new {autoMigrateSessions=autoMigrate.Checked,autoTasks=autoTasks.Checked});SetNote("WB 账号池设置已保存",Theme.Success);}
         private void ShowResult(Dictionary<string,object> result){if(!CanPresent)return;using(var d=new WbReceiptForm(result))d.ShowDialog(FindForm());}
+        internal void PresentBalanceRefreshReceipt(string receipt,bool attention){if(!operating)SetNote(receipt,attention?Theme.Warning:Theme.Success);}
         internal async Task LoadAsync(bool refresh=false){if(!CanPresent||backend==null)return;await loadGate.WaitAsync();try{if(!CanPresent)return;var data=await backend.Request("GET","/admin/workbuddy/summary"+(refresh?"?refresh=true":""));if(CanPresent){Present(data);if(!operating&&(note.Text==ProcessingNote||note.Text.StartsWith("账号池暂未刷新：")||note.Text.Contains("后续刷新未完成：")))SetNote("账号池资料已刷新；当前浏览账号已保留。",Theme.Success);}}catch(Exception e){SetNote("账号池暂未刷新："+e.Message+"；当前页保留",Theme.Warning);throw;}finally{loadGate.Release();}}
         internal void Present(Dictionary<string,object> data){if(!CanPresent)return;string keep=CurrentAccountId;int oldIndex=index;LastSummary=data;binding=true;try{var aggregate=NvidiaPresentation.Object(data,"totals");var settings=NvidiaPresentation.Object(data,"settings");accounts=Json.Rows(data,"accounts").ToArray();string title="池积分剩余 / 总额",amount=WbPoolUi.Credits(aggregate);decimal remaining,total;if(!decimal.TryParse(Json.Get(aggregate,"remaining"),out remaining)||!decimal.TryParse(Json.Get(aggregate,"total"),out total)){var known=accounts.Where(r=>Json.Enabled(r)&&!WbPoolUi.IsBanned(r)&&Json.Get(r,"usageStatus")!="error"&&!WbPoolUi.Flag(r,"stale")&&decimal.TryParse(Json.Get(r,"remaining"),out remaining)&&decimal.TryParse(Json.Get(r,"total"),out total)).ToArray();title="已知池积分剩余 / 总额";if(known.Length>0)amount=known.Sum(r=>decimal.Parse(Json.Get(r,"remaining"))).ToString("#,##0.###")+" / "+known.Sum(r=>decimal.Parse(Json.Get(r,"total"))).ToString("#,##0.###");}
             totals.Text=title+"（总资产）   "+amount;var callable=accounts.Where(r=>Json.Enabled(r)&&WbPoolUi.InferenceEnabled(r)&&!WbPoolUi.IsBanned(r)&&Json.Get(r,"usageStatus")!="error"&&!WbPoolUi.Flag(r,"stale")&&decimal.TryParse(Json.Get(r,"remaining"),out remaining)&&decimal.TryParse(Json.Get(r,"total"),out total)).ToArray();string callableAmount=aggregate.ContainsKey("inferenceRemaining")?WbPoolUi.Amount(aggregate,"inferenceRemaining")+" / "+WbPoolUi.Amount(aggregate,"inferenceTotal"):callable.Length>0?callable.Sum(r=>decimal.Parse(Json.Get(r,"remaining"))).ToString("#,##0.###")+" / "+callable.Sum(r=>decimal.Parse(Json.Get(r,"total"))).ToString("#,##0.###"):"待获取";aggregateNote.Text="共 "+accounts.Length+" 号 · 账号启用 "+accounts.Count(Json.Enabled)+" · 模型调用 "+Json.Get(aggregate,"inferenceEnabledAccounts",accounts.Count(WbPoolUi.InferenceEnabled).ToString())+" · 积分停用 "+Json.Get(aggregate,"inferenceDisabledAccounts",accounts.Count(r=>!WbPoolUi.InferenceEnabled(r)).ToString())+" · 封禁 "+accounts.Count(WbPoolUi.IsBanned)+Environment.NewLine+"可调用积分剩余 / 总额："+callableAmount+" · 未知不按零计";autoMigrate.Checked=WbPoolUi.Flag(settings,"autoMigrateSessions");autoTasks.Checked=WbPoolUi.Flag(settings,"autoTasks");models.Rows.Clear();foreach(var model in Json.Rows(data,"models"))models.Rows.Add(Json.Get(model,"exactModel",Json.Get(model,"model"))+" · "+Json.Get(model,"edition","cn"),Json.Strings(model,"accountIds").Length+" 个账号","积分用完 → 同型号下一账号；排除积分停用账号");modelToggle.Text=(modelsExpanded?"收起":"模型")+" ("+models.Rows.Count+")";models.Visible=modelsExpanded&&models.Rows.Count>0;

@@ -44,3 +44,7 @@ jobs:
           ./desktop/tests/Run-DiagnosticsFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/DiagnosticsTests"
           ./desktop/tests/Run-WbAuthStateColorFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbAuthColorTests"
           ./desktop/tests/Run-WbTaskProgressFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbTaskProgressTests"
+      - name: Verify refresh-all balance and daily check-in synchronization
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/tests/Run-WbRefreshFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbRefreshTests"

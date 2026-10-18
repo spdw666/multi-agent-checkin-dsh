@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="package.json"><img alt="Node.js 22.23.3+" src="https://img.shields.io/badge/Node.js-%3E%3D22.23.3-339933?logo=nodedotjs&logoColor=white"></a>
-  <a href="package.json"><img alt="Gateway 0.7.0" src="https://img.shields.io/badge/Gateway-0.7.0-blue"></a>
+  <a href="package.json"><img alt="Gateway 0.7.1" src="https://img.shields.io/badge/Gateway-0.7.1-blue"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
 </p>
@@ -363,6 +363,8 @@ Token 使用 **K/M/B/T** 短级制（如 `540.6M`）；字符数、请求数与 
 例如客户端仍显示原模型 ID，但实际由另一个同款账号回答，可以在这里核对供给变化。活动记录中的工具名和文件操作分类说明请求携带了什么，不证明客户端真正执行过工具。本网关之外的调用不在这里。
 
 ### 7. wb帐号池：一号一页，管理积分与任务
+
+顶部“刷新全部余额”会同时核验 WB 官方今日签到状态，并同步账号卡上的“今日已签到 / 今日未签到 / 今日签到待核验”。它只查询，不代替“全部账号签到”；回执显示核验数量，待核验项显示具体原因。
 
 用账号下拉、名称/账号 ID/UID 搜索，或“首 / 上 / 下 / 末”翻页。浏览账号不会切换官方客户端，也不会改变下次模型供给。刷新会尽量保留正在读的账号与资料位置。
 
