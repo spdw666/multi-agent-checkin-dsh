@@ -290,3 +290,96 @@ test('SAMPLE dotted YAML keys cannot impersonate the nested Provider or DSH conf
   await f.write(join(f.dshProfile,'cordis.patch.yml'),`- id: ${bundleName}\n  config.configFile: ${JSON.stringify(f.service.config.file)}\n`);
   assert.notEqual(stage(await f.report(),'dsh','configured'),'passed');
 });
+
+function wrappedPath(value) {
+  const quoted=JSON.stringify(value.replaceAll('\\','/')),at=Math.floor(quoted.length/2);
+  return quoted.slice(0,at)+'\\\n      '+quoted.slice(at);
+}
+
+test('SAMPLE DSH double-quoted backslash line continuation preserves the exact config binding',async t=>{
+  const f=await fixture(t,{installed:true});
+  await f.write(join(f.dshProfile,'cordis.patch.yml'),`- id: ${bundleName}\n  config:\n    configFile: ${wrappedPath(f.service.config.file)}\n  disabled: false\n`);
+  const report=await f.report();assert.equal(stage(report,'dsh','configured'),'passed');
+  assert.equal(stage(report,'dsh','runtimeLoaded'),'pendingReload');assert.equal(stage(report,'dsh','acceptance'),'notRun');
+});
+
+test('SAMPLE malformed multiline quoting never becomes a DSH config binding',async t=>{
+  const f=await fixture(t,{installed:true});
+  const malformed=[wrappedPath(f.service.config.file).replace('\\\n','\n'),wrappedPath(f.service.config.file).slice(0,-1),wrappedPath(f.service.config.file).replace('\n      ','\n  ')];
+  for(const value of malformed){
+    await f.write(join(f.dshProfile,'cordis.patch.yml'),`- id: ${bundleName}\n  config:\n    configFile: ${value}\n`);
+    assert.notEqual(stage(await f.report(),'dsh','configured'),'passed');
+  }
+});
+
+test('SAMPLE wrapped configFile still enforces direct parent, duplicate fields and unique target',async t=>{
+  const f=await fixture(t,{installed:true}),value=wrappedPath(f.service.config.file);
+  const configurations=[
+    `- id: ${bundleName}\n  unrelated:\n    configFile: ${value}\n`,
+    `- id: ${bundleName}\n  config:\n    configFile: ${value}\n    configFile: ${value}\n`,
+    `- id: ${bundleName}\n  config:\n    configFile: ${value}\n- id: ${bundleName}\n  config:\n    configFile: ${value}\n`
+  ];
+  for(const patch of configurations){await f.write(join(f.dshProfile,'cordis.patch.yml'),patch);assert.notEqual(stage(await f.report(),'dsh','configured'),'passed');}
+});
+
+test('SAMPLE Hermes unrelated indentless MCP argument lists do not hide its named Provider',async t=>{
+  const f=await fixture(t,{installed:true});
+  const unrelated='mcp_servers:\n  SAMPLE_server:\n    command: SAMPLE-command\n    args:\n    - stdio\n    - SAMPLE-argument\n    env:\n      SAMPLE_VARIABLE: SAMPLE-value\n    enabled: true\n';
+  await f.write(join(f.hermesHome,'config.yaml'),unrelated+f.yaml);
+  const report=await f.report();assert.equal(stage(report,'hermes','configured'),'passed');assert.equal(stage(report,'hermes','diskSynced'),'passed');assert.equal(stage(report,'hermes','runtimeLoaded'),'pendingReload');
+});
+
+test('SAMPLE Hermes unrelated indentless arrays of mappings preserve target section boundaries',async t=>{
+  const f=await fixture(t,{installed:true});
+  const unrelated='moa:\n  presets:\n    default:\n      reference_models:\n      - provider: SAMPLE-first\n        model: SAMPLE-model-a\n        enabled: true\n      - provider: SAMPLE-second\n        model: SAMPLE-model-b\n        enabled: false\n';
+  await f.write(join(f.hermesHome,'config.yaml'),unrelated+f.yaml);
+  const report=await f.report();assert.equal(stage(report,'hermes','configured'),'passed');assert.equal(stage(report,'hermes','diskSynced'),'passed');assert.equal(stage(report,'hermes','modelPublished'),'unknown');
+  await f.write(join(f.hermesHome,'config.yaml'),unrelated.replace('        model: SAMPLE-model-a\n','        model: SAMPLE-model-a\n        model: SAMPLE-duplicate\n')+f.yaml);
+  assert.equal(stage(await f.report(),'hermes','configured'),'unknown','duplicate mapping keys are still rejected');
+});
+
+test('SAMPLE target plugin enabled block list supports explicit indentless strings only',async t=>{
+  const f=await fixture(t,{installed:true});
+  const inlineIndentless=f.yaml.replace('  enabled:\n    - SAMPLE-other-plugin\n    - '+pluginName,'  enabled:\n  - SAMPLE-other-plugin\n  - '+pluginName);
+  await f.write(join(f.hermesHome,'config.yaml'),inlineIndentless);
+  assert.equal(stage(await f.report(),'hermes','diskSynced'),'passed');
+  for(const invalid of [inlineIndentless.replace('  - SAMPLE-other-plugin','  - true'),inlineIndentless.replace('  - SAMPLE-other-plugin','  - 12'),inlineIndentless.replace('  - SAMPLE-other-plugin','  - name: SAMPLE-map'),inlineIndentless.replace('  disabled: []','  disabled: false')]){
+    await f.write(join(f.hermesHome,'config.yaml'),invalid);
+    assert.notEqual(stage(await f.report(),'hermes','diskSynced'),'passed');
+  }
+});
+
+test('SAMPLE target Provider duplicate after unrelated mapping arrays remains unknown',async t=>{
+  const f=await fixture(t,{installed:true});
+  await f.write(join(f.hermesHome,'config.yaml'),f.yaml+'moa:\n  models:\n  - provider: SAMPLE\n    enabled: true\nproviders:\n  ai-credit:\n    base_url: http://127.0.0.1:19421/v1\n');
+  assert.equal(stage(await f.report(),'hermes','configured'),'unknown');
+});
+
+test('SAMPLE custom two-token Hermes helper stays unknown and is never executed',async t=>{
+  const f=await fixture(t,{installed:true}),custom=join(f.folder,'SAMPLE-custom-helper.mjs');
+  await f.write(custom,'throw new Error("SAMPLE helper must never execute");\n');
+  const command=`'"${f.node.replaceAll('\\','/')}" "${custom.replaceAll('\\','/')}"'`;
+  await f.write(join(f.hermesHome,'config.yaml'),f.yaml.replace(/^\s+key_cmd:.*$/m,'    key_cmd: '+command));
+  const report=await f.report();assert.equal(stage(report,'hermes','configured'),'unknown');assert.equal(stage(report,'hermes','diskSynced'),'passed');assert.equal(stage(report,'hermes','acceptance'),'notRun');assert.equal(f.sideEffects(),0);
+});
+
+test('SAMPLE disabled or wrong-typed DSH target does not become configured even with a wrapped binding',async t=>{
+  const f=await fixture(t,{installed:true});
+  for(const disabled of ['true','"false"']){
+    await f.write(join(f.dshProfile,'cordis.patch.yml'),`- id: ${bundleName}\n  config:\n    configFile: ${wrappedPath(f.service.config.file)}\n  disabled: ${disabled}\n`);
+    assert.notEqual(stage(await f.report(),'dsh','configured'),'passed');
+  }
+});
+
+test('SAMPLE nested bundle targets do not impersonate direct Cordis root sequence entries',async t=>{
+  const f=await fixture(t,{installed:true});
+  const root=`- id: ${bundleName}\n  config:\n    configFile: ${wrappedPath(f.service.config.file)}\n`;
+  for(const patch of ['unrelated:\n'+root.split('\n').map(line=>line?'  '+line:line).join('\n'),'- id: SAMPLE-unrelated\n  config:\n    nested:\n'+root.split('\n').map(line=>line?'      '+line:line).join('\n')]){
+    await f.write(join(f.dshProfile,'cordis.patch.yml'),patch);
+    assert.notEqual(stage(await f.report(),'dsh','configured'),'passed');
+  }
+  for(const patch of [root.split('\n').map(line=>line?'  '+line:line).join('\n'),'\uFEFF---\n'+root]){
+    await f.write(join(f.dshProfile,'cordis.patch.yml'),patch);
+    assert.equal(stage(await f.report(),'dsh','configured'),'passed','legitimate whole-root indentation and BOM/document header remain supported');
+  }
+});

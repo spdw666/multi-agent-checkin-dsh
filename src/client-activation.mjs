@@ -76,55 +76,106 @@ function yamlScalarShape(raw) {
   if(!/^['"]/.test(raw)&&(/[\[\]{}]|:\s|^[?\-]\s/.test(raw)))return false;
   return true;
 }
+function yamlLogicalLines(text) {
+  const physical=text.replace(/^\uFEFF/,'').split(/\r?\n/),logical=[];
+  for(let i=0;i<physical.length;i++){
+    let line=physical[i];
+    const field=/^( *)(?:"[A-Za-z0-9_.-]+"|'[A-Za-z0-9_.-]+'|[A-Za-z0-9_.-]+)\s*:\s*(".*)$/.exec(line);
+    if(field&&yamlTrim(field[2])===undefined){
+      // YAML double-quoted backslash line continuation removes the physical
+      // newline and continuation indentation; it does NOT insert a space.
+      // Other multiline scalar styles stay unknown rather than being guessed.
+      let raw=field[2],count=0;
+      while(yamlTrim(raw)===undefined){
+        const escapes=/(\\+)$/.exec(raw)?.[1].length??0;
+        if(escapes%2!==1||++count>32||i+1>=physical.length)return null;
+        const next=physical[++i],indent=/^( *)/.exec(next)[1].length;
+        if(!next.trim()||indent<=field[1].length||/^ *\t/.test(next))return null;
+        raw=raw.slice(0,-1)+next.trimStart();
+      }
+      line=line.slice(0,line.indexOf(field[2]))+raw;
+    }
+    logical.push(line);
+  }
+  return logical;
+}
+const yamlStringToken=raw=>{
+  const value=yamlTrim(raw);
+  return value!==undefined&&( /^['"]/.test(value)||! /^(?:true|false|null|~|[-+]?(?:\d+(?:\.\d*)?(?:e[-+]?\d+)?|0x[0-9a-f]+|0o[0-7]+|\.inf|\.nan))$/i.test(value));
+};
 function yamlMap(text) {
   const entries = new Map(), stack = [];
-  let list;
-  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+  const lines=yamlLogicalLines(text);if(!lines)return null;
+  const keyPattern=/^(?:"([A-Za-z0-9_.-]+)"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+))\s*:(.*)$/;
+  const path=segments=>segments.map(segment=>segment.replaceAll('~','~0').replaceAll('.','~1')).join('.');
+  const addField=(indent,match)=>{
+    while(stack.length&&stack.at(-1).indent>=indent)stack.pop();
+    const parent=stack.at(-1);
+    if(!parent&&indent!==0||parent&&(parent.raw||parent.list||parent.childIndent!==undefined&&parent.childIndent!==indent))return false;
+    if(parent)parent.childIndent=indent;
+    const name=match[1]??match[2]??match[3],key=path([...stack.map(item=>item.key),name]);
+    if(entries.has(key))return false;
+    const raw=yamlTrim(match[4]);if(raw===undefined||!yamlScalarShape(raw))return false;
+    const entry={raw,value:scalar(raw)};entries.set(key,entry);
+    stack.push({indent,key:name,raw,entry});return true;
+  };
+  for (const line of lines) {
     if (!line.trim() || /^\s*#/.test(line)) continue;
     if (/^\s*\t/.test(line)) return null;
-    const match = /^( *)(?:"([A-Za-z0-9_.-]+)"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+))\s*:(.*)$/.exec(line);
-    if (match) {
-      const indent = match[1].length;
-      while (stack.length && stack.at(-1).indent >= indent) stack.pop();
-      const parent=stack.at(-1);
-      if(!parent&&indent!==0||parent&&(parent.raw||parent.list||parent.childIndent!==undefined&&parent.childIndent!==indent))return null;
-      if(parent)parent.childIndent=indent;
-      // A literal dotted YAML key is not a nested mapping path.
-      const key = [...stack.map(item=>item.key), match[2]??match[3]??match[4]].map(segment=>segment.replaceAll('~','~0').replaceAll('.','~1')).join('.');
-      if (entries.has(key)) return null;
-      const raw = yamlTrim(match[5]);
-      if(raw===undefined||!yamlScalarShape(raw))return null;
-      entries.set(key, {raw, value:scalar(raw)});
-      stack.push({indent, key:match[2]??match[3]??match[4],raw});
-      list = raw ? null : {key, indent, values:[]};
-    } else if (list) {
-      const item = /^( *)-\s+(.+)$/.exec(line);
-      if (item && item[1].length > list.indent) {
-        if(!yamlScalarShape(item[2])||scalar(item[2])===undefined)return null;
-        list.values.push(scalar(item[2]));stack.at(-1).list=true;
-        entries.get(list.key).list = list.values;
-      } else return null;
-    } else return null;
+    const item=/^( *)-( +)(.*)$/.exec(line);
+    if(item){
+      const indent=item[1].length;
+      // A block sequence may be indentless relative to its mapping key. Locate
+      // only its own container, never reinterpret a scalar or mapping sibling.
+      const at=stack.findLastIndex(node=>!node.synthetic&&!node.raw&&node.indent<=indent&&(node.list?node.listIndent===indent:node.childIndent===undefined));
+      if(at<0)return null;
+      stack.splice(at+1);const parent=stack[at],entry=parent.entry;
+      parent.list=true;parent.listIndent=indent;
+      entry.list??=[];entry.listStringOnly??=true;
+      const mapping=keyPattern.exec(item[3]);
+      if(mapping){
+        const index=entry.list.length;entry.list.push(null);entry.listStringOnly=false;
+        stack.push({indent,key:'~item'+index,raw:'',synthetic:true});
+        if(!addField(indent+1+item[2].length,mapping))return null;
+      }else{
+        if(!yamlScalarShape(item[3])||scalar(item[3])===undefined)return null;
+        entry.list.push(scalar(item[3]));entry.listStringOnly&&=yamlStringToken(item[3]);
+      }
+      continue;
+    }
+    const indent=/^( *)/.exec(line)[1].length,match=keyPattern.exec(line.slice(indent));
+    if(!match||!addField(indent,match))return null;
   }
   return entries;
 }
 function yamlList(entry) {
   if (!entry) return [];
-  if (entry.list) return entry.list.filter(v=>typeof v==='string');
+  if (entry.list) return entry.listStringOnly?entry.list:null;
   const raw = entry.raw.trim();
-  if (!raw.startsWith('[') || !raw.endsWith(']')) return [];
-  return inlineList(raw)??[];
+  if (!raw.startsWith('[') || !raw.endsWith(']')) return null;
+  if(raw!=='[]'&&raw.slice(1,-1).split(',').some(item=>!yamlStringToken(item)))return null;
+  return inlineList(raw);
 }
 function patchConfig(text) {
+  text=text.replace(/^\uFEFF/,'');
+  const visible=text.split(/\r?\n/).filter(line=>line.trim()&&!/^\s*#/.test(line));
+  if(visible[0]?.trim()==='---')visible.shift();
+  const root=/^( *)-(?:\s|$)/.exec(visible[0]??'');
+  if(!root)return undefined;
+  const rootIndent=root[1].length;
+  if(visible.some(line=>{const indent=/^( *)/.exec(line)[1].length;return indent<rootIndent||indent===rootIndent&&!/^\s*-(?:\s|$)/.test(line);}))return undefined;
   const values=[];
   for (const block of text.split(/\r?\n(?=\s*-\s+id\s*:)/)) {
-    const id = /^\s*-\s+id\s*:\s*(.+)$/m.exec(block);
-    if (scalar(id?.[1]??'') !== bundleName) continue;
+    // Only direct entries at the document's root sequence indentation bind
+    // this profile. Nested insert/unrelated sequences never become targets.
+    const id = /^( *)-\s+id\s*:\s*(.+)$/m.exec(block);
+    if (!id||id[1].length!==rootIndent||scalar(id[2])!==bundleName) continue;
     const lines=block.split(/\r?\n/),index=lines.findIndex(line=>/^\s*-\s+id\s*:/.test(line));
     const indent=/^( *)-/.exec(lines[index])?.[1].length;
     const mapping=lines.slice(index).map((line,i)=>i===0?line.slice(indent).replace(/^-\s+/,''):line.trim()&&!/^\s*#/.test(line)?line.slice(indent+2):line).join('\n');
     const parsed=yamlMap(mapping);
     if(!parsed)return undefined;
+    if(parsed.has('disabled')&&parsed.get('disabled').raw!=='false')return undefined;
     if(parsed.has('config'))values.push(parsed.get('config.configFile')?.value);
   }
   return values.length===1?values[0]:undefined;
@@ -278,7 +329,7 @@ export async function clientActivationReport(service, options = {}) {
   const hermesConfigFingerprint=!hermesConfig.error?hash(JSON.stringify([hash(hermesConfig.bytes)])):null;
   const enabledPlugins=yamlList(yaml?.get('plugins.enabled')),disabledPlugins=yamlList(yaml?.get('plugins.disabled'));
   const manifestMap=!pluginManifest.error?yamlMap(pluginManifest.text):null;
-  const pluginConfigured=enabledPlugins.includes(pluginName)&&!disabledPlugins.includes(pluginName)&&manifestMap?.get('name')?.value===pluginName;
+  const pluginConfigured=Array.isArray(enabledPlugins)&&Array.isArray(disabledPlugins)&&enabledPlugins.includes(pluginName)&&!disabledPlugins.includes(pluginName)&&manifestMap?.get('name')?.value===pluginName;
   const hermesComparison=pluginConfigured?await compare([
     [join(sourceRoot,'integrations','hermes',pluginName,'plugin.yaml'),join(hermesHome,'plugins',pluginName,'plugin.yaml')],
     [join(sourceRoot,'integrations','hermes',pluginName,'__init__.py'),join(hermesHome,'plugins',pluginName,'__init__.py')],
