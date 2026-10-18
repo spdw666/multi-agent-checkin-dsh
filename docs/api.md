@@ -305,3 +305,13 @@ HTTP 截止与供给进度超时不同：接力默认 30 秒无有效进展，�
 文件形状、容量、错误与示例见 [WB 账号交换](WB_ACCOUNT_TRANSFER.md)；轮换设置、候选、CLI 门控与地区写入见 [WB 轮换](WB_ROTATION.md)；来源对照见 [WB_SWITCH_COMPARISON.md](WB_SWITCH_COMPARISON.md)。
 
 交换预览支持旧版仅 Access Token 的账号：`hasRefreshToken:false`、`refreshable:false`、`warnings:[{code:"wb_import_access_only",...}]`。导出缺失 Refresh Token 为 `""`，到期需重新登录；不伪造续期能力。
+
+
+## 14. 请求诊断、路由预演、接入检查与目标顺序
+
+- GET /admin/request-diagnostics：本机账本白名单投影，支持请求列表与 requestId 详情；工具执行/客户端整轮无直接证据时为 unknown。
+- POST /admin/route-preview：完整请求或元数据预演，零生成、零配置/偏好/冷却写入，不自动刷新上游认证或目录。
+- GET /admin/client-activation：分别检查网关、DSH、Hermes 的安装/配置/磁盘/运行/模型发布/验收；磁盘不是运行加载证据。
+- POST /admin/routes/{routeId}/targets-order：targets 严格排列 + expectedTargets 并发检查；过期快照返回409，保留其他账号路由。
+
+上述接口只在admin管理面开放，公共模型Key返回401，DSH私有shim返回404。详细输入、状态、未知值和原生入口见[诊断与接入说明](diagnostics-and-readiness.md)。

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Drawing;
@@ -30,7 +30,7 @@ internal static class WbAuthStateColorFixture {
         using (var card = new WbAccountCard(row)) {
             var state = StateLabel(card);
             Check(state.ForeColor.ToArgb() == expected.ToArgb(), name);
-            Check(state.Text == WbPoolUi.State(row) + " · " + (Json.Get(row,"edition","cn") == "cn" ? "国内版 CN" : "国际版 Global") + " · " + (Json.Enabled(row) ? "启用" : "停用"), name + " text unchanged");
+            Check(state.Text == WbPoolUi.State(row) + " · " + (Json.Get(row,"edition","cn") == "cn" ? "国内版 CN" : "国际版 Global") + " · " + (Json.Enabled(row) ? "启用" : "停用") + " · " + WbPoolUi.DailyBadge(row), name + " header includes today check-in without altering authentication color");
             Check(Json.Text(row) == original, name + " does not mutate account");
         }
     }

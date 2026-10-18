@@ -3,7 +3,9 @@ import {relayDefaults,validateRelay} from './model-relay.mjs';
 import {validateWorkBuddyRotation} from './workbuddy-rotation-policy.mjs';
 import {getFreeProvider} from './free-providers.mjs';
 import {dirname, join} from 'node:path';
-import {readFile, copyFile, mkdir} from 'node:fs/promises';
+import {readFile, copyFile, mkdir, open, unlink} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {AppError, atomicJson, localPath, readJson} from './util.mjs';
 import {antigravityBase} from './antigravity.mjs';
@@ -112,5 +114,19 @@ export class ConfigStore {
   // prepared/credential-refreshing request from spending a newly stopped account.
   async workBuddyInferenceAllowed(accountId) {const value=validateConfig(await readJson(this.file),{lenient:true}),a=value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy');return !!a&&a.enabled!==false&&a.inferenceEnabled!==false;}
   path(value) {return localPath(value,this.base);}
-  async save(value) {validateConfig(value);const before=await readFile(this.file);await atomicJson(this.file+'.backup.json',JSON.parse(before));await atomicJson(this.file,value);await this.load();}
+  async snapshot() {const bytes=await readFile(this.file);return {value:validateConfig(JSON.parse(bytes)),sha256:createHash('sha256').update(bytes).digest('hex')};}
+  async save(value,{expectedSha256}={}) {
+    validateConfig(value);
+    const lockFile=this.file+'.write-lock',until=Date.now()+2000;let lock;
+    while(!lock){try{lock=await open(lockFile,'wx');}catch(e){if(e.code!=='EEXIST')throw e;if(Date.now()>=until)throw new AppError('Configuration is being saved by another process; reload and retry',409,'configuration_busy');await delay(20);}}
+    try{
+      const before=await readFile(this.file),hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+      if(expectedSha256&&hash(before)!==expectedSha256)throw new AppError('Configuration changed before commit; reload and retry',409,'configuration_changed');
+      await atomicJson(this.file+'.backup.json',JSON.parse(before));
+      // New ConfigStore writers share this lock. The second check also detects
+      // direct file edits or an older writer during backup preparation.
+      if(expectedSha256&&hash(await readFile(this.file))!==expectedSha256)throw new AppError('Configuration changed before commit; reload and retry',409,'configuration_changed');
+      await atomicJson(this.file,value);await this.load();
+    }finally{await lock.close();await unlink(lockFile);}
+  }
 }

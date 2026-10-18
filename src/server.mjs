@@ -19,6 +19,10 @@ import {previewWorkBuddyImport,importWorkBuddyAccounts,exportWorkBuddyAccounts,u
 import {AppError,errorView} from './util.mjs';
 import {collectChat,validateChat} from './openai.mjs';
 import {buildActivityContext} from './activity-context.mjs';
+import {buildRequestDiagnostics} from './request-diagnostics.mjs';
+import {previewRoute} from './route-preview.mjs';
+import {clientActivationReport} from './client-activation.mjs';
+import {reorderRouteTargets} from './route-management.mjs';
 import {relayPolicy,validateRelay} from './model-relay.mjs';
 import {freeProviderMetadata,freeProviderList,prepareFreeProviderConfig,resolveFreeCredential,freeProviderModels} from './free-providers.mjs';
 import {importedRouteId} from './model-directory.mjs';
@@ -49,7 +53,7 @@ async function readBody(req,limit=4194304,{allowEmpty=false}={}){
   if(allowEmpty&&bytes===0)return {};
   try{return JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'))}catch{throw new AppError('Invalid JSON body',400,'invalid_request_error');}
 }
-export async function startServer(service,{host,port,key,adminKey,admin=true,onShutdown}={}) {
+export async function startServer(service,{host,port,key,adminKey,admin=true,onShutdown,clientActivationOptions={}}={}) {
   const version=JSON.parse(await readFile(join(projectRoot,'package.json'),'utf8')).version;
   const cfg=service.config.value.server;host??=cfg.host;port??=cfg.port;key??=service.keys.apiKey;adminKey??=service.keys.adminKey;
   const controllers=new Set();let baseUrl;
@@ -82,6 +86,11 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
           }catch(e){await prepared.rollback();throw e;}
         }
         if(req.method==='GET'&&url.pathname==='/admin/activity-context')return json(res,200,buildActivityContext(service,Object.fromEntries(['range','limit','search','source','model'].map(k=>[k,url.searchParams.get(k)??undefined]))));
+        if(req.method==='GET'&&url.pathname==='/admin/request-diagnostics')return json(res,200,buildRequestDiagnostics(service,Object.fromEntries(['requestId','range','limit','search','source','model'].map(k=>[k,url.searchParams.get(k)??undefined]))));
+        if(req.method==='POST'&&url.pathname==='/admin/route-preview')return json(res,200,previewRoute(service,await readBody(req)));
+        if(req.method==='GET'&&url.pathname==='/admin/client-activation')return json(res,200,await clientActivationReport(service,{...clientActivationOptions,runtimeVersion:version}));
+        const routeOrder=/^\/admin\/routes\/([^/]+)\/targets-order$/.exec(url.pathname);
+        if(req.method==='POST'&&routeOrder)return json(res,200,await reorderRouteTargets(service,decodeURIComponent(routeOrder[1]),await readBody(req,1048576)));
         if(req.method==='GET'&&url.pathname==='/admin/model-relay')return json(res,200,service.router.relay.status());
         if(req.method==='POST'&&url.pathname==='/admin/model-relay'){const b=await readBody(req);if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['enabled','reservePercent','reserveCredits','partitions'].includes(k)))throw new AppError('Invalid relay settings',400,'invalid_model_relay');return json(res,200,await withConfigMutation(service,async()=>{const value=structuredClone(service.config.value);value.modelRelay=validateRelay({...relayPolicy(value),...b});await service.config.save(value);return {saved:true,...service.router.relay.status()};}));}
         if(req.method==='GET'&&url.pathname==='/admin/workbuddy/rotation')return json(res,200,await workBuddyRotationStatus(service));

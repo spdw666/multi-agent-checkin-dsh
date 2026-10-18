@@ -37,3 +37,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./desktop/tests/Run-WbTransferRotationFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbTransferTests"
+      - name: Verify diagnostics, preview, activation, daily check-in and paint lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./desktop/tests/Run-DiagnosticsFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/DiagnosticsTests"
+          ./desktop/tests/Run-WbAuthStateColorFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbAuthColorTests"
+          ./desktop/tests/Run-WbTaskProgressFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbTaskProgressTests"

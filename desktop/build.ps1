@@ -25,7 +25,7 @@ if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'platform-icons')) {
 if ($BundleCore) {
     if (-not $NodeExecutable) { $NodeExecutable = (Get-Command node.exe -ErrorAction Stop).Source }
     $node = [IO.Path]::GetFullPath($NodeExecutable)
-    $supported = & $node -p '(() => { const [major,minor,patch]=process.versions.node.split(".").map(Number); return major>22 || (major===22 && (minor>23 || (minor===23 && patch>=3))); })()'
+    $supported = & $node -p '(() => { const [major,minor,patch]=process.versions.node.split(/[.]/).map(Number); return major>22 || (major===22 && (minor>23 || (minor===23 && patch>=3))); })()'
     if ($LASTEXITCODE -ne 0 -or "$supported".Trim() -ne 'true') { throw 'Node.js 22.23.3 or newer is required; Windows verified runtime: 22.23.3.' }
     $core = [IO.Path]::GetFullPath($CoreDirectory)
     foreach ($required in @('bin/ai-credit.mjs','vendor/workbuddy-core.mjs','vendor/trae-core.mjs','config.example.json','package.json')) {

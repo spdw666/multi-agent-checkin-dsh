@@ -1,6 +1,8 @@
 <h1 align="center">AI积分网关</h1>
 
 反代稳定性与错误排查：见 [请求能力、重试和期限说明](docs/reliability.md)、[Windows 运行时与流清理](docs/runtime-reliability.md)，以及 [Hermes 接入](docs/hermes.md)。
+
+请求诊断、路由预演与接入生效检查：见[原生操作与状态说明](docs/diagnostics-and-readiness.md)。默认只读本机保存状态，真实体检另行确认；WB 账号卡顶部直接显示今日签到状态。
 <p align="center">
   <b>桌面账号、每日权益、详细 WB 帐号池与统一模型入口</b><br>
   Windows 原生桌面 · Node.js 本机服务 · OpenAI 兼容 API · DSH · Hermes
@@ -8,7 +10,7 @@
 
 <p align="center">
   <a href="package.json"><img alt="Node.js 22.23.3+" src="https://img.shields.io/badge/Node.js-%3E%3D22.23.3-339933?logo=nodedotjs&logoColor=white"></a>
-  <a href="package.json"><img alt="Gateway 0.6.0" src="https://img.shields.io/badge/Gateway-0.6.0-blue"></a>
+  <a href="package.json"><img alt="Gateway 0.7.0" src="https://img.shields.io/badge/Gateway-0.7.0-blue"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
 </p>
@@ -303,7 +305,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 - **读取登录态**检查本机凭据来源；**服务端体检**检查所选账号的官方状态，两者和模型生成是不同检查。
 - **领取所选账号**运行该账号已启用的领取任务；未配置任务时会给出提示。批量入口是顶部“全部账号签到”。
 - **添加平台账号**选择平台、版本、账号 ID、名称及凭据来源。WB 多账号通常直接用“保存当前WorkBuddy账号”或 WB 页官方登录入口。
-- **编辑账号**维护这个槽位；**启用 / 停用**控制整个账号参与调度和使用。若只想暂停 WB 积分调用，使用 WB 页的独立按钮。
+- **编辑账号**维护这个槽位；**启用 / 停用整个账号**控制整个账号参与调度和使用。若只想暂停 WB 积分调用，使用 WB 页的独立按钮。
 - **删除账号**会清理引用并保留私密回滚备份，聊天与历史保留。只是暂时不用时，先选停用。
 
 操作后核对下方结果与主体。更换官方登录主体时要明确重绑；修改显示名称不会把一个主体变成另一个主体。
@@ -323,7 +325,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 | 按钮 | 做什么 | 适合什么时候用 |
 |---|---|---|
 | 测试选中模型 | 只测试“选测”列勾选的启用路由 | 登录变化、单款故障或少量模型验收 |
-| 刷新已导入模型 | 刷新目录，并对已导入模型做四阶段体检 | 想复核正在使用的模型；不是单纯刷新页面 |
+| 刷新目录 | 更新模型目录，不运行生成体检 | 查目录变化或刚保存的导入选择 |
+| 体检已导入模型 | 确认范围与阶段后，对已导入模型做四阶段体检 | 复核正在使用的模型；执行前查看耗时提示 |
 | 测试全部模型 | 遍历发现的模型进行体检 | 有明确全目录核验需求时，先考虑账号额度与耗时 |
 | 重启 DSH | 退出并重开 DSH，让其重新加载代码/模型 | 已保存导入而 DSH 仍载旧模块；先结束 DSH 内的运行任务 |
 
@@ -333,9 +336,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 
 目录中的 **“对话已验证”**（`chat_verified`）表示最近保存记录的普通与 SSE 均通过、工具未声明；它不是“四项全部通过”，也不是图片或外部工具能力证明。失败阶段、最新时间与先前尝试仍可查，历史通过不保证当前可用。
 
-要调整优先级，选路由后点 **编辑所选路由**，按想要的顺序排列 `targets` 数组并保存，前面的目标先尝试。表格按列排序只是查看方式，不是保存后的供给优先级；界面没有单独的上移/下移按钮。WB 的 **WorkBuddy账号池** 入口另管理该路由的成员与优先账号：池里保存的成员顺序就是优先次序，保存后仍会继续接纳同版新账号，不需要每加一个号就回来重勾一遍。唯一例外是把整个池关掉，那是有意停用，不会被自动打开。
+要调整优先级，选路由后打开可视化顺序编辑，使用上移 / 下移排列目标，核对保存前后预览再提交，前面的目标先尝试。高级 JSON 编辑仍可使用；旧窗口目标列表已变化时，顺序保存返回冲突并要求重新加载。表格按列排序只是查看方式，不是保存后的供给优先级；可视化编辑提供独立的上移 / 下移按钮。WB 的 **WorkBuddy账号池** 入口另管理该路由的成员与优先账号：池里保存的成员顺序就是优先次序，保存后仍会继续接纳同版新账号，不需要每加一个号就回来重勾一遍。唯一例外是把整个池关掉，那是有意停用，不会被自动打开。
 
-**导出选中模型**的确认框会列出要停用的路由。此处“导出”不是下载文件，也不会删除账号、登录态、目标或历史。恢复时在全部模型窗口重新勾选。账号 JSON/ZIP 备份请到 WB 页操作。
+**取消导入 / 停用所选路由**（原“导出选中模型”）的确认框会列出要停用的路由。此处“导出”不是下载文件，也不会删除账号、登录态、目标或历史。恢复时在全部模型窗口重新勾选。账号 JSON/ZIP 备份请到 WB 页操作。
 
 ### 4. 领取记录：确认每个账号发生了什么
 
