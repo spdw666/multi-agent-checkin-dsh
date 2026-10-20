@@ -1,7 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {hash, errorView, redact} from './util.mjs';
+import {hash, errorView, redact, secret} from './util.mjs';
 export class Ledger {
   constructor(dir,{initializationTimeoutMs=5000}={}) {
     if(!Number.isInteger(initializationTimeoutMs)||initializationTimeoutMs<0||initializationTimeoutMs>60000)throw new RangeError('initializationTimeoutMs must be an integer between 0 and 60000');
@@ -46,7 +46,7 @@ export class Ledger {
   unbind(accountId){this.db.prepare('DELETE FROM bindings WHERE account_id=?').run(accountId);}
   claimKey(platform,fingerprint,day,task,device=''){return hash([platform,fingerprint,day,task,device].join('\0'));}
   claimReceipt(key){const row=this.db.prepare('SELECT status,result FROM claims WHERE key=?').get(key);if(!row)return null;try{return {status:row.status,result:JSON.parse(row.result)}}catch{return null}}
-  reserve(key,now=Date.now(),{observationDay}={}) {
+  reserve(key,now=Date.now(),{observationDay,preparing=false}={}) {
     if(observationDay!==undefined&&(typeof observationDay!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(observationDay)))throw new RangeError('observationDay must be YYYY-MM-DD');
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -60,12 +60,17 @@ export class Ledger {
       const legacyObservation=observationDay!==undefined&&row?.status==='observed'&&(priorResult.observationSchema!==1||priorResult.observationVerifiedDay!==observationDay);
       if(row&&['success','already','observed','rejected'].includes(row.status)&&!transientRejection&&!legacyObservation){this.db.exec('COMMIT');return {acquired:false,done:true,status:row.status,result:priorResult};}
       if(row&&row.status==='running'&&now-Date.parse(row.updated_at)<300000){this.db.exec('COMMIT');return {acquired:false,done:false};}
-      const uncertain=row?.status==='uncertain'||row?.status==='running';
-      this.db.prepare('INSERT INTO claims VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at').run(key,'running',new Date(now).toISOString(),'{}');
-      this.db.exec('COMMIT');return {acquired:true,uncertain};
+      // Only an explicitly persisted pre-submission phase proves that a crashed
+      // worker never reached a write. Legacy running rows stay fenced.
+      const uncertain=row?.status==='uncertain'||row?.status==='running'&&priorResult.submissionPhase!=='preparing';
+      const reservationId=preparing?secret():undefined;
+      const result=preparing?JSON.stringify({submissionPhase:uncertain?'submitted':'preparing',reservationId}):'{}';
+      this.db.prepare('INSERT INTO claims VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at, result=excluded.result').run(key,'running',new Date(now).toISOString(),result);
+      this.db.exec('COMMIT');return {acquired:true,uncertain,...(reservationId?{reservationId}:{})};
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
-  finish(key,status,result) {this.db.prepare('UPDATE claims SET status=?, updated_at=?, result=? WHERE key=?').run(status,new Date().toISOString(),redact(result),key);}
+  markSubmitted(key,reservationId){return this.db.prepare("UPDATE claims SET result=json_set(result,'$.submissionPhase','submitted'), updated_at=? WHERE key=? AND status='running' AND json_extract(result,'$.reservationId')=?").run(new Date().toISOString(),key,reservationId).changes===1;}
+  finish(key,status,result,reservationId) {return this.db.prepare("UPDATE claims SET status=?, updated_at=?, result=? WHERE key=? AND (? IS NULL OR json_extract(result,'$.reservationId')=?)").run(status,new Date().toISOString(),redact(result),key,reservationId??null,reservationId??null).changes===1;}
   record({day,platform,accountId,task,status,...result}) {this.db.prepare('INSERT INTO records(time,day,platform,account_id,task,status,result) VALUES (?,?,?,?,?,?,?)').run(new Date().toISOString(),day,platform,accountId,task,status,redact(result));}
   records({limit=100,accountId='',platform=''}={}) {return this.db.prepare("SELECT * FROM records WHERE (?='' OR account_id=?) AND (?='' OR platform=?) ORDER BY id DESC LIMIT ?").all(accountId,accountId,platform,platform,Math.min(Math.max(Number(limit)||100,1),1000)).map(r=>({...r,result:JSON.parse(r.result)}));}
   beginUsage(row) {return Number(this.db.prepare('INSERT INTO usage_calls(started_at,account_id,model,status,detail) VALUES (?,?,?,?,?)').run(row.startedAt,row.accountId??'',row.model??'','running',redact(row)).lastInsertRowid);}

@@ -5,13 +5,16 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 const {readTraeIdentity,TraeUsageClient}=await import(process.env.TEST_TRAE_BUNDLE?pathToFileURL(process.env.TEST_TRAE_BUNDLE).href:new URL('../vendor/trae-core.mjs',import.meta.url).href);
-async function fixture(work,{ids=['1111111111111111','2222222222222222'],sessions={}}={}){
+async function fixture(work,{ids=['1111111111111111','2222222222222222'],sessions={},emptySessions=[]}={}){
  const root=await mkdtemp(join(tmpdir(),'trae-device-'));
  try{
   const file=join(root,'User/globalStorage/storage.json');await mkdir(join(root,'User/globalStorage'),{recursive:true});
   const storage={'telemetry.machineId':'native-machine','telemetry.devDeviceId':'telemetry-uuid',...Object.fromEntries(ids.map(id=>['iCubeAuthInfo://icube-dc:'+id,'private-key-pair-placeholder']))};
   await writeFile(file,JSON.stringify(storage));
   for(const [session,log] of Object.entries(sessions)){await mkdir(join(root,'logs',session),{recursive:true});await writeFile(join(root,'logs',session,'main.log'),log);}
+  // Mirrors a client start that created its log directory and then died before
+  // writing main.log: the directory exists, the file does not.
+  for(const session of emptySessions){await mkdir(join(root,'logs',session),{recursive:true});}
   const read=()=>readTraeIdentity({path:file,edition:'cn',source:'desktop'},{platform:'linux',home:root,env:{}});
   await work(read);
  }finally{await rm(root,{recursive:true,force:true});}
@@ -32,3 +35,6 @@ test('resolved native device is sent unchanged to check-in status and claim',asy
  await client.checkinStatus();assert.equal((await client.claimCheckin()).claimed,true);
  assert.equal(requests.length,2);assert.ok(requests.every(r=>r.device==='2222222222222222'));
 },{sessions:{'20261009T120000':init('2222222222222222')}}));
+test('empty session left by an aborted client start is skipped for the last recorded identity',async()=>fixture(async read=>assert.equal((await read()).deviceId,'2222222222222222'),{sessions:{'20261009T120000':init('2222222222222222')},emptySessions:['20261010T090000','20261011T101500']}));
+test('several empty sessions between the newest record and now still resolve',async()=>fixture(async read=>assert.equal((await read()).deviceId,'1111111111111111'),{sessions:{'20261008T100000':init('1111111111111111')},emptySessions:['20261009T120000','20261010T090000','20261011T101500']}));
+test('empty sessions alone are not native evidence and still fail explicitly',async()=>fixture(async read=>assert.rejects(read(),/multiple historical device identities/),{emptySessions:['20261010T090000','20261011T101500']}));

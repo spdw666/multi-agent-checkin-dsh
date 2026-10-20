@@ -96,8 +96,35 @@ export class Platforms {
   }
   async status(accountId,taskId) {
     const a=this.account(accountId);const credential=await this.credentials.resolve(accountId);
-    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.status!=='function')throw new AppError('该应用未声明每日签到接口',400,'checkin_not_supported');return p.status(credential,taskId,{account:a});}
-    if(a.platform==='workbuddy'&&taskId==='daily-checkin') {const s=await this.wb.fetchCheckinStatus(credential);return {known:true,active:s.active,claimed:s.todayCheckedIn,credits:s.todayCredit,details:s};}
+    if(desktopProviderKinds.has(a.platform)){
+      const p=await desktopProvider(a.platform);if(typeof p.status!=='function')throw new AppError('该应用未声明每日签到接口',400,'checkin_not_supported');
+      let s=await p.status(credential,taskId,{account:a});
+      if(a.platform==='loomy'&&['daily-quota','daily-checkin'].includes(taskId)&&credential.principalHash&&this.credentials.ledger?.claimReceipt){
+        // Balance GETs cannot prove the daily cycle on their own. A fresh balance
+        // may restore only a current-day, same-principal durable official receipt.
+        const ledger=this.credentials.ledger,day=dayIn(new Date(),'Asia/Shanghai');
+        const key=ledger.claimKey('loomy',credential.principalHash,day,taskId,credential.identity?.deviceId??'');
+        const restored=restoreLoomyDailyQuota({balance:s.details},ledger.claimReceipt(key));
+        if(restored.balance?.dailyQuotaObserved===true)s={...s,active:false,observed:true,claimable:false,reason:'server_auto_daily_quota',details:restored.balance};
+      }
+      // Some desktop adapters declare eligibility as claimable rather than
+      // active. Preserve explicit active values and never infer from balance.
+      if(s.active===undefined&&typeof s.claimable==='boolean')s={...s,active:s.claimable||s.pendingConfirmation===true};
+      return s;
+    }
+    if(a.platform==='workbuddy'&&taskId==='daily-checkin') {
+      let s;
+      try{s=await this.wb.fetchCheckinStatus(credential);}catch(error){
+        if(error?.status!==401)throw error;
+        // Only the read-only status query is repeated. CredentialManager owns
+        // refresh serialization, source write protection, and identity binding.
+        const newer=await this.credentials.resolve(accountId,{force:true,renew:true});
+        if(credential.principalHash&&newer.principalHash&&credential.principalHash!==newer.principalHash)throw new AppError('WorkBuddy 续期身份与已绑定账号不符',409,'principal_changed');
+        if(newer.accessToken===credential.accessToken)throw error;
+        s=await this.wb.fetchCheckinStatus(newer);
+      }
+      return {known:true,active:s.active,claimed:s.todayCheckedIn,credits:s.todayCredit,details:s};
+    }
     if(a.platform==='trae'&&taskId==='daily-checkin') {
       if(regionOfCredential(credential)!=='cn')return {known:true,active:false,reason:'international_subscription_no_checkin'};
       const s=await this.traeStack(accountId).usage.checkinStatus();return {known:true,active:s.enabled,claimed:s.checkedIn,deviceOccupied:s.didCheckedIn&&!s.checkedIn,credits:s.credits,deviceId:credential.identity.deviceId,details:s};

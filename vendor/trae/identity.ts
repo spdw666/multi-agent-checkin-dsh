@@ -31,11 +31,21 @@ async function deviceCenterId(storage: Record<string, unknown>, appRoot: string)
   // The native client's ICDRS init log names guaranteedDeviceId explicitly.
   const logs = join(appRoot, 'logs')
   const sessions = (await readdir(logs).catch(() => []))
-    .filter(name => /^\d{8}T\d{6}$/.test(name)).sort().reverse().slice(0, 1)
+    .filter(name => /^\d{8}T\d{6}$/.test(name)).sort().reverse()
   for (const session of sessions) {
+    const logPath = join(logs, session, 'main.log')
     let file
     try {
-      file = await open(join(logs, session, 'main.log'), 'r')
+      file = await open(logPath, 'r')
+    } catch {
+      // The client creates the per-session log directory before it writes
+      // main.log. A start that is aborted (or that dies during bootstrap)
+      // leaves an empty directory behind; such a session carries no native
+      // evidence at all, so it must not stand in for "still initializing".
+      // Keep walking back to the newest session that actually logged ICDRS.
+      continue
+    }
+    try {
       // Identity is logged at startup; cap reads even for long-lived sessions.
       const size = (await file.stat()).size
       const head = Buffer.alloc(Math.min(size, 262144))
@@ -52,9 +62,11 @@ async function deviceCenterId(storage: Record<string, unknown>, appRoot: string)
         if (!ids.includes(current)) throw new Error('Trae active device is not present in its local identity records; reopen the client and recheck')
         return current
       }
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Trae active device')) throw error
-    } finally { await file?.close() }
+      // A session that DOES have main.log but no completed ICDRS init is
+      // genuinely initializing (or died mid-init): falling back to an older
+      // session's identity would send a stale x-device-id, so stop here.
+      break
+    } finally { await file.close() }
   }
   throw new Error('Trae has multiple historical device identities; reopen the client to record its current device before check-in')
 }

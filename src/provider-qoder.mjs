@@ -20,8 +20,18 @@ function region(c){if(!['cn','global'].includes(c.edition))throw new AppError('Q
 const identityCache=new Map();
 export function readQoderNativeIdentity(helper,uid,{authMtimeMs,now=Date.now(),spawnImpl=spawnSync}={}){
  const key=JSON.stringify([helper,uid,authMtimeMs]),cached=identityCache.get(key);if(cached&&now>=cached.at&&now-cached.at<300000)return structuredClone(cached.identity);
- const r=spawnImpl(helper,['stable','--account-stdin'],{input:JSON.stringify({account:uid})+'\n',encoding:'utf8',windowsHide:true,timeout:12000,maxBuffer:1024*1024});let identity;
- try{if(r.status!==0)throw Error();identity=JSON.parse(r.stdout.trim().replace(/^\uFEFF/,'').split('\n')[0]);if(typeof identity.machineToken!=='string'||!identity.machineToken||typeof identity.machineCode!=='string'||!identity.machineCode||!['number','string'].includes(typeof identity.machineType))throw Error()}catch{throw new AppError('Qoder本机身份读取失败',401,'provider_identity_missing')}
+ // A local helper read failure is not an upstream credential rejection. Leave
+ // recovery to the scheduler's durable backoff: never block on an extra spawn
+ // here, expose raw output, cache failures, or substitute an expired identity.
+ const failure=kind=>Object.assign(new AppError(`Qoder本机身份读取暂不可用 (${kind})`,503,'provider_identity_missing'),{retryable:true,beforeSubmission:true,identityReadFailure:kind,...(kind==='helper_missing'?{actionRequired:true}:{})});
+ const spawnFailure=error=>failure(error?.code==='ENOENT'?'helper_missing':error?.code==='ETIMEDOUT'?'timeout':'spawn_failed');
+ let r,identity;
+ try{r=spawnImpl(helper,['stable','--account-stdin'],{input:JSON.stringify({account:uid})+'\n',encoding:'utf8',windowsHide:true,timeout:12000,maxBuffer:1024*1024});}catch(error){throw spawnFailure(error)}
+ if(!r||typeof r!=='object')throw failure('spawn_failed');
+ if(r.error)throw spawnFailure(r.error);
+ if(r.status!==0)throw failure('nonzero');
+ try{identity=JSON.parse(r.stdout.trim().replace(/^\uFEFF/,'').split('\n')[0]);}catch{throw failure('invalid_json')}
+ if(!identity||typeof identity.machineToken!=='string'||!identity.machineToken||typeof identity.machineCode!=='string'||!identity.machineCode||!['number','string'].includes(typeof identity.machineType))throw failure('incomplete');
  if(identityCache.size>=32)identityCache.delete(identityCache.keys().next().value);identityCache.set(key,{at:now,identity:structuredClone(identity)});return identity;
 }
 async function readQoderCredential(account,config={}){
