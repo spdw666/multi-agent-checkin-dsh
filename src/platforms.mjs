@@ -21,6 +21,16 @@ import {miniMaxStatus,miniMaxClaim,miniMaxMembership} from './minimax.mjs';
 export class Platforms {
   constructor(config,credentials){this.config=config;this.credentials=credentials;this.wb=new WorkBuddyUpstreamClient();this.quotaCache=new Map();this.catalogs=new Map();this.catalogFlights=new Map();this.trae=new Map();}
   account(id){return this.credentials.account(id);}
+  async dailyReconciliationMode(id,task) {
+    // A protocol migration, not a caller-provided escape from POST fencing.
+    // Only Raccoon's native GET initialization and Loomy's server-idempotent
+    // first-login initialization are repeatable. Pet-work/reward POSTs are not.
+    const a=this.account(id);
+    if(!['raccoon','loomy'].includes(a.platform)||task!=='daily-quota')return null;
+    const p=await desktopProvider(a.platform);
+    if(!(p.dailyReconciliationTasks??p.descriptor?.dailyReconciliationTasks)?.includes(task))return null;
+    return a.platform==='raccoon'?'native-session-get':(p.dailyReconciliationMode??p.descriptor?.dailyReconciliationMode)==='idempotent-first-login'?'idempotent-first-login':null;
+  }
   async qwenContext(id,c) {
     try{return await qwenWorkContext(c)}catch(e){if(e.status!==401)throw e;const newer=await this.credentials.refreshQwen(id);return qwenWorkContext(newer);}
   }

@@ -60,6 +60,18 @@ export function runNativeHelper(executable,value,{timeout=12000}={}) {
 export class CredentialManager {
   constructor(config,ledger){this.config=config;this.ledger=ledger;this.cache=new Map();this.flights=new Map();}
   account(id) {const a=this.config.value.accounts.find(a=>a.id===id);if(!a||a.enabled===false)throw new AppError('Account missing or disabled',400,'account_disabled');return a;}
+  // Internal scheduler hint. Never resolve/renew/decrypt/bind a credential just
+  // to notice that its original client has written a different login record.
+  async sourceVersion(id) {
+    try {
+      const account=this.account(id);
+      if(!desktopProviderKinds.has(account.platform))return null;
+      const provider=await desktopProvider(account.platform);
+      if(typeof provider.credentialSourceVersion!=='function')return null;
+      const version=await provider.credentialSourceVersion(account,this.config);
+      return typeof version==='string'&&version.length>0&&version.length<=256?version:null;
+    } catch {return null;}
+  }
   async resolve(id,{force=false,renew=false}={}) {
     const account=this.account(id);
     if(force)this.cache.delete(id);

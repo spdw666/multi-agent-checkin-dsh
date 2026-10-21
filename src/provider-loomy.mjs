@@ -26,6 +26,10 @@ export const descriptor = Object.freeze({
   checkinSupported: true, // daily mechanic = pet-work (宠物打工) snapshot + rewards; confirmed in shipped source
   checkinKind: 'pet_work',
   checkinTasks: ['pet-work', 'daily-quota'],
+  // Native completeFirstLogin is repeatable: the official server returns an
+  // alreadyProcessed receipt. This exception never covers pet-work rewards.
+  dailyReconciliationTasks: Object.freeze(['daily-quota']),
+  dailyReconciliationMode: 'idempotent-first-login',
   claimSupported: true, // guarded: submits only official preconditions and re-verifies the snapshot
   underlyingProvider: 'xfyun imodel production gateway (openai-compatible, session-auth)',
   billing: 'official_points',
@@ -411,7 +415,8 @@ const dailyReceiptKey = secret => createHash('sha256').update(String(secret?.pri
 function dailyQuotaEvidence(secret,options={}) {
   const receipt=dailyQuotaReceipts.get(dailyReceiptKey(secret));
   const today=dayIn(new Date(options.now??Date.now()),'Asia/Shanghai');
-  return {dailyQuotaObserved:!!receipt&&receipt.dailyCycleDate===today,dailyCycleDate:receipt?.dailyCycleDate??null,dailyQuota:receipt?.dailyQuota??null,dailyQuotaObservedAt:receipt?.dailyQuotaObservedAt??null,dailyQuotaSource:receipt?.dailyQuotaSource??null};
+  const current=!!receipt&&receipt.dailyCycleDate===today;
+  return {dailyQuotaObserved:current,dailyCycleDate:receipt?.dailyCycleDate??null,dailyQuota:receipt?.dailyQuota??null,dailyQuotaObservedAt:receipt?.dailyQuotaObservedAt??null,dailyQuotaSource:receipt?.dailyQuotaSource??null,dailyQuotaAlreadyProcessed:current?receipt.alreadyProcessed:null,dailyQuotaGrantOutcome:current?receipt.grantOutcome:'unknown'};
 }
 export async function loomyRefreshDailyQuota(secret,options={}) {
   const key=dailyReceiptKey(secret); dailyQuotaReceipts.delete(key);
@@ -420,11 +425,13 @@ export async function loomyRefreshDailyQuota(secret,options={}) {
   const balance=await loomyPointBalance(secret,options);
   const date=typeof d.dailyCycleDate==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d.dailyCycleDate)?d.dailyCycleDate:null;
   if(date&&Number.isFinite(d.dailyQuota)&&d.dailyQuota>=0&&Number.isFinite(d.dailyBalance)&&Number.isFinite(d.currentBalance)&&balance.parts[1]?.value===d.dailyBalance&&balance.value===d.currentBalance) {
-    dailyQuotaReceipts.set(key,{dailyCycleDate:date,dailyQuota:d.dailyQuota,dailyQuotaObservedAt:new Date(options.now??Date.now()).toISOString(),dailyQuotaSource:'/api/v1/points/first-login'});
+    const alreadyProcessed=typeof d.alreadyProcessed==='boolean'?d.alreadyProcessed:null;
+    dailyQuotaReceipts.set(key,{dailyCycleDate:date,dailyQuota:d.dailyQuota,dailyQuotaObservedAt:new Date(options.now??Date.now()).toISOString(),dailyQuotaSource:'/api/v1/points/first-login',alreadyProcessed,grantOutcome:alreadyProcessed===false?'newly_processed':alreadyProcessed===true?'already_processed':'unknown'});
     if(dailyQuotaReceipts.size>500)dailyQuotaReceipts.delete(dailyQuotaReceipts.keys().next().value);
   }
   const evidence=dailyQuotaEvidence(secret,options);
-  return {task:'daily-quota',known:true,observed:true,claimed:false,submitted:true,rechecked:true,reason:'server_auto_daily_quota',alreadyProcessed:typeof d.alreadyProcessed==='boolean'?d.alreadyProcessed:null,registerReward:Number.isFinite(d.registerReward)?d.registerReward:null,...evidence,details:{...balance,...evidence},note:'官方登录额度刷新及余额复核；不是宠物打工奖励或人工签到。'};
+  const verified=evidence.dailyQuotaObserved===true;
+  return {task:'daily-quota',known:true,observed:verified,claimed:false,submitted:true,rechecked:true,confirmed:verified,reason:verified?'server_auto_daily_quota':'daily_quota_receipt_unverified',alreadyProcessed:typeof d.alreadyProcessed==='boolean'?d.alreadyProcessed:null,registerReward:Number.isFinite(d.registerReward)?d.registerReward:null,...evidence,details:{...balance,...evidence},note:'官方登录额度刷新及余额复核；不是宠物打工奖励或人工签到。'};
 }
 
 export async function loomyPointBalance(secret,options={}){

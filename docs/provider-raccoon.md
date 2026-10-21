@@ -10,19 +10,22 @@
 - POST `/api/web/auth/v1/refresh`：固定官方续期端点，拒绝重定向，不自动尝试其他地址。
 - GET `/api/web/llm/v2/model_catalog`：服务器目录、上下文、最大输出；未声明 tools 保持未知。
 - GET `/api/web/points/v1/balance`：可用、每日、月度、奖励、充值积分分别展示，未知值不归零。
+- GET `/api/web/auth/v1/user_info` → GET `/api/web/office/v3/setting_info`：个人账号的原生登录初始化链；日常登录延期任务复现此链，随后以当日官方积分账单核验结果。
+- GET `/api/web/points/v1/bills?paging.limit=50&type=income&paging.offset=0`：收入账单，按服务器的 `has_more/next_cursor` 或 `paging.total/offset` 继续分页；最多读取 10 页。
 - POST `/api/web/llm/v2/chat/completions`：真实增量 SSE，工具调用/回传保持原结构；未知模型在本地拒绝，防止上游静默回落。兼容 max_completion_tokens。模型特有 reasoning_effort 未声明，不将网关通用档位作为官方支持字段。
 
-每日额度为服务端日配额，不是假造签到。`daily-quota` 以当日官方账单与登录延期核验为准；尚未完成时复现已确认的官方桌面登录积分端点并复核。capabilities.checkin=false，日任务以 observed 记录，不称新增签到领取。
+每日额度由服务端在每天 00:00 发放，日常登录的作用是延长当日这一笔积分的有效期。`daily-quota` 复现原生登录初始化 GET 链，再以当日官方账单核验延期。`capabilities.checkin=false` 表示没有另一次每日新增积分领取；日任务保留 `observed`、`claimed=false`、`credit=0`，但会单独记录是否实际执行自动登录刷新。已经由用户手动完成的当日回执，只能证明当日已完成，不证明网关执行过自动任务。
 
 ## 验证
 
 2026-10-11 官方目录、可用余额与各积分桶已通过真实 GET 核验；个人数字只记录在本机验证输出中。`sn-sensenova-6-8-flash` 普通对话、真实 SSE、lookup 工具调用及结果回传四阶段通过。该型号256000上下文/63999输出来自官方目录，tools=true仅用于已实测型号，其他保持未知。自动额度观测不推断原始发放量。
 
-回归：`node --test tests/provider-raccoon.test.mjs tests/raccoon-refresh.test.mjs`，40项，含未知模型、余额零与未知、原生凭据优先、泄露检查、SSE/工具字段、自动额度不POST，以及续期固定域名、原文件不变、轮换缓存、源更新、身份校验、singleflight、文件锁、失败禁止重复消费。
+回归：`node --test tests/provider-raccoon.test.mjs tests/raccoon-refresh.test.mjs tests/four-provider-raccoon-auto.test.mjs tests/auth-quota-recovery.test.mjs`。覆盖未知模型、余额零与未知、原生凭据优先、泄露检查、SSE/工具字段、原生日常登录 GET 链、当日延期账单确认、手动完成与自动执行分离、收入账单游标/offset 分页与异常边界，以及续期固定域名、原文件不变、轮换缓存、源更新、身份校验、singleflight、文件锁、失败禁止重复消费。
 
 ## 来源
 - https://github.com/xxhhlk/raccoon2api （MIT，原生路径与官方端点）
 - https://github.com/rockswang/wild-work/tree/main/internal/raccoon （README声明MIT，轮换与协议对照；未复制源码）
+- [官方积分规则](https://doc.xiaohuanxiong.com/zh-hans/saas-user/user_manual/office_app/points_rules.html)：每日赠送、登录延期与一次性桌面登录奖励的独立规则。
 - 本机官方客户端资源及上述官方端点实测；公开代码不携带用户凭据。
 
 
@@ -34,10 +37,16 @@
 
 原生客户端与网关可能同时消费同一旋转令牌家族；网关锁只协调网关进程，不是原生客户端锁。上述修复和时间推进单测不等于跨日实机问题已全部治愈；本轮没有为了测试强制消费原生 refresh token。
 
-`daily-quota` 不再把正余额当作今日完成。它读取 `/api/web/points/v1/balance` 与 `/api/web/points/v1/bills?paging.limit=50&paging.offset=0`，只在 `biz_type=daily_grant`、`grant_at` 属于北京时间当日且 `expire_at` 已延长至次日零点之后时返回 observed=true。账单本身是官方持久回执，使用当前账号凭据实时读取，不保存跨账号本地猜测。前50条没找到只表示待核验。
+`daily-quota` 不把正余额当作今日完成。它读取 `/api/web/points/v1/balance` 与收入账单，只在 `biz_type=daily_grant`、`grant_at` 属于北京时间当日且 `expire_at` 已延长至次日零点之后时返回 `observed=true`。账单本身是官方持久回执，使用当前账号凭据实时读取，不保存跨账号本地猜测，也不把每日自动发放但尚未延期的账单视为完成。
 
-若未核验本日延长，日任务复现原生登录 effect：POST `/api/web/desktop/v1/login/points/grant`，空 body，`X-Client-Platform: desktop-windows`，再读账单和余额。只有账单复核成功才返回 observed=true；始终 claimed=false、credit=0。`data.granted` 与 `popup.points` 属桌面奖励另列，不冒充每日新领取。已由原客户端完成本日延期则零 POST。
+收入过滤避免高频消费把午夜发放账单挤出首页。分页遵循原生客户端支持的两种服务器格式：`has_more/next_cursor`，或旧版 `paging.total/offset`。最多读取 10 页；重复游标、缺失游标、非前进 offset、满页却缺少分页信息、预算耗尽等情况均保留 `known=false`，不把未读完的历史误报成今日未完成；接口或账单结构错误继续作为错误返回。一个精确的当日已延期账单足以形成正面确认；没有找到时，只有列表明确耗尽才形成已知的未完成状态。
 
-官方原生规则是每日 00:00 起算、默认当日24:00失效、当天登录延长7天。`created_at` 是账单记录时刻，不等于 `grant_at`。实机账单已区分每天 daily_grant 300 与一次 reward_grant 桌面登录奖励3000；一次已领探针 granted=false 且账单无变化，不用于声称下一天 POST 必然发放。
+若当日尚未完成，日任务执行原生个人账号的登录初始化链：GET `/api/web/auth/v1/user_info`，随后 GET `/api/web/office/v3/setting_info`，使用个人身份的空 `X-Org-Code`，不切换客户端身份。初始化后重新读取余额及收入账单；`setting_info` 中的弹窗或 HTTP 成功本身不作为当日完成证据。只有新鲜账单确认后才返回 `automaticPerformed=true`、`operation='daily-login-session-refresh'`、`source='native_session_get_chain'`；仍保留 `submitted=false`、`mutation=false`、`claimed=false`、`credit=0`。此前已由原客户端完成的当日延期返回 `automaticPerformed=false`，不重复初始化。
+
+这条 GET-only 日常登录刷新声明为 `dailyReconciliationTasks=['daily-quota']`，遇到旧的不确定日任务记录可以重新执行同一读取链。它没有领取 POST：读取失败或账单延迟标为可补偿，不继承一次性领取未知结果的永久防重放栅栏。此能力不适用于其他真实领取 POST 或凭据轮换。
+
+`POST /api/web/desktop/v1/login/points/grant` 是独立的一次性桌面登录奖励端点，不是每日登录延期动作；日任务不再调用它。其 `data.granted` 或 `popup.points` 不构成每日积分延期证据。
+
+官方规则是每日 00:00 起算、默认当日 24:00 失效、当天登录后延长至包含发放日在内的 7 个自然日。`created_at` 是账单记录时刻，不等于 `grant_at`。实机账单曾区分每天 `daily_grant` 与一次 `reward_grant` 桌面登录奖励；旧的一次已领奖励探针返回 `granted=false` 且账单无变化，既不是每日自动执行正例，也不证明该 POST 会延长下一天的积分。
 
 余额输出 `dailyQuotaObserved`、`dailyCycleDate`、`dailyQuota`、`dailyQuotaObservedAt`、`dailyQuotaSource='/api/web/points/v1/bills:daily_grant'`。额度字段取账单 points，不取多日累积 dailyRemaining。读取失败、未知账单、未延期、非当日都不输出已到账。

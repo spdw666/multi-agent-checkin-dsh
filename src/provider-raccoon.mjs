@@ -320,14 +320,31 @@ export async function raccoonStatus(secret, task = 'daily-checkin', options={}) 
   return {known: false, task, claimable: false, claimed: null, supported: false, reason: 'no_checkin_surface_found', evidence: descriptor.sourceUrls};
 }
 
-/** Contract `claim`: honest unsupported description (no fake success). */
+/** The daily action is the native login initialization, not the one-time
+ * desktop-login reward. Its GET-only chain is safe to reconcile after a lost
+ * response; only a fresh same-day extended bill proves the daily outcome. */
 export async function raccoonClaim(secret,task='daily-checkin',options={}) {
   if(task==='daily-quota'){
-   const before=await raccoonDailyStatus(secret,options);if(before.observed)return {...before,submitted:false,credit:0};
-   const grant=await raccoonJson(secret,'/api/web/desktop/v1/login/points/grant',{...options,method:'POST',headers:{'X-Client-Platform':'desktop-windows'}});
-   const after=await raccoonDailyStatus(secret,options);
-   if(!after.observed)throw new AppError('小浣熊每日额度与登录延期尚未获账单确认',502,'raccoon_daily_unconfirmed');
-   return {...after,claimed:false,submitted:true,credit:0,rechecked:true,desktopRewardGranted:grant.granted===true,desktopRewardPoints:Number.isFinite(grant.popup?.points)?grant.popup.points:null};
+   try {
+    const before=await raccoonDailyStatus(secret,options);
+    if(before.observed)return {...before,submitted:false,mutation:false,automaticPerformed:false,credit:0};
+    if(before.known!==true)throw new AppError('小浣熊当日账单读取未完整；稍后重新核验日常登录',502,'raccoon_daily_state_unknown');
+    // Shipped desktop initialization (module 25374 / 8804): getUserInfo(),
+    // then getUserSettingInfo(). setting_info owns daily point-grant popups.
+    // /desktop/v1/login/points/grant is a separate one-time 3000-point reward.
+    const sessionOptions={...options,method:'GET',headers:{...options.headers,'X-Org-Code':''}};
+    await raccoonJson(secret,'/api/web/auth/v1/user_info',sessionOptions);
+    await raccoonJson(secret,'/api/web/office/v3/setting_info',sessionOptions);
+    // Never reuse an injected pre-action balance snapshot for confirmation.
+    const {balanceData,...freshOptions}=options;
+    const after=await raccoonDailyStatus(secret,freshOptions);
+    if(!after.observed)throw new AppError('小浣熊日常登录已刷新；当日积分延期仍待官方账单确认',502,'raccoon_daily_unconfirmed');
+    return {...after,claimed:false,submitted:false,mutation:false,automaticPerformed:true,operation:'daily-login-session-refresh',source:'native_session_get_chain',credit:0,rechecked:true};
+   } catch(error) {
+    // No claim/reward POST exists on this path. A failed/late GET must not
+    // poison the day's lease as an unknown one-time reward submission.
+    error.beforeSubmission=true;error.retryable=true;throw error;
+   }
   }
   return {
     supported: false,
@@ -355,6 +372,7 @@ export async function raccoonChat(upstream,secret,input,signal,options={}) {
 
 export const raccoonProvider = {
   descriptor,
+  dailyReconciliationTasks: Object.freeze(['daily-quota']),
   resolve: raccoonResolve,
   models: (credential, options={}) => credential?.authKind==='bearer'?raccoonServerModels(credential,options):raccoonModels(options),
   health: (credential, options={}) => raccoonHealth({...options,credential}),
@@ -485,9 +503,46 @@ export function raccoonDailyReceipt(data,now=Date.now()){
  const extended=rows.find(x=>Date.parse(x.expire_at)>dayEnd);
  const row=extended??rows[0];return {day,observed:!!extended,dailyGranted:rows.length>0,loginExtended:!!extended,points:row?.points??null,grantAt:row?.grant_at??null,recordedAt:row?.created_at??null,expiresAt:row?.expire_at??null};
 }
+async function raccoonDailyBills(secret,options={}){
+ const items=[],seenCursors=new Set(),now=options.now??Date.now();
+ let offset=0,cursor,receipt=raccoonDailyReceipt({items},now),pages=0;
+ const result=(complete,reason)=>({receipt,pagination:{complete,pages,items:items.length,...(reason?{reason}:{})}});
+ for(;pages<10;){
+  // The native client selects income, then follows either opaque cursors or
+  // legacy offset/total pagination. Chat expenses must not hide midnight grants.
+  const query=new URLSearchParams({'paging.limit':'50',type:'income'});
+  if(cursor)query.set('cursor',cursor);else query.set('paging.offset',String(offset));
+  const page=await raccoonJson(secret,'/api/web/points/v1/bills?'+query,options);pages++;
+  if(!Array.isArray(page?.items))throw new AppError('小浣熊积分账单格式改变',502,'raccoon_bills_schema');
+  items.push(...page.items);receipt=raccoonDailyReceipt({items},now);
+  // One exact current-day extended row is a positive official proof even if
+  // unrelated older history remains. A negative answer needs an exhausted list.
+  if(receipt.observed)return result(true);
+  if(typeof page.has_more==='boolean'){
+   if(!page.has_more)return result(true);
+   const next=page.next_cursor;
+   if(typeof next!=='string'||!next.trim())return result(false,'cursor_missing');
+   if(next===cursor||seenCursors.has(next))return result(false,'cursor_not_advancing');
+   seenCursors.add(next);cursor=next;
+  }else if(page.has_more!==undefined){
+   return result(false,'pagination_invalid');
+  }else if(page.paging!==undefined){
+   const paging=page.paging;
+   if(!Number.isSafeInteger(paging?.total)||paging.total<0||!Number.isSafeInteger(paging?.offset)||paging.offset<0||paging.offset!==offset)return result(false,'pagination_invalid');
+   const next=offset+page.items.length;
+   if(next>=paging.total)return result(true);
+   if(next<=offset)return result(false,'offset_not_advancing');
+   offset=next;
+  }else{
+   // Compatibility with older short-list envelopes: a full page without
+   // pagination is ambiguous, never proof that today's bill does not exist.
+   return result(page.items.length<50,page.items.length<50?undefined:'pagination_missing');
+  }
+ }
+ return result(false,'page_budget_exhausted');
+}
 export async function raccoonDailyStatus(secret,options={}){
  const balance=options.balanceData??await raccoonJson(secret,'/api/web/points/v1/balance',options);
- const bills=await raccoonJson(secret,'/api/web/points/v1/bills?paging.limit=50&paging.offset=0',options);
- const receipt=raccoonDailyReceipt(bills,options.now??Date.now());
- return {known:true,active:!receipt.observed,task:'daily-quota',observed:receipt.observed,claimed:false,claimable:!receipt.observed,principal:secret.principal,day:receipt.day,reason:receipt.observed?'server_daily_login_verified':'daily_login_not_verified',details:{dailyRemaining:Number.isFinite(balance.daily_points)?balance.daily_points:null,availablePoints:Number.isFinite(balance.available_points)?balance.available_points:null,unit:'积分',source:'/api/web/points/v1/bills',receipt,note:receipt.observed?'今日额度与登录延期已由官方账单核验；不是本次新增领取数量':'每日额度或登录延期待账单核验，余额不构成今日回执'}};
+ const {receipt,pagination}=await raccoonDailyBills(secret,options),known=receipt.observed||pagination.complete;
+ return {known,active:known&&!receipt.observed,task:'daily-quota',observed:receipt.observed,claimed:false,claimable:known&&!receipt.observed,principal:secret.principal,day:receipt.day,reason:receipt.observed?'server_daily_login_verified':known?'daily_login_not_verified':'raccoon_daily_bills_incomplete',details:{dailyRemaining:Number.isFinite(balance.daily_points)?balance.daily_points:null,availablePoints:Number.isFinite(balance.available_points)?balance.available_points:null,unit:'积分',source:'/api/web/points/v1/bills',receipt,pagination,note:receipt.observed?'今日额度与登录延期已由官方账单核验；不是本次新增领取数量':known?'每日额度或登录延期待账单核验，余额不构成今日回执':'账单分页尚未完整；没有当前日回执不等于今日未完成'}};
 }

@@ -16,6 +16,7 @@ import {desktopSseResponse,desktopCompletionLimit} from './provider-sse.mjs';
 //    `event:error` with HTTP 200 (converted to AppError here); delta.reasoning_content is INCREMENTAL.
 import {AppError, redact, hash, rememberSecret, dayIn} from './util.mjs';
 import {readFile} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
 
 const thinkingProfiles = new Map();
 const REASONING_LEVEL_ORDER = ['minimal','low','medium','high','xhigh','max'];
@@ -466,8 +467,10 @@ export async function lobsterStatus(secret, task = 'daily-checkin', options = {}
 }
 
 function idempotencyKey(activityCode) {
-  const suffix = Math.random().toString(16).slice(2).padEnd(16, '0');
-  return `ai-credit-${activityCode}-${Date.now().toString(36)}-${suffix}`.slice(0, 80);
+  // The shipped host validator permits only 1..64 ASCII characters. Embedding
+  // the evergreen activity code made the old key 74 characters and the server
+  // rejected the action with 51103 before any reward was granted.
+  return `ai-credit-${hash(activityCode).slice(0, 12)}-${randomUUID()}`;
 }
 
 /**
@@ -501,6 +504,10 @@ export async function lobsterClaimCheckin(secret, task = 'daily-checkin', option
   if (failure) {
     const error = new AppError(`LobsterAI 签到未获服务端确认: ${failure.message}`, failure.status, failure.code);
     error.failure = failure; error.after = after;
+    if ([51103, 51105, 51106].includes(failure.upstreamCode)) {
+      error.definitiveRejection = true;
+      error.upstreamCode = failure.upstreamCode;
+    }
     throw error;
   }
   throw new AppError('LobsterAI 签到提交后服务端状态未变化', 502, 'lobster_claim_unconfirmed');

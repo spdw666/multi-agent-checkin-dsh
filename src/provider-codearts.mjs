@@ -20,6 +20,7 @@ import {redact,rememberSecret,AppError,dayIn} from './util.mjs';
 export const CODEARTS_ORIGIN = 'https://snap-access.cn-north-4.myhuaweicloud.com';
 const MAX_BODY = 1024 * 1024;
 const SESSION_KEY = 'huaweicloud.codearts-snap';
+const NATIVE_AUTH_KEY = 'secret://' + JSON.stringify({extensionId:'huaweicloud.authentication',key:'HuaweiCloudSession'});
 const AGENT_TYPE = 'PromptCenter';
 const OPS_CHANNEL = 'IDE';
 // 「每日签到领1000 积分」的活动 ID；delivery 同时返回推荐码(3)/新用户(4)/学生认证(2)。
@@ -100,6 +101,30 @@ export const CODEARTS_CHAT_VERIFIED = Object.freeze({
 });
 
 export const defaultCodeArtsStateDb = () => join(process.env.APPDATA ?? '', 'codearts-agent', 'User', 'globalStorage', 'state.vscdb');
+function codeartsCredentialFile(account={},config={}) {
+ const ref=account?.credentials?.file??account?.credentials?.path??account.file;
+ return ref&&ref!=='auto'?(typeof config.path==='function'?config.path(ref):ref):defaultCodeArtsStateDb();
+}
+
+// Internal scheduler wake-up hint only. Hash the two actual login records in one
+// read-only SQLite statement, not the database mtime (unrelated extensions write
+// that file). No decryption, credential renewal, claim or private-cache mutation.
+// Unknown/unreadable sources stay null: read failures are not new login events.
+export async function codeartsCredentialSourceVersion(account={},config={}) {
+ let db;
+ try {
+  const {DatabaseSync}=await import('node:sqlite');
+  db=new DatabaseSync(codeartsCredentialFile(account,config),{readOnly:true});
+  const rows=db.prepare('select key,value from ItemTable where key in (?,?)').all(SESSION_KEY,NATIVE_AUTH_KEY);
+  if(!rows.length)return null;
+  const values=[SESSION_KEY,NATIVE_AUTH_KEY].map(key=>{
+   const value=rows.find(row=>row.key===key)?.value;
+   return [key,value===undefined||value===null?null:typeof value==='string'?value:Buffer.from(value).toString('utf8')];
+  });
+  return sha256Hex(Buffer.from(JSON.stringify(values)));
+ } catch {return null;}
+ finally {try{db?.close();}catch{}}
+}
 
 // ------------------------------------------------------------------ signature
 
@@ -258,7 +283,7 @@ export async function refreshCodeArtsAuth(auth,{fetchImpl=fetch,now=Date.now(),s
 
 async function nativeCodeArtsStored(file) {
  const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(file,{readOnly:true});
- try {const value=db.prepare('select value from ItemTable where key=?').get('secret://'+JSON.stringify({extensionId:'huaweicloud.authentication',key:'HuaweiCloudSession'}))?.value;
+ try {const value=db.prepare('select value from ItemTable where key=?').get(NATIVE_AUTH_KEY)?.value;
   if(!value)return null;const text=typeof value==='string'?value:Buffer.from(value).toString('utf8');return {text,sourceHash:sha256Hex(Buffer.from(text))};
  }finally{db.close();}
 }
@@ -324,8 +349,7 @@ async function resolveCodeArtsFresh(base,file,options={}) {
  }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
 }
 export async function resolveCodeArtsCredential(account={},config={},options={}) {
- const ref=account?.credentials?.file??account?.credentials?.path??account.file;
- const file=ref&&ref!=='auto'?(typeof config.path==='function'?config.path(ref):ref):defaultCodeArtsStateDb();
+ const file=codeartsCredentialFile(account,config);
  if(codeartsRefreshFlights.has(file))return codeartsRefreshFlights.get(file);
  const pending=(async()=>resolveCodeArtsFresh(await readCodeArtsLocalSession({file}),file,options))();codeartsRefreshFlights.set(file,pending);
  try{return await pending}finally{codeartsRefreshFlights.delete(file);}
@@ -653,7 +677,7 @@ export const codeartsBalance = () => ({status: 'available', ...CODEARTS_BALANCE_
 export const codeartsCheckin = () => ({status: 'available', checkinSupported: true, ...codeartsCheckinSource, source: codeartsDescriptor.checkinSource});
 
 export const codeartsProvider = {
-  resolve: resolveCodeArtsCredential, supportsCheckin:true, descriptor:codeartsDescriptor, models: codeartsModels, health: codeartsHealth,
+  resolve: resolveCodeArtsCredential, credentialSourceVersion:codeartsCredentialSourceVersion, supportsCheckin:true, descriptor:codeartsDescriptor, models: codeartsModels, health: codeartsHealth,
   status: codeartsStatus, claim: codeartsClaim, chat: codeartsChat,
 };
 
