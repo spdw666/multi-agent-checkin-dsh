@@ -13,7 +13,7 @@ import {decryptElectronJson} from './windows-crypto.mjs';
 import {parseMiniMaxCredential} from './minimax.mjs';
 import {refreshQwenSession} from './qwenwork.mjs';
 import {readMiniMaxDesktop,miniMaxRuntimeDir} from './minimax-desktop.mjs';
-import {refreshWorkBuddyCredential} from './workbuddy-auth.mjs';
+import {refreshWorkBuddyCredential,workBuddyEdition,workBuddyExpiry} from './workbuddy-auth.mjs';
 export function jwtClaims(token) {try{return JSON.parse(Buffer.from(token.split('.')[1],'base64url').toString())}catch{return {}}}
 async function firstExisting(paths) {for(const p of paths){if(!p)continue;try{await access(p);return p}catch{}}throw new AppError('Local credential file not found',401,'credential_missing');}
 function appData() {return process.env.APPDATA??(process.platform==='darwin'?join(homedir(),'Library/Application Support'):join(homedir(),'.config'));}
@@ -72,13 +72,13 @@ export class CredentialManager {
       return typeof version==='string'&&version.length>0&&version.length<=256?version:null;
     } catch {return null;}
   }
-  async resolve(id,{force=false,renew=false}={}) {
+  async resolve(id,{force=false,renew=false,rejectedAccessToken}={}) {
     const account=this.account(id);
     if(force)this.cache.delete(id);
     if(this.flights.has(id))return this.flights.get(id);
-    const p=this.read(account,{renew}).catch(e=>{if(/^(codearts|raccoon)_refresh_source_changed$/.test(e.code??''))return this.read(account,{renew});if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>this.flights.delete(id));this.flights.set(id,p);return p;
+    const p=this.read(account,{renew,rejectedAccessToken}).catch(e=>{if(/^(codearts|raccoon)_refresh_source_changed$/.test(e.code??''))return this.read(account,{renew,rejectedAccessToken});if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>this.flights.delete(id));this.flights.set(id,p);return p;
   }
-  async read(account,{renew=false}={}) {
+  async read(account,{renew=false,rejectedAccessToken}={}) {
     if(account.platform==='freeapi'){const c=await resolveFreeCredential(account,this.config),binding=this.ledger.bind(account.id,'freeapi',c.principal);if(!binding.ok)throw new AppError('Provider credential identity changed; rebind this account',409,'principal_changed');return {...c,principalHash:binding.fingerprint};}
     if(desktopProviderKinds.has(account.platform)){
       const p=await desktopProvider(account.platform),c=await p.resolve(account,this.config);
@@ -102,7 +102,7 @@ export class CredentialManager {
         if(typeof key!=='string'||!/^nvapi-[A-Za-z0-9_-]{20,}$/.test(key))throw new AppError('NVIDIA API Key 待填入本机凭据文件',401,'nvidia_credential_missing');
         credential={accessToken:key,principal:typeof raw.principal==='string'&&raw.principal.trim()?raw.principal:hash(key),proxyUrl:raw.proxyUrl,source:'local-config',filePath:file};
       }else if(account.platform==='bigmodel'){credential={...bigModelCredential(await readJson(file),account.id),filePath:file};}else if(account.credentials.kind==='file') {
-        let raw=await readJson(file);if(account.platform==='workbuddy')raw=await this.renewOwnedWorkBuddy(account,file,raw,{renew});credential={...raw,accessToken:raw.accessToken??raw.token,principal:raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub,expiresAtMs:raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000,source:'local-config',filePath:file};
+        let raw=await readJson(file);if(account.platform==='workbuddy')raw=await this.renewOwnedWorkBuddy(account,file,raw,{renew,rejectedAccessToken});credential={...raw,accessToken:raw.accessToken??raw.token,principal:raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub,expiresAtMs:raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000,source:'local-config',filePath:file};
       }else if(account.platform==='workbuddy') {
         const raw=await readJson(file);let accessToken=raw.auth?.accessToken;
         if(typeof accessToken==='object')accessToken=await runNativeHelper(await resolveWorkBuddyExecutable(account,this.config),accessToken);
@@ -140,22 +140,84 @@ export class CredentialManager {
     if(Number.isFinite(credential.expiresAtMs)&&credential.expiresAtMs<=Date.now())throw new AppError('Desktop token expired; reopen the client to renew login, then recheck',401,'credential_expired');
     return {...credential,principalHash:binding.fingerprint};
   }
-  async renewOwnedWorkBuddy(account,file,raw,{renew=false}={}) {
+  async readWorkBuddyNative(account,{principal,edition}={}) {
+    const nativeAccount={...account,id:'native-login-read',edition:undefined,credentials:{...account.credentials,kind:'desktop',file:'auto'}};
+    const file=await resolveCredentialFile(nativeAccount,this.config),info=await stat(file);
+    if(info.size>2097152)throw new AppError('WorkBuddy 原生登录文件过大，等待核验',413,'wb_native_source_invalid');
+    const before=await readFile(file),document=JSON.parse(before.toString('utf8').replace(/^\uFEFF/,''));
+    // Skip unrelated saved accounts before invoking the native decrypt helper.
+    // The helper remains read-only; this independent manager has no real ledger.
+    if(String(document.account?.uid??'')!==principal||workBuddyEdition({domain:document.auth?.domain})!==edition)return null;
+    nativeAccount.credentials.file=file;
+    const reader=new CredentialManager(this.config,{bind:(_id,platform,value)=>({ok:true,fingerprint:hash(platform+'\0'+value)})});
+    const credential=await reader.read(nativeAccount);
+    if(hash(await readFile(file))!==hash(before))throw Object.assign(new AppError('WorkBuddy 原生登录已更新，等待重新读取',409,'wb_native_source_changed'),{beforeSubmission:true,retryable:true});
+    return {credential,source:{file,fingerprint:hash(before)}};
+  }
+  async verifiedNativeWorkBuddy(account,file,raw) {
+    const principal=String(raw.principal??raw.uid??raw.userId??jwtClaims(raw.accessToken??raw.token??'').sub??''),edition=workBuddyEdition(account);
+    if(!principal||workBuddyEdition(raw)!==edition)return null;
+    const assertBinding=()=>{const bound=this.ledger?.principalHash?.(account.id);if(bound&&bound!==hash('workbuddy\0'+principal))throw new AppError('WorkBuddy 原生恢复与已绑定账号不符',409,'principal_changed');};
+    assertBinding();
+    let candidate;
+    try {candidate=await (this.workbuddyNativeRead??this.readWorkBuddyNative.bind(this))(account,{principal,edition});}
+    catch(error){if(error.code==='wb_native_source_changed')throw error;return null;}
+    const native=candidate?.credential,source=candidate?.source;
+    const nativePrincipal=String(native?.principal??native?.uid??''),expiry=workBuddyExpiry(native??{});
+    if(!native||nativePrincipal!==principal||native.uid!=null&&String(native.uid)!==principal||workBuddyEdition(native)!==edition||typeof native.accessToken!=='string'||!native.accessToken||native.accessToken===(raw.accessToken??raw.token)||!Number.isFinite(expiry)||expiry<=Date.now()+5000)return null;
+    if(!source||typeof source.file!=='string'||resolve(source.file)===resolve(file)||typeof source.fingerprint!=='string'||!/^[a-f0-9]{64}$/.test(source.fingerprint))return null;
+    const assertSource=async()=>{
+      let actual;try{actual=hash(await readFile(source.file));}catch{}
+      if(actual!==source.fingerprint)throw Object.assign(new AppError('WorkBuddy 原生登录已更新，等待重新读取',409,'wb_native_source_changed'),{beforeSubmission:true,retryable:true});
+    };
+    await assertSource();
+    const verify=this.workbuddyNativeVerify??(async credential=>{
+      const {fetchWorkBuddyCreditDetails}=await import('./workbuddy-resources.mjs');
+      await fetchWorkBuddyCreditDetails(credential,{signal:AbortSignal.timeout(20000)});
+      return {authenticated:true};
+    });
+    const verified=await verify(native,{account});
+    if(verified?.authenticated!==true)throw new AppError('WorkBuddy 原生登录尚未获官方核验',502,'wb_native_verification_unconfirmed');
+    await assertSource();
+    assertBinding();
+    if(expiry<=Date.now()+5000)throw new AppError('WorkBuddy 原生登录在核验期间到期',401,'wb_native_credential_expired');
+    return {native,expiry,assertSource,assertBinding};
+  }
+  async renewOwnedWorkBuddy(account,file,raw,{renew=false,rejectedAccessToken}={}) {
     // Only gateway-owned account snapshots are writable. A native auth file or
     // an arbitrary user-selected JSON remains read-only, even if it has an RT.
     const owned=this.config.dataDir&&resolve(file)===resolve(this.config.dataDir,'accounts',account.id,'workbuddy-session.json');
     const expiry=raw.expiresAtMs??jwtClaims(raw.accessToken??raw.token??'').exp*1000;
-    if(!owned||!raw.refreshToken||!renew&&(!Number.isFinite(expiry)||expiry>Date.now()+60000))return raw;
+    if(!owned||!renew&&(!Number.isFinite(expiry)||expiry>Date.now()+60000))return raw;
+    // A delayed 401 for the previous token must not rotate the newly recovered
+    // session. This comparison stays in memory and is never written to receipts.
+    if(renew&&typeof rejectedAccessToken==='string'&&rejectedAccessToken&&(raw.accessToken??raw.token)!==rejectedAccessToken)return raw;
     const stateFile=file+'.refresh-state.json',fingerprint=auth=>hash(JSON.stringify([auth.principal??auth.uid,auth.accessToken??auth.token,auth.refreshToken]));
-    const sourceFingerprint=fingerprint(raw),now=Date.now();let previous;
-    try{previous=await readJson(stateFile);}catch(e){if(e.code!=='ENOENT')throw new AppError('WorkBuddy 续期状态需核验',409,'wb_refresh_state_invalid');}
+    const sourceFingerprint=fingerprint(raw),snapshotFingerprint=hash(JSON.stringify(raw)),now=Date.now();
     const blocked=state=>state?.sourceFingerprint===sourceFingerprint&&['pending','unconfirmed','rejected','deferred'].includes(state.status)&&(!state.retryAt||now<state.retryAt);
     const failure=state=>Object.assign(new AppError(state.status==='deferred'?'WorkBuddy 续期暂时限流，等待自动重试':state.status==='rejected'?'WorkBuddy 登录凭据已到期，请重新登录':'WorkBuddy 续期结果待核验，等待本机新登录态',state.status==='deferred'?429:state.status==='rejected'?401:503,state.status==='deferred'?'wb_refresh_rate_limited':state.status==='rejected'?'wb_refresh_login_required':'wb_refresh_unconfirmed'),{retryAt:state.retryAt,loginRequired:state.status==='rejected'});
-    if(blocked(previous)){if(!renew&&expiry>now+5000)return {...raw,refreshPending:true};throw failure(previous);}
     let lock;try{lock=await open(stateFile+'.lock','wx',0o600);}catch{throw new AppError('WorkBuddy 登录续期正在处理',409,'wb_refresh_pending');}
     try{
       const latest=await readJson(file);
-      if(fingerprint(latest)!==sourceFingerprint)return latest; // a fresh capture/login always wins
+      if(hash(JSON.stringify(latest))!==snapshotFingerprint)return latest; // any concurrent snapshot edit wins
+      // A verified same-account native login takes precedence over an old RT
+      // rejection/unknown marker. Never consume the old rotating token to import it.
+      const candidate=await this.verifiedNativeWorkBuddy(account,file,latest);
+      if(candidate){
+        await candidate.assertSource();
+        const current=await readJson(file);
+        if(hash(JSON.stringify(current))!==snapshotFingerprint)return current;
+        candidate.assertBinding();
+        const {native}=candidate,edition=workBuddyEdition(account);
+        const next={...current,managedBy:'ai-credit-gateway',platform:'workbuddy',credentialVersion:1,accessToken:native.accessToken,token:undefined,
+          refreshToken:typeof native.refreshToken==='string'?native.refreshToken:'',refreshExpiresAtMs:native.refreshToken?native.refreshExpiresAtMs:undefined,
+          principal:current.principal??native.principal,uid:native.uid??native.principal,domain:native.domain??(edition==='ai'?'www.workbuddy.ai':'www.workbuddy.cn'),edition,
+          expiresAtMs:candidate.expiry,enterpriseId:native.enterpriseId,profileRaw:native.profileRaw??current.profileRaw,updatedAt:new Date().toISOString(),nativeRecoveredAt:new Date().toISOString()};
+        await atomicJson(file,next);
+        await atomicJson(stateFile,{sourceFingerprint:fingerprint(next),status:'complete',completedAt:Date.now(),source:'same_principal_native_login'});
+        return next;
+      }
+      if(!latest.refreshToken)return latest;
       let state;try{state=await readJson(stateFile);}catch(e){if(e.code!=='ENOENT')throw e;}
       if(blocked(state)){if(!renew&&expiry>now+5000)return {...latest,refreshPending:true};throw failure(state);}
       await atomicJson(stateFile,{sourceFingerprint,status:'pending',attemptedAt:now});
@@ -163,7 +225,7 @@ export class CredentialManager {
       try{next=await (this.workbuddyRefresh??refreshWorkBuddyCredential)(latest,{now});}
       catch(error){await atomicJson(stateFile,{sourceFingerprint,status:error.loginRequired?'rejected':error.retryable&&error.beforeSubmission?'deferred':'unconfirmed',attemptedAt:now,...(error.retryable&&error.beforeSubmission?{retryAt:error.retryAt}:{})});if(!renew&&expiry>now+5000)return {...latest,refreshPending:true};throw error;}
       const after=await readJson(file);
-      if(fingerprint(after)!==sourceFingerprint)return after; // do not overwrite a concurrent new login
+      if(hash(JSON.stringify(after))!==snapshotFingerprint)return after; // do not overwrite concurrent metadata or a new login
       next={...after,...next,managedBy:'ai-credit-gateway',platform:'workbuddy',credentialVersion:1};
       await atomicJson(file,next);await atomicJson(stateFile,{sourceFingerprint:fingerprint(next),status:'complete',completedAt:Date.now()});
       return next;

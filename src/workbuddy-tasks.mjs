@@ -28,7 +28,18 @@ export class WorkBuddyTaskClient {
     rememberSecret(c.accessToken);const base=web?'https://www.workbuddy.cn':'https://copilot.tencent.com';
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(new AppError('WB 任务请求超时，服务端状态待确认',504,'wb_task_request_timeout')),this.timeoutMs),signal=this.signal?AbortSignal.any([this.signal,controller.signal]):controller.signal;
     const perform=async()=>{signal.throwIfAborted();const response=await this.fetchImpl(base+path,{method:body===undefined?'GET':'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:'Bearer '+c.accessToken,'X-Domain':c.domain??'www.workbuddy.cn','X-User-Id':String(c.uid??c.principal),...(web?{'X-Client-Platform':'web',Origin:'https://www.workbuddy.cn',Referer:'https://www.workbuddy.cn/profile/growth-center'}:{})},...(body===undefined?{}:{body:JSON.stringify(body)}),redirect:'error',signal});signal.throwIfAborted();
-      let data;try{data=await response.json();signal.throwIfAborted();}catch(error){signal.throwIfAborted();throw new AppError('WB 任务响应待确认',response.ok?502:response.status,'wb_task_response_invalid');}
+      let data;try{data=await response.json();signal.throwIfAborted();}catch(error){
+        signal.throwIfAborted();
+        const auth=[401,403].includes(response.status),limited=response.status===429;
+        const message=response.ok?`WB 任务响应结构待确认（HTTP ${response.status}，JSON 解析失败）`:`WB 任务接口返回 HTTP ${response.status}${auth?response.status===401?'，当前登录态被拒绝':'，当前访问被拒绝':limited?'，暂时限流':''}；上游返回非 JSON 响应`;
+        const failure=new AppError(message,response.ok?502:response.status,response.ok?'wb_task_response_invalid':auth?'wb_task_http_auth_rejected':limited?'wb_task_http_rate_limited':'wb_task_http_rejected');
+        failure.httpStatus=response.status;
+        const media=String(response.headers?.get?.('content-type')??'').split(';',1)[0].trim().toLowerCase();
+        failure.contentType=media.length<=100&&/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(media)?media:null;
+        failure.banned=false;
+        if(limited)failure.retryable=true;
+        throw failure;
+      }
       if(!response.ok||data.code!==undefined&&![0,200,'0','200'].includes(data.code)){const e=workBuddyUpstreamError(response,data,'WB 任务请求被服务端拒绝');e.code='wb_task_request_rejected';throw e;}return data.data??data;};
     try{return await (body===undefined?abortableRead(perform,signal):perform());}finally{clearTimeout(timer);}
   }
@@ -75,7 +86,32 @@ function saveTaskSnapshot(service,accountId,tasks,receipts){
 function saveTaskFailure(service,accountId,error){const old=workBuddyTaskSnapshot(service,accountId),row={...old,lastFailureAt:new Date().toISOString(),stale:!!old.lastSuccessAt,error:workBuddyFailure(error)};service.ledger?.set('wb-management-tasks:'+accountId,row);if(row.error.banned)service.ledger?.set('wb-management-official-status:'+accountId,{status:'banned',reason:row.error.message,source:'official_response',checkedAt:row.lastFailureAt,httpStatus:row.error.httpStatus,upstreamCode:row.error.upstreamCode});return row;}
 export async function queryWorkBuddyTasks(service,{accountId,signal,onProgress}={}) {
   const version=snapshotVersion(service,accountId,true),progress=(phase,completed=0,status)=>reportProgress(service,accountId,onProgress,{phase,completed,total:1,status});progress('init');
-  try{signal?.throwIfAborted();const api=await client(service,accountId,signal);signal?.throwIfAborted();progress('query');const tasks=await api.query();signal?.throwIfAborted();const result=snapshotVersion(service,accountId)===version?saveTaskSnapshot(service,accountId,tasks):workBuddyTaskSnapshot(service,accountId);if(snapshotVersion(service,accountId)===version+1)progress('finished',1,'completed');return result;}catch(e){if(!signal?.aborted&&snapshotVersion(service,accountId)===version){saveTaskFailure(service,accountId,e);progress('finished',0,'failed');}else if(signal?.aborted&&snapshotVersion(service,accountId)===version)progress('finished',0,'cancelled');throw e;}
+  try{
+    signal?.throwIfAborted();let api=await client(service,accountId,signal);signal?.throwIfAborted();progress('query');
+    let tasks;
+    try{tasks=await api.query();}
+    catch(error){
+      signal?.throwIfAborted();
+      // This recovery belongs only to the UI's read-only task refresh. Never
+      // replay acceptance/reward requests or renew for 403, 429 or bad JSON 200.
+      if(Number(error.httpStatus??error.status)!==401)throw error;
+      const old=api.credential;
+      const fresh=await service.credentials.resolve(accountId,{force:true,renew:true,rejectedAccessToken:old.accessToken});
+      signal?.throwIfAborted();
+      const identity=value=>(typeof value==='string'&&value.trim())||(typeof value==='number'&&Number.isFinite(value)?String(value):null);
+      let compared=false;
+      for(const field of ['principalHash','uid']){
+        const before=identity(old[field]);if(before===null)continue;
+        if(identity(fresh?.[field])!==before)throw new AppError('WB 任务查询续期身份与已绑定帐号不符',409,'principal_changed');
+        compared=true;
+      }
+      if(!compared)throw new AppError('WB 任务查询缺少稳定帐号身份，续期结果待核验',409,'wb_task_refresh_identity_unverified');
+      if(typeof fresh?.accessToken!=='string'||!fresh.accessToken||fresh.accessToken===old.accessToken&&(fresh.domain??'')===(old.domain??''))throw error;
+      api=new WorkBuddyTaskClient(fresh,{fetchImpl:service.workbuddyRuntime?.fetchImpl??fetch,signal,timeoutMs:service.workbuddyRuntime?.taskRequestTimeoutMs});
+      signal?.throwIfAborted();tasks=await api.query();
+    }
+    signal?.throwIfAborted();const result=snapshotVersion(service,accountId)===version?saveTaskSnapshot(service,accountId,tasks):workBuddyTaskSnapshot(service,accountId);if(snapshotVersion(service,accountId)===version+1)progress('finished',1,'completed');return result;
+  }catch(e){if(!signal?.aborted&&snapshotVersion(service,accountId)===version){saveTaskFailure(service,accountId,e);progress('finished',0,'failed');}else if(signal?.aborted&&snapshotVersion(service,accountId)===version)progress('finished',0,'cancelled');throw e;}
 }
 export function runWorkBuddyTasks(service,options={}) {
   const shutdown=service.workbuddyExecutorController?.signal,signal=shutdown?options.signal&&options.signal!==shutdown?AbortSignal.any([options.signal,shutdown]):shutdown:options.signal;

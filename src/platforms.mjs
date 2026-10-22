@@ -12,6 +12,7 @@ import {qwenWorkModels,qwenWorkChat} from './qwenwork-models.mjs';
 import {miniMaxModels,miniMaxChat} from './minimax-models.mjs';
 import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor/workbuddy-core.mjs';
 import {fetchWorkBuddyCreditDetails} from './workbuddy-resources.mjs';
+import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
 import {AppError,jsonFetch,dayIn,errorView} from './util.mjs';
 import {restoreLoomyDailyQuota} from './daily-quota-receipt.mjs';
@@ -21,6 +22,21 @@ import {miniMaxStatus,miniMaxClaim,miniMaxMembership} from './minimax.mjs';
 export class Platforms {
   constructor(config,credentials){this.config=config;this.credentials=credentials;this.wb=new WorkBuddyUpstreamClient();this.quotaCache=new Map();this.catalogs=new Map();this.catalogFlights=new Map();this.trae=new Map();}
   account(id){return this.credentials.account(id);}
+  async workBuddyReadCredential(id,credential) {
+    // Only read paths call this helper. A rejected POST action is never replayed.
+    // Carry the rejected access version so a late 401 cannot rotate a session
+    // which another read has just recovered from the native client.
+    const newer=await this.credentials.resolve(id,{force:true,renew:true,rejectedAccessToken:credential.accessToken});
+    let compared=false;
+    for(const field of ['principalHash','principal','uid'])if(credential[field]!==undefined&&credential[field]!==null&&String(credential[field]).trim()){
+      if(newer[field]===undefined||newer[field]===null||String(newer[field])!==String(credential[field]))throw new AppError('WorkBuddy 恢复登录态与已绑定账号不符',409,'principal_changed');
+      compared=true;
+    }
+    if(!compared)throw new AppError('WorkBuddy 读取恢复缺少稳定账号身份',409,'wb_read_refresh_identity_unverified');
+    if(workBuddyEdition(newer)!==workBuddyEdition(credential))throw new AppError('WorkBuddy 恢复登录态版本不符',409,'wb_login_domain_mismatch');
+    if(newer.accessToken===credential.accessToken&&(newer.domain??'')===(credential.domain??''))return null;
+    return newer;
+  }
   async dailyReconciliationMode(id,task) {
     // A protocol migration, not a caller-provided escape from POST fencing.
     // Only Raccoon's native GET initialization and Loomy's server-idempotent
@@ -88,7 +104,24 @@ export class Platforms {
     if(a.platform==='nvidia'){let credential;try{credential=await this.credentials.resolve(id,{force:true});const [health,policy]=await Promise.all([nvidiaHealth(credential),nvidiaPolicy(credential)]);const authRecord=nvidiaAuthState(this.credentials.ledger,id,credential,health.quota?.credentialStatus==='rejected'?'rejected':undefined);return {...health,policy,authRecord};}catch(e){if(e.code==='nvidia_auth_failed'&&credential)nvidiaAuthState(this.credentials.ledger,id,credential,'rejected');if(e.code==='nvidia_credential_missing')return {status:'credential_missing',models:[],quota:{credentialStatus:'missing'}};throw e;}}
     const credential=await this.credentials.resolve(id,{force:true});
     if(a.platform==='workbuddy'){
-      const [checkin,credits]=await Promise.allSettled([this.wb.fetchCheckinStatus(credential),fetchWorkBuddyCreditDetails(credential,{signal:AbortSignal.timeout(20000)})]);
+      const read=c=>Promise.allSettled([this.wb.fetchCheckinStatus(c),fetchWorkBuddyCreditDetails(c,{signal:AbortSignal.timeout(20000)})]);
+      let [checkin,credits]=await read(credential);
+      const authFailure=[credits,checkin].find(r=>r.status==='rejected'&&r.reason?.status===401);
+      if(authFailure){
+        try{
+          const newer=await this.workBuddyReadCredential(id,credential);
+          if(newer)[checkin,credits]=await Promise.allSettled([
+            checkin.status==='fulfilled'?Promise.resolve(checkin.value):this.wb.fetchCheckinStatus(newer),
+            credits.status==='fulfilled'?Promise.resolve(credits.value):fetchWorkBuddyCreditDetails(newer,{signal:AbortSignal.timeout(20000)})
+          ]);
+        }
+        catch(error){
+          // A partial daily-status failure must not erase a freshly verified
+          // balance. A balance authentication failure must remain a failure.
+          if(credits.status==='rejected')throw error;
+          checkin={status:'rejected',reason:error};
+        }
+      }
       if(credits.status==='rejected')throw credits.reason;
       return {status:'authenticated',credits:credits.value,checkin:checkin.status==='fulfilled'?checkin.value:{supported:false,todayCheckedIn:null},...(checkin.status==='rejected'?{checkinError:errorView(checkin.reason)}:{})};
     }
@@ -128,9 +161,8 @@ export class Platforms {
         if(error?.status!==401)throw error;
         // Only the read-only status query is repeated. CredentialManager owns
         // refresh serialization, source write protection, and identity binding.
-        const newer=await this.credentials.resolve(accountId,{force:true,renew:true});
-        if(credential.principalHash&&newer.principalHash&&credential.principalHash!==newer.principalHash)throw new AppError('WorkBuddy 续期身份与已绑定账号不符',409,'principal_changed');
-        if(newer.accessToken===credential.accessToken)throw error;
+        const newer=await this.workBuddyReadCredential(accountId,credential);
+        if(!newer)throw error;
         s=await this.wb.fetchCheckinStatus(newer);
       }
       return {known:true,active:s.active,claimed:s.todayCheckedIn,credits:s.todayCredit,details:s};

@@ -14,7 +14,8 @@ export function workBuddyFailure(error){
   const negative=/\bnot (?:banned|blocked|suspended)\b|未(?:被)?封禁|未(?:被)?封停|未(?:被)?禁用/i.test(message);
   const explicit=error.banned===true||/^(?:wb_)?(?:account|user)_(?:banned|blocked|suspended)$/.test(code)||!negative&&(/\b(?:account|user)\b.{0,35}\b(?:banned|blocked|suspended)\b|\b(?:banned|blocked|suspended)\s+(?:account|user)\b|(?:账号|帐号|用户).{0,12}(?:封禁|封停)|(?:封禁|封停).{0,8}(?:账号|帐号|用户)/i.test(message));
   const authRejected=[401,403].includes(httpStatus)||[401,403,12153].includes(Number(upstreamCode))||/^(?:credential_expired|credential_missing|invalid_credentials|wb_refresh_login_required)$/.test(code);
-  return {...view,httpStatus,upstreamCode,banned:explicit,authRejected};
+  const contentType=typeof error.contentType==='string'&&/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(error.contentType)&&error.contentType.length<=100?error.contentType:null;
+  return {...view,httpStatus,upstreamCode,banned:explicit,authRejected,...(contentType?{contentType}:{})};
 }
 export function workBuddyUpstreamError(response,data,fallback='WB 官方查询失败'){
   const message=redact(String(data?.message??data?.msg??data?.error?.message??fallback)).slice(0,500),code=data?.code??data?.error?.code;

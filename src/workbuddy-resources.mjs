@@ -23,7 +23,19 @@ export async function fetchWorkBuddyCreditDetails(credential,{fetchImpl=fetch,si
   const packages=[],seen=new Set(),pages=new Set();let complete=false,totalCount=null;
   for(let page=1;page<=maxPages;page++){
     const r=await fetchImpl(base+path,{method:'POST',headers,body:JSON.stringify({PageNumber:page,PageSize:pageSize,ProductCode:'p_tcaca',Status:queryScope.statuses,PackageEndTimeRangeBegin:queryScope.endTimeBegin,PackageEndTimeRangeEnd:queryScope.endTimeEnd}),signal:signal??AbortSignal.timeout(20000),redirect:'error'});
-    let data;try{data=await r.json();}catch{throw new AppError('WB 积分包响应结构待确认',r.ok?502:r.status,'wb_resource_response_invalid');}
+    let data;try{data=await r.json();}catch{
+      const auth=[401,403].includes(r.status),limited=r.status===429;
+      const message=r.ok?`WB 积分包响应结构待确认（HTTP ${r.status}，JSON 解析失败）`:`WB 积分包接口返回 HTTP ${r.status}${auth?r.status===401?'，当前登录态被拒绝':'，当前访问被拒绝':limited?'，暂时限流':''}；上游返回非 JSON 响应`;
+      const error=new AppError(message,r.ok?502:r.status,r.ok?'wb_resource_response_invalid':auth?'wb_resource_http_auth_rejected':limited?'wb_resource_http_rate_limited':'wb_resource_http_rejected');
+      error.httpStatus=r.status;
+      // Retain only a media type, not parameters, the upstream body or parser
+      // exception text (any of those may contain account/session material).
+      const media=String(r.headers?.get?.('content-type')??'').split(';',1)[0].trim().toLowerCase();
+      error.contentType=media.length<=100&&/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(media)?media:null;
+      error.banned=false;
+      if(limited)error.retryable=true;
+      throw error;
+    }
     if(!r.ok||data.code!==undefined&&![0,200,'0','200'].includes(data.code))throw workBuddyUpstreamError(r,data);
     const inner=data.data?.Response?.Data??data.Response?.Data??data.data??data,raw=inner.Accounts??inner.accounts;
     if(!Array.isArray(raw))throw new AppError('WB 积分包列表结构待确认',502,'wb_resource_schema_invalid');

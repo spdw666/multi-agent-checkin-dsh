@@ -13,7 +13,7 @@ const rejection=(status=401)=>Object.assign(Error('fixture credential rejected')
 const official=(claimed=false)=>({active:true,todayCheckedIn:claimed,todayCredit:claimed?100:0});
 function fixture(resolve){
   const account={id:'fixture-wb',platform:'workbuddy'},seen=[];
-  const credentials={account:()=>account,async resolve(id,options){seen.push({id,options});return resolve?resolve(id,options):{accessToken:'fixture-old',principalHash:'fixture-owner'};}};
+  const credentials={account:()=>account,async resolve(id,options){seen.push({id,options});return {principalHash:'fixture-owner',...(resolve?await resolve(id,options):{accessToken:'fixture-old'})};}};
   return {platforms:new Platforms({value:{accounts:[account]}},credentials),seen};
 }
 test('WB successful read-only checkin status does not force a renewal',async()=>{
@@ -29,7 +29,7 @@ test('WB checkin status 401 renews once and returns only the fresh official resu
   p.wb.claimDailyCheckin=async()=>{writes++;assert.fail('status must not claim')};
   const s=await p.status('fixture-wb','daily-checkin');
   assert.equal(s.claimed,true);assert.equal(s.credits,100);assert.deepEqual(tokens,['fixture-old','fixture-new']);
-  assert.deepEqual(seen[1],{id:'fixture-wb',options:{force:true,renew:true}});assert.equal(writes,0);
+  assert.deepEqual(seen[1],{id:'fixture-wb',options:{force:true,renew:true,rejectedAccessToken:'fixture-old'}});assert.equal(writes,0);
 });
 test('WB rejected unchanged credential is not sent to checkin status a second time',async()=>{
   const {platforms:p,seen}=fixture();const error=rejection();let reads=0;
