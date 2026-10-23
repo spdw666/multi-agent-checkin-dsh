@@ -41,7 +41,7 @@ export class RequestPlan{
   constructor(request,config,catalogs=new Map()){
     this.contract=requestContract(request);this.config=config;this.catalogs=new Map(catalogs);
     this.candidateCount=0;this.skippedCount=0;this.attemptCount=0;this.dispatchCount=0;
-    this.root=null;this.fallbackRoot=null;this.last=null;
+    this.root=null;this.fallbackRoot=null;this.last=null;this.capacityGap=null;
   }
   platform(target){return platform(this.config.upstreams?.find(u=>u.id===target?.upstreamId)?.kind);}
   candidate(){this.candidateCount++;}
@@ -62,6 +62,9 @@ export class RequestPlan{
     }else if(c.requiresTools&&(model.tools===false||!relay&&model.tools!==true)){reasonCode='tools_not_supported';message='Target does not declare tools support';}
     else if(c.hasImages&&(model.multimodal===false||!relay&&model.multimodal!==true)){reasonCode='images_not_supported';message='Target does not declare image-input support';}
     else if(relay&&capabilities.outputCapacity!==null&&c.outputBudget>capabilities.outputCapacity){
+      // Record the widest ceiling any candidate offered: it is the one number that
+      // tells the caller what to lower max_tokens to. Never shrink the request.
+      if(this.capacityGap===null||capabilities.outputCapacity>this.capacityGap.capacity)this.capacityGap={requested:c.outputBudget,capacity:capabilities.outputCapacity};
       reasonCode='relay_capacity_incompatible';message='Same-model provider output capacity is below this request; history and output budget were not trimmed';
     }
     if(reasonCode)return {metadata:{...result,state:'skipped',reasonCode},error:new AppError(message,errorStatus,reasonCode)};
@@ -75,7 +78,7 @@ export class RequestPlan{
   summary(state='ongoing'){return {schema:1,state,candidateCount:this.candidateCount,skippedCount:this.skippedCount,attemptCount:this.attemptCount,dispatchCount:this.dispatchCount};}
   attach(error){
     const last=this.last??{code:code(error?.code),status:status(error?.status),platform:'unknown'},root=this.root??this.fallbackRoot??last;
-    error.relayFailure={root:{...root},last:{code:last.code,status:last.status},skippedCount:this.skippedCount,attemptCount:this.attemptCount};
+    error.relayFailure={root:{...root},last:{code:last.code,status:last.status},skippedCount:this.skippedCount,attemptCount:this.attemptCount,...(this.capacityGap?{capacityGap:{...this.capacityGap}}:{})};
     return error;
   }
 }

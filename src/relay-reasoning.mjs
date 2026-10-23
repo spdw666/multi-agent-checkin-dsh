@@ -22,6 +22,19 @@ const canonical = value => typeof value === 'string'
   ? OFF.has(value) ? 'off' : ON.has(value) ? 'on' : ORDER.includes(value) ? value : null
   : null;
 const rank = value => ORDER.indexOf(value);
+// A caller budget smaller than one short reply cannot fund a heavy reasoning
+// tier: the supplier spends the whole allowance on thoughts and returns no
+// answer, which is a failed request, not a short one.
+// Retain the established minimum reply allowance across relay suppliers.
+const REASONING_BUDGET_FLOOR = 256;
+const outputBudget = request => {
+  // Suppliers differ in which of the two caller limits they honor. A small
+  // explicit limit needs the same floor in either position; a larger sibling
+  // must never be reduced while applying that floor.
+  const values = [request?.max_tokens, request?.max_completion_tokens]
+    .filter(value => Number.isSafeInteger(value) && value > 0);
+  return values.length ? Math.min(...values) : null;
+};
 
 function contract(model = {}, kind) {
   const reasoning = record(model?.reasoning) ? model.reasoning : {};
@@ -135,7 +148,8 @@ function stripControls(body, prefix, removed) {
 /**
  * Adapt only an actual relay attempt. The caller supplies the ORIGINAL source
  * catalogue entry on every retry; it must not chain one target's adapted body
- * into the next target. No prompt, tool, output limit, stream, or ID is changed.
+ * into the next target. No prompt, tool, stream, or ID is changed; explicit
+ * tiny output limits are only raised to the established minimum, never reduced.
  */
 export function adaptRelayReasoning(request, model, {kind, sourceModel, relayed = true} = {}) {
   if (!relayed) return {request, metadata:{mode:'unchanged', changed:false}};
@@ -145,6 +159,8 @@ export function adaptRelayReasoning(request, model, {kind, sourceModel, relayed 
   const sourceIntent = sourceModel === undefined ? canonical(rawIntent) : resolveIntent(rawIntent, source);
   const sourceHasLevels = source.tiers.length > 0;
   const forceMaximum = sourceModel !== undefined && !sourceHasLevels;
+  const budget = outputBudget(request);
+  const starved = budget !== null && budget < REASONING_BUDGET_FLOOR;
   const removedFields = [];
   const output = stripControls(request, '', removedFields);
   if (record(output.extra_body)) output.extra_body = stripControls(output.extra_body, 'extra_body.', removedFields);
@@ -152,8 +168,18 @@ export function adaptRelayReasoning(request, model, {kind, sourceModel, relayed 
     mode:'omitted', changed:removedFields.length > 0,
     sourceIntent:sourceIntent ?? (rawIntent === null ? null : 'unrecognized'),
     sourceHasLevels, targetEffort:null, wireEffort:null,
-    targetMaximum:target.maximum?.[0] ?? null, removedFields,
+    targetMaximum:target.maximum?.[0] ?? null, removedFields, budget, starved,
   };
+  // The floor applies to every supplier, not only tiered ones: an untiered
+  // model still spends the allowance on hidden reasoning and returns no text.
+  if (starved) {
+    for (const key of ['max_tokens', 'max_completion_tokens']) {
+      if (Number.isSafeInteger(output[key]) && output[key] > 0 && output[key] < REASONING_BUDGET_FLOOR) {
+        output[key] = REASONING_BUDGET_FLOOR;
+        metadata.changed = true;
+      }
+    }
+  }
   if (target.binary) {
     const disabled = sourceIntent === 'off' && !target.alwaysEnabled && target.off !== null;
     // Binary controls mean enabled/disabled; they are never a fictional max tier.
@@ -166,7 +192,10 @@ export function adaptRelayReasoning(request, model, {kind, sourceModel, relayed 
       wireEffort:wireLabel(target.thinkingControl ? type : genericWire)});
   } else if (target.maximum) {
     let choice;
-    if (!forceMaximum && sourceIntent === 'off' && target.off !== null) choice = ['off', target.off];
+    // A starved budget outranks every intent: the lowest declared tier is the
+    // only one that can leave room for an actual answer.
+    if (starved) choice = target.off !== null ? ['off', target.off] : target.tiers[0];
+    else if (!forceMaximum && sourceIntent === 'off' && target.off !== null) choice = ['off', target.off];
     else if (forceMaximum || !sourceIntent || sourceIntent === 'on' || sourceIntent === 'off' || sourceIntent === 'max')
       choice = target.maximum;
     else {
@@ -183,9 +212,10 @@ export function adaptRelayReasoning(request, model, {kind, sourceModel, relayed 
       output.reasoning_effort = kind === 'lobster' ? level : wire;
     if (target.thinkingControl) output.thinking = {type:level === 'off' ? 'disabled' : 'enabled'};
     Object.assign(metadata, {
-      mode:forceMaximum || !sourceIntent ? 'maximum' : level === sourceIntent ? 'preserved' : 'mapped',
+      mode:starved ? 'budget_floor' : forceMaximum || !sourceIntent ? 'maximum' : level === sourceIntent ? 'preserved' : 'mapped',
       changed:true, targetEffort:level, wireEffort:wireLabel(wire),
     });
   }
+  if (starved) metadata.mode = 'budget_floor';
   return {request:output, metadata};
 }

@@ -120,7 +120,12 @@ export class Router {
       const target=targets[i];let started=false,completed=false,failure,response,blockedByCircuit=false,skipped=false;
       plan.candidate();
       if(signal?.aborted)throw interrupted(signal);
-      const remaining=Math.max(1,requestBudget-(Date.now()-requestStarted)-1000),prefillBudget=longPrefill?Math.max(this.relayAttemptTimeoutMs,this.relayPrefillTimeoutMs):this.relayAttemptTimeoutMs,attemptBudget=Math.max(1,Math.min(prefillBudget,Math.floor(remaining/Math.min(2,targets.length-i))));
+      // A long prefill is one all-or-nothing attempt: halving the remaining
+      // request budget guarantees that neither half reaches the real first-token
+      // latency (a 240s prefill promise silently became 89.5s at 180s/2). Short
+      // attempts still reserve a slice for the next candidate; the whole-request
+      // deadline stays the outer bound in both cases.
+      const remaining=Math.max(1,requestBudget-(Date.now()-requestStarted)-1000),prefillBudget=longPrefill?Math.max(this.relayAttemptTimeoutMs,this.relayPrefillTimeoutMs):this.relayAttemptTimeoutMs,attemptBudget=Math.max(1,Math.min(prefillBudget,longPrefill?remaining:Math.floor(remaining/Math.min(2,targets.length-i))));
       let semanticProgress=false;
       const targetController=relayActive?new AbortController():null,targetSignal=relayActive?(signal?AbortSignal.any([signal,targetController.signal]):targetController.signal):signal;
       const timeoutError=new AppError('Same-model supplier made no progress within its relay idle budget',504,'relay_target_timeout');let targetTimer,targetExpired=false,rejectTarget;
@@ -136,14 +141,21 @@ export class Router {
         const catalog=await waitTarget(catalogFor(target.upstreamId,targetSignal));const model=catalog.find(m=>m.id===target.model);
         const queuedRestriction=recoveryRestriction(target);if(queuedRestriction){blockedByCircuit=true;throw queuedRestriction;}
         if(!model||model.callable===false)throw new AppError(`Model absent from live catalog: ${target.model}`,404,'model_not_found');
-        const planned=plan.inspect(model,sourceModel,{relay:relayActive});usage.row.candidatePlan=planned.metadata;
+        const kind=this.config.value.upstreams?.find(u=>u.id===target.upstreamId)?.kind;
+        const adapted=adaptRelayReasoning(request,model,{kind,sourceModel,relayed:relayActive});
+        if(relayActive)usage.row.reasoningPolicy=adapted.metadata;
+        // Preserve the caller contract for diagnostics, but check what will
+        // actually be sent. The retained tiny-budget floor may exceed either
+        // output capacity or the conservative standby context bound.
+        const budgetChanged=adapted.request.max_tokens!==request.max_tokens||adapted.request.max_completion_tokens!==request.max_completion_tokens;
+        const candidatePlan=budgetChanged?new RequestPlan(adapted.request,this.config.value):plan;
+        const planned=candidatePlan.inspect(model,sourceModel,{relay:relayActive});
+        if(candidatePlan.capacityGap&&(!plan.capacityGap||candidatePlan.capacityGap.capacity>plan.capacityGap.capacity))plan.capacityGap={...candidatePlan.capacityGap};
+        usage.row.candidatePlan={...planned.metadata,...(budgetChanged?{requestedOutputBudget:plan.contract.outputBudget,effectiveOutputBudget:candidatePlan.contract.outputBudget}:{})};
         if(planned.error){
           if(planned.error.code==='relay_context_incompatible'){const blocked=this.relay.candidates(route,route.targets,{ignoreCooldown:true}).map(t=>this.relay.cooldown(t)).filter(Boolean);if(blocked.length)planned.error.retryAfterSeconds=Math.max(1,Math.ceil((Math.min(...blocked.map(r=>r.until))-Date.now())/1000));}
           throw planned.error;
         }
-        const kind=this.config.value.upstreams?.find(u=>u.id===target.upstreamId)?.kind;
-        const adapted=adaptRelayReasoning(request,model,{kind,sourceModel,relayed:relayActive});
-        if(relayActive)usage.row.reasoningPolicy=adapted.metadata;
         let result;for(let transportAttempt=1;transportAttempt<=2;transportAttempt++){
           try{let restriction=recoveryRestriction(target);if(restriction){blockedByCircuit=true;throw restriction;}
             if(recoveryCircuits.has(targetKey(target))){const balance=await waitTarget(this.relay.balance(target,targetSignal));restriction=recoveryRestriction(target);if(restriction){blockedByCircuit=true;throw restriction;}if(this.relay.exhaustedBalance(balance)){blockedByCircuit=true;throw new AppError('原供应在恢复派发前已确认剩余额度为零；本次未重复生成，模型与上下文保持不变',402,'same_model_credits_exhausted');}}
@@ -201,7 +213,17 @@ export class Router {
         }
         // Internal candidate incompatibility is a local eligibility skip, not a
         // malformed caller request. No target may rewrite the submitted budget.
-        if(!started&&!signal?.aborted&&i===targets.length-1&&relayReason==='capability_unavailable'&&skipped)throw new AppError('当前同型号供应均未确认支持本次完整请求；历史、工具和输出预算均已保留',503,'same_model_unavailable');
+        if(!started&&!signal?.aborted&&i===targets.length-1&&relayReason==='capability_unavailable'&&skipped){
+          // Say which number is out of range. The error code and status stay the
+          // documented pair (503 same_model_unavailable); only the message gains
+          // the one actionable fact the caller needs to unblock itself.
+          const gap=plan.capacityGap;
+          throw new AppError(gap
+            ?gap.requested>plan.contract.outputBudget
+              ?`当前同型号供应均未确认支持本次完整请求；最低回复预算调整后的派发预算 ${gap.requested} 超过同类供应可承诺的上限 ${gap.capacity}，需支持该预算的同型号供应；历史、工具与调用者预算均未被裁剪`
+              :`当前同型号供应均未确认支持本次完整请求；请求的输出预算 ${gap.requested} 超过同类供应可承诺的上限 ${gap.capacity}，请把 max_tokens / max_completion_tokens 降到 ${gap.capacity} 以内重试；历史、工具与输出预算均未被裁剪`
+            :'当前同型号供应均未确认支持本次完整请求；历史、工具和输出预算均已保留',503,'same_model_unavailable');
+        }
         if(started||signal?.aborted||i===targets.length-1||(!relayReason&&!depleted&&!poolModelAbsent&&e.code!=='wb_inference_disabled'&&!(route.fallbackStatuses??[408,429,500,502,503,504]).includes(e.status??502)))throw e;
         previousTarget=target;relayTrigger=relayReason??'upstream_unavailable';
       }

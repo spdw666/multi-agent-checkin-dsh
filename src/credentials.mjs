@@ -58,7 +58,7 @@ export function runNativeHelper(executable,value,{timeout=12000}={}) {
   });
 }
 export class CredentialManager {
-  constructor(config,ledger){this.config=config;this.ledger=ledger;this.cache=new Map();this.flights=new Map();}
+  constructor(config,ledger){this.config=config;this.ledger=ledger;this.cache=new Map();this.flights=new Map();this.flightOptions=new Map();}
   account(id) {const a=this.config.value.accounts.find(a=>a.id===id);if(!a||a.enabled===false)throw new AppError('Account missing or disabled',400,'account_disabled');return a;}
   // Internal scheduler hint. Never resolve/renew/decrypt/bind a credential just
   // to notice that its original client has written a different login record.
@@ -73,10 +73,21 @@ export class CredentialManager {
     } catch {return null;}
   }
   async resolve(id,{force=false,renew=false,rejectedAccessToken}={}) {
-    const account=this.account(id);
+    const account=structuredClone(this.account(id));
+    const source=hash(JSON.stringify(account)),options={force,renew,rejectedAccessToken,source};
     if(force)this.cache.delete(id);
-    if(this.flights.has(id))return this.flights.get(id);
-    const p=this.read(account,{renew,rejectedAccessToken}).catch(e=>{if(/^(codearts|raccoon)_refresh_source_changed$/.test(e.code??''))return this.read(account,{renew,rejectedAccessToken});if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>this.flights.delete(id));this.flights.set(id,p);return p;
+    if(this.flights.has(id)){
+      const flight=this.flights.get(id),active=this.flightOptions.get(id);
+      // A normal read cannot satisfy a 401 renewal or a forced fresh read.
+      // Queue the stronger request, then re-enter so all waiters share one
+      // upgrade instead of racing refresh-token rotation against each other.
+      if(active&&(active.source!==source||renew&&!active.renew||force&&!active.force&&!active.renew||renew&&rejectedAccessToken!==undefined&&active.renew&&active.rejectedAccessToken!==rejectedAccessToken)){
+        await flight.catch(()=>{});
+        return this.resolve(id,{force,renew,rejectedAccessToken});
+      }
+      return flight;
+    }
+    const p=this.read(account,{renew,rejectedAccessToken}).catch(e=>{if(/^(codearts|raccoon)_refresh_source_changed$/.test(e.code??''))return this.read(account,{renew,rejectedAccessToken});if(account.platform==='qwenwork'&&e.code==='credential_expired')return this.refreshQwen(id);throw e;}).finally(()=>{if(this.flights.get(id)===p){this.flights.delete(id);this.flightOptions.delete(id);}});this.flights.set(id,p);this.flightOptions.set(id,options);return p;
   }
   async read(account,{renew=false,rejectedAccessToken}={}) {
     if(account.platform==='freeapi'){const c=await resolveFreeCredential(account,this.config),binding=this.ledger.bind(account.id,'freeapi',c.principal);if(!binding.ok)throw new AppError('Provider credential identity changed; rebind this account',409,'principal_changed');return {...c,principalHash:binding.fingerprint};}

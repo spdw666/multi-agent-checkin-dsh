@@ -73,13 +73,27 @@ export class ModelRelay{
   return {targets,catalogs,family,partition};
  }
  async balance(target,signal){
+  const interrupted=()=>new AppError(signal?.reason?.name==='TimeoutError'?'Gateway request deadline exceeded':'Request cancelled',signal?.reason?.name==='TimeoutError'?504:499,signal?.reason?.name==='TimeoutError'?'request_timeout':'request_cancelled');
+  if(signal?.aborted)throw interrupted();
   const u=this.config.value.upstreams.find(u=>u.id===target.upstreamId);if(!u?.accountId)return null;
   const policy=relayPolicy(this.config.value),fresh=r=>{const age=Date.now()-Date.parse(r?.checkedAt);return r&&!r.stale&&!r.error&&Number.isFinite(age)&&age>=0&&age<policy.balanceMaxAgeSeconds*1000;};
   const supplied=this.balanceSource?.()?.get(u.accountId);if(fresh(supplied))return supplied;
   if(typeof this.platforms.health!=='function')return null;
   const key=u.accountId+'\0'+JSON.stringify(this.config.value.accounts?.find(a=>a.id===u.accountId)?.credentials);const cached=this.balances.get(key);if(cached&&Date.now()-cached.at>=0&&Date.now()-cached.at<policy.balanceMaxAgeSeconds*1000)return cached.row;
-  if(this.flights.has(key))return this.flights.get(key);
-  const operation=(async()=>{let timer;try{const timeout=AbortSignal.timeout(3000),combined=signal?AbortSignal.any([signal,timeout]):timeout;const health=await Promise.race([this.platforms.health(u.accountId,{signal:combined}),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),3000);})]);if(!health)return null;const row={...normalizeBalance(u.kind,health),checkedAt:new Date().toISOString(),stale:false,...(u.kind==='trae'?{totalValue:health.snapshot?.summary?.totalAmount}:{})};this.balances.set(key,{at:Date.now(),row});return row;}catch{return null;}finally{clearTimeout(timer);}})();this.flights.set(key,operation);try{return await operation;}finally{this.flights.delete(key);}
+  let operation=this.flights.get(key);
+  if(!operation){
+   // The lookup belongs to the shared flight, not its first consumer. A closed
+   // HTTP request must neither abort other consumers nor delete their flight.
+   const controller=new AbortController();let timer;
+   operation=(async()=>{try{
+    const health=await Promise.race([Promise.resolve().then(()=>this.platforms.health(u.accountId,{signal:controller.signal})),new Promise(resolve=>{timer=setTimeout(()=>{resolve(null);controller.abort(new DOMException('Balance lookup timed out','TimeoutError'));},3000);})]);
+    if(!health)return null;
+    const row={...normalizeBalance(u.kind,health),checkedAt:new Date().toISOString(),stale:false,...(u.kind==='trae'?{totalValue:health.snapshot?.summary?.totalAmount}:{})};this.balances.set(key,{at:Date.now(),row});return row;
+   }catch{return null;}finally{clearTimeout(timer);}})().finally(()=>{if(this.flights.get(key)===operation)this.flights.delete(key);});
+   this.flights.set(key,operation);
+  }
+  let abort;try{return await(signal?Promise.race([operation,new Promise((_,reject)=>{abort=()=>reject(interrupted());signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();})]):operation);}
+  finally{if(abort)signal.removeEventListener('abort',abort);}
  }
  lowReason(row){
   if(!row||row.stale||row.error)return null;const p=relayPolicy(this.config.value),q=row.quota;
