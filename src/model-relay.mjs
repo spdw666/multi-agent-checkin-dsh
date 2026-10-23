@@ -60,15 +60,24 @@ export class ModelRelay{
   for(const r of value.routes)if(r.enabled!==false&&modelFamily(r.targets[0]?.model)===family)for(const t of r.targets)if(modelFamily(t.model)===family)targets.push(t);
   const seen=new Set();return targets.filter(t=>{const key=t.upstreamId+'\0'+t.model;if(!this.enabled(t)||!this.relayStandby(t,route)||relayPartition(value,t)!==partition||seen.has(key))return false;seen.add(key);return ignoreCooldown||!this.cooldown(t);});
  }
- async discover(route,base,signal,{source='api',ignoreCooldown=false}={}){
+ discoveryIndex(){
+  const byPartition=new Map(),byFamily=new Map(),upstreams=new Map(this.config.value.upstreams.map(u=>[u.id,u]));
+  for(const r of this.config.value.routes)if(r.enabled!==false)for(const t of r.targets){
+   const partition=upstreams.get(t.upstreamId)?.kind==='workbuddy'?'workbuddy':'other',family=partition+'\0'+modelFamily(t.model);
+   if(!byPartition.has(partition))byPartition.set(partition,[]);byPartition.get(partition).push(t);
+   if(!byFamily.has(family))byFamily.set(family,[]);byFamily.get(family).push(t);
+  }
+  return {byPartition,byFamily};
+ }
+ async discover(route,base,signal,{source='api',ignoreCooldown=false,index,catalogRead,modelLookup}={}){
   base=base.filter(t=>relayPartition(this.config.value,t)===this.partition(route)&&(relayPartition(this.config.value,t)!=='workbuddy'||this.enabled(t)));
   if(!this.active(route,source))return {targets:base,catalogs:new Map(),family:modelFamily(route.targets[0].model),partition:this.partition(route)};
-  const partition=this.partition(route),all=[...base,...this.config.value.routes.filter(r=>r.enabled!==false).flatMap(r=>r.targets)].filter(t=>relayPartition(this.config.value,t)===partition),catalogs=new Map();
   const rawFamily=modelFamily(route.targets[0].model),mayUseOpaqueAlias=rawFamily==='gmodel'||/^glm-\d+(?:\.\d+)+(?:-flashx?)?$/i.test(rawFamily);
+  const partition=this.partition(route),configured=index?(mayUseOpaqueAlias?index.byPartition.get(partition):index.byFamily.get(partition+'\0'+rawFamily))??[]:this.config.value.routes.filter(r=>r.enabled!==false).flatMap(r=>r.targets),all=[...base,...configured].filter(t=>relayPartition(this.config.value,t)===partition),catalogs=new Map();
   const qoderIds=mayUseOpaqueAlias?[...new Set(all.filter(t=>this.enabled(t)&&t.model==='gmodel'&&this.config.value.upstreams.find(u=>u.id===t.upstreamId)?.kind==='qoder').map(t=>t.upstreamId))]:[];
-  const read=this.catalogRead??this.platforms.models.bind(this.platforms);
+  const read=catalogRead??this.catalogRead??this.platforms.models.bind(this.platforms);
   await Promise.all(qoderIds.map(async id=>{try{catalogs.set(id,await read(id,{signal}));}catch{if(signal?.aborted)throw new AppError('Request cancelled',499,'request_cancelled');catalogs.set(id,[]);}}));
-  const familyOf=t=>catalogModelFamily(t.model,catalogs.get(t.upstreamId)?.find(m=>m.id===t.model)),family=familyOf(route.targets[0]),seen=new Set();
+  const familyOf=t=>{const rows=catalogs.get(t.upstreamId);return catalogModelFamily(t.model,rows&&(modelLookup?modelLookup(rows,t.model):rows.find(m=>m.id===t.model)));},family=familyOf(route.targets[0]),seen=new Set();
   const targets=all.filter(t=>{const key=t.upstreamId+'\0'+t.model;if(!this.enabled(t)||!this.relayStandby(t,route)||seen.has(key)||familyOf(t)!==family)return false;seen.add(key);return ignoreCooldown||!this.cooldown(t);});
   return {targets,catalogs,family,partition};
  }

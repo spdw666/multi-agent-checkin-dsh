@@ -7,7 +7,7 @@ import {readFile, copyFile, mkdir, open, unlink} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
-import {AppError, atomicJson, localPath, readJson} from './util.mjs';
+import {AppError, atomicJson, localPath} from './util.mjs';
 import {antigravityBase} from './antigravity.mjs';
 export const projectRoot = fileURLToPath(new URL('../',import.meta.url));
 const allowedPlatforms=['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds];
@@ -36,6 +36,7 @@ export function validateConfig(c,{lenient=false}={}) {
   const droppedAccounts=new Set();
   for(const a of c.accounts){const problem=accountProblem(a);if(!problem)continue;drop('account',a.id,problem);droppedAccounts.add(a.id);}
   if(droppedAccounts.size)c.accounts=c.accounts.filter(a=>!droppedAccounts.has(a.id));
+  const accountById=new Map(c.accounts.map(a=>[a.id,a]));
   const droppedUpstreams=new Set();
   for(const u of c.upstreams){
     const problem=(()=>{
@@ -45,19 +46,20 @@ export function validateConfig(c,{lenient=false}={}) {
       if(u.kind==='nvidia'&&['baseUrl','sidecarBaseUrl','url','endpoint','proxyUrl'].some(k=>u[k]!==undefined))return new AppError('NVIDIA uses its dedicated official endpoint; keep local proxy settings in its credential file',400,'invalid_nvidia_endpoint');
       if(u.kind==='nvidia'&&u.localLimits!==undefined){const l=u.localLimits;if(!l||!Number.isInteger(l.maxConcurrent)||l.maxConcurrent<1||l.maxConcurrent>8||!Number.isInteger(l.minIntervalMs)||l.minIntervalMs<0||l.minIntervalMs>60000)return new AppError('NVIDIA localLimits needs maxConcurrent 1-8 and minIntervalMs 0-60000',400,'invalid_nvidia_local_limits');}
       if(u.relayStandby!==undefined&&typeof u.relayStandby!=='boolean')return new AppError(`Upstream ${u.id}: relayStandby must be boolean`,400,'invalid_config');
-      if(!c.accounts.some(a=>a.id===u.accountId&&a.platform===u.kind))return new AppError(`Upstream ${u.id}: account/platform mismatch`,400,'invalid_config');
+      if(accountById.get(u.accountId)?.platform!==u.kind)return new AppError(`Upstream ${u.id}: account/platform mismatch`,400,'invalid_config');
       return null;
     })();
     if(!problem)continue;drop('upstream',u.id,problem);droppedUpstreams.add(u.id);
   }
   if(droppedUpstreams.size)c.upstreams=c.upstreams.filter(u=>!droppedUpstreams.has(u.id));
+  const upstreamById=new Map(c.upstreams.map(u=>[u.id,u]));
   const droppedRoutes=new Set();
   for(const r of c.routes){
     const problem=(()=>{
       if(r.relay!==undefined&&typeof r.relay!=='boolean')return new AppError('Route relay must be boolean',400,'invalid_config');
-      if(!Array.isArray(r.targets)||!r.targets.length||r.targets.some(t=>typeof t.model!=='string'||!t.model||!c.upstreams.some(u=>u.id===t.upstreamId)))return new AppError(`Route ${r.id}: invalid targets`,400,'invalid_config');
+      if(!Array.isArray(r.targets)||!r.targets.length||r.targets.some(t=>typeof t.model!=='string'||!t.model||!upstreamById.has(t.upstreamId)))return new AppError(`Route ${r.id}: invalid targets`,400,'invalid_config');
       const pool=r.accountPool;
-      if(pool&&(!Array.isArray(pool.accountIds)||!pool.accountIds.length||new Set(pool.accountIds).size!==pool.accountIds.length||pool.accountIds.some(id=>!c.accounts.some(a=>a.id===id&&a.platform==='workbuddy'))||c.upstreams.find(u=>u.id===r.targets[0].upstreamId)?.kind!=='workbuddy'||pool.cooldownSeconds!==undefined&&(!Number.isInteger(pool.cooldownSeconds)||pool.cooldownSeconds<60||pool.cooldownSeconds>86400)))return new AppError(`Route ${r.id}: invalid WorkBuddy account pool`,400,'invalid_config');
+      if(pool&&(!Array.isArray(pool.accountIds)||!pool.accountIds.length||new Set(pool.accountIds).size!==pool.accountIds.length||pool.accountIds.some(id=>accountById.get(id)?.platform!=='workbuddy')||upstreamById.get(r.targets[0].upstreamId)?.kind!=='workbuddy'||pool.cooldownSeconds!==undefined&&(!Number.isInteger(pool.cooldownSeconds)||pool.cooldownSeconds<60||pool.cooldownSeconds>86400)))return new AppError(`Route ${r.id}: invalid WorkBuddy account pool`,400,'invalid_config');
       return null;
     })();
     if(!problem)continue;drop('route',r.id,problem);droppedRoutes.add(r.id);
@@ -98,11 +100,28 @@ export async function initConfig(file) {
   await copyFile(join(projectRoot,'config.example.json'),file,1).catch(e=>{if(e.code!=='EEXIST')throw e});
   return file;
 }
+// Content-addressed validation reuse, not a file-stat/TTL or mutable result
+// cache. Each gate still reads the file. Cache only one successfully validated
+// text per store, then parse a fresh object and replay its lenient omissions.
+// Parsing the original text also preserves JSON -0 and ordinary property order.
+const validatedReads=new WeakMap();
+async function readValidatedConfig(store){
+ const text=await readFile(store.file,'utf8'),cached=validatedReads.get(store);
+ if(cached?.text===text){
+   const value=JSON.parse(text.replace(/^\uFEFF/,''));
+   for(const [field,ids]of cached.dropped)if(ids.size)value[field]=value[field].filter(item=>!ids.has(item.id));
+   if(cached.skippedText)Object.defineProperty(value,'skipped',{value:JSON.parse(cached.skippedText),enumerable:false});
+   return value;
+ }
+ const value=validateConfig(JSON.parse(text.replace(/^\uFEFF/,'')),{lenient:true});
+ const skipped=Object.getOwnPropertyDescriptor(value,'skipped')?.enumerable===false?value.skipped:[],dropped=['account','upstream','route'].map(kind=>[kind+'s',new Set(skipped.filter(item=>item.kind===kind).map(item=>item.id))]);
+ validatedReads.set(store,{text,dropped,skippedText:skipped.length?JSON.stringify(skipped):null});
+ return value;
+}
 export class ConfigStore {
   constructor(file) {this.file=localPath(file,process.cwd());this.base=dirname(this.file);}
   async load() {
-    const raw=await readJson(this.file);
-    this.value=validateConfig(raw,{lenient:true});
+    this.value=await readValidatedConfig(this);
     const skipped=this.value.skipped??[];
     // Report once per distinct shape: this runs on every request.
     const signature=skipped.map(s=>s.kind+':'+s.id).join('|');
@@ -112,7 +131,7 @@ export class ConfigStore {
   }
   // Workers otherwise reload on a timer. A final read-only gate prevents a
   // prepared/credential-refreshing request from spending a newly stopped account.
-  async workBuddyInferenceAllowed(accountId) {const value=validateConfig(await readJson(this.file),{lenient:true}),a=value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy');return !!a&&a.enabled!==false&&a.inferenceEnabled!==false;}
+  async workBuddyInferenceAllowed(accountId) {const value=await readValidatedConfig(this),a=value.accounts.find(a=>a.id===accountId&&a.platform==='workbuddy');return !!a&&a.enabled!==false&&a.inferenceEnabled!==false;}
   path(value) {return localPath(value,this.base);}
   async snapshot() {const bytes=await readFile(this.file);return {value:validateConfig(JSON.parse(bytes)),sha256:createHash('sha256').update(bytes).digest('hex')};}
   async save(value,{expectedSha256}={}) {

@@ -61,31 +61,59 @@ export class Platforms {
     const stack={solo,remote,wire,bridge,usage};this.trae.set(id,stack);return stack;
   }
   async models(upstreamId,{refresh=false,signal}={}) {
-    if(signal?.aborted)throw new AppError('Request cancelled',499,'request_cancelled');
-    if(!refresh&&this.catalogs.has(upstreamId))return this.catalogs.get(upstreamId);
-    if(this.catalogFlights.has(upstreamId))return this.catalogFlights.get(upstreamId);
+    const cancelled=()=>new AppError(signal?.reason?.name==='TimeoutError'?'Request deadline exceeded':'Request cancelled',signal?.reason?.name==='TimeoutError'?504:499,signal?.reason?.name==='TimeoutError'?'request_timeout':'request_cancelled');
+    if(signal?.aborted)throw cancelled();
+    const key=this.catalogKey(upstreamId),u=this.config.value?.upstreams?.find(u=>u.id===upstreamId),a=this.config.value?.accounts?.find(a=>a.id===u?.accountId);
+    if(u?.enabled===false||a?.enabled===false)throw new AppError('Catalogue account or upstream disabled',503,'upstream_disabled');
+    if(!refresh&&this.catalogs.has(upstreamId)&&this.catalogKeys?.get(upstreamId)===key)return this.catalogs.get(upstreamId);
+    if(this.catalogKeys?.get(upstreamId)!==key)this.catalogs.delete(upstreamId);
+    let flight=this.catalogFlights.get(key);
     // A directory fetch is shared across routes and UI refreshes, not tied to one caller.
-    const flight=this.fetchModels(upstreamId,{refresh,signal:AbortSignal.timeout(45000)});
-    this.catalogFlights.set(upstreamId,flight);
-    try{return await flight;}finally{if(this.catalogFlights.get(upstreamId)===flight)this.catalogFlights.delete(upstreamId);}
+    if(!flight){
+      let timer;const controller=new AbortController(),error=new AppError('Model catalogue lookup timed out',504,'model_catalog_timeout');
+      flight=Promise.race([Promise.resolve().then(()=>this.fetchModels(upstreamId,{refresh,signal:controller.signal,sourceKey:key})),new Promise((_,reject)=>{timer=setTimeout(()=>{reject(error);controller.abort(error);},45000);})]).then(rows=>{
+        if(this.catalogKey(upstreamId)===key){this.catalogs.set(upstreamId,rows);this.catalogKeys??=new Map();this.catalogKeys.set(upstreamId,key);}return rows;
+      }).finally(()=>{clearTimeout(timer);if(this.catalogFlights.get(key)===flight)this.catalogFlights.delete(key);});
+      this.catalogFlights.set(key,flight);
+    }
+    let abort;try{return await(signal?Promise.race([flight,new Promise((_,reject)=>{abort=()=>reject(cancelled());signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();})]):flight);}
+    finally{if(abort)signal.removeEventListener('abort',abort);}
   }
-  async fetchModels(upstreamId,{refresh=false,signal}={}) {
-    const u=this.upstream(upstreamId);const cached=this.catalogs.get(upstreamId);
-    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind),rows=await p.models(await this.credentials.resolve(u.accountId),{refresh,force:refresh,signal,upstream:u,account:this.account(u.accountId)});if(!Array.isArray(rows))throw new AppError('模型目录格式错误',502,'provider_catalog_schema');const normalized=rows.map(m=>({...m,callable:m.callable!==false&&typeof p.chat==='function'&&Number.isSafeInteger(m.contextWindow)&&m.contextWindow>0&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0}));this.catalogs.set(upstreamId,normalized);return normalized;}
+  catalogKey(id){
+    const u=this.config.value?.upstreams?.find(u=>u.id===id),a=this.config.value?.accounts?.find(a=>a.id===u?.accountId),source=JSON.stringify([u,a]);
+    this.catalogSources??=new Map();const prior=this.catalogSources.get(id);
+    if(!prior||prior.source!==source){
+      this.catalogSources.set(id,{source,version:(prior?.version??0)+1});
+      if(prior&&u?.kind==='trae')this.trae.delete(u.accountId);
+    }
+    return id+'\0'+this.catalogSources.get(id).version+'\0'+source;
+  }
+  async fetchModels(upstreamId,{refresh=false,signal,sourceKey=this.catalogKey(upstreamId)}={}) {
+    const u=structuredClone(this.upstream(upstreamId)),account=structuredClone(this.config.value?.accounts?.find(a=>a.id===u.accountId)),cached=this.catalogKeys?.get(upstreamId)===sourceKey?this.catalogs.get(upstreamId):undefined;
+    // A timed-out shared flight may finish late when an adapter ignores abort.
+    // Fence every later dispatch and cache write, including Trae's wire map.
+    const ensureSource=()=>{signal?.throwIfAborted();if(this.catalogKey(upstreamId)!==sourceKey)throw new AppError('Model directory source changed during lookup',409,'model_directory_changed');};
+    const readModels=async read=>{ensureSource();const c=await this.credentials.resolve(u.accountId);ensureSource();const rows=await read(c);ensureSource();return rows;};
+    const remember=rows=>{ensureSource();this.catalogs.set(upstreamId,rows);this.catalogKeys??=new Map();this.catalogKeys.set(upstreamId,sourceKey);return rows;};
+    ensureSource();
+    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);ensureSource();const rows=await readModels(c=>p.models(c,{refresh,force:refresh,signal,upstream:u,account}));ensureSource();if(!Array.isArray(rows))throw new AppError('模型目录格式错误',502,'provider_catalog_schema');const normalized=rows.map(m=>({...m,callable:m.callable!==false&&typeof p.chat==='function'&&Number.isSafeInteger(m.contextWindow)&&m.contextWindow>0&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0}));return remember(normalized);}
     if(!refresh&&cached)return cached;
     let list;
-    if(u.kind==='freeapi'){list=await freeProviderModels(await this.credentials.resolve(u.accountId),{refresh,signal});}
-    else if(u.kind==='workbuddy'){list=(await this.wb.fetchModels(await this.credentials.resolve(u.accountId),signal)).map(m=>({...m,multimodal:m.supportsImages===true,tools:m.supportsToolCall===true}));}
+    if(u.kind==='freeapi'){list=await readModels(c=>freeProviderModels(c,{refresh,signal}));}
+    else if(u.kind==='workbuddy'){list=(await readModels(c=>this.wb.fetchModels(c,signal))).map(m=>({...m,multimodal:m.supportsImages===true,tools:m.supportsToolCall===true}));}
     else if(u.kind==='trae') {
       const stack=this.traeStack(u.accountId);const wire=await stack.solo.fetchModels(signal??AbortSignal.timeout(60000));
+      ensureSource();
       const remote=await stack.remote.fetchModels(signal).catch(()=>[]);
+      ensureSource();
       list=mergeTraeModelSources(remote,wire).map(m=>({...m,tools:true,multimodal:m.multimodal===true,callable:!!(m.wireFunction||wire.some(w=>w.id===m.id)),...(!(m.wireFunction||wire.some(w=>w.id===m.id))?{unavailableReason:'当前 SOLO 调用目录未提供该模型；仅发现展示目录条目'}:{})}));
       for(const m of list){if(m.callable)stack.wire.set(m.id,{configName:m.wireConfigName??m.id,function:m.wireFunction??wire.find(w=>w.id===m.id)?.function,reasoningEfforts:m.reasoningEfforts});}
       // Retain direct wire mapping even if the remote directory is temporarily absent.
       for(const m of wire){if(m.id&&!stack.wire.has(m.id))stack.wire.set(m.id,{configName:m.id,function:m.wireFunction??m.function});}
-    }else if(u.kind==='nvidia'){list=await nvidiaModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='antigravity'){list=await antigravityModels(u,await this.credentials.resolve(u.accountId),{signal,config:this.config});}else if(u.kind==='bigmodel'){list=await bigModelModels(await this.credentials.resolve(u.accountId),{signal});}else if(u.kind==='qwenwork'){list=await qwenWorkModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='zcode'){list=await zcodeModels(await this.credentials.resolve(u.accountId));}else if(u.kind==='minimax'){list=await miniMaxModels(await this.credentials.resolve(u.accountId));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
+    }else if(u.kind==='nvidia'){list=await readModels(c=>nvidiaModels(c,{signal}));}else if(u.kind==='antigravity'){list=await readModels(c=>antigravityModels(u,c,{signal,config:this.config}));}else if(u.kind==='bigmodel'){list=await readModels(c=>bigModelModels(c,{signal}));}else if(u.kind==='qwenwork'){list=await readModels(c=>qwenWorkModels(c));}else if(u.kind==='zcode'){list=await readModels(c=>zcodeModels(c));}else if(u.kind==='minimax'){list=await readModels(c=>miniMaxModels(c));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
+    ensureSource();
     if(!Array.isArray(list)||!list.length)throw new AppError(`Upstream ${u.id} returned an empty catalog`,502,'empty_catalog');
-    this.catalogs.set(upstreamId,list);return list;
+    return remember(list);
   }
   async health(id) {
     const a=this.account(id);

@@ -10,10 +10,13 @@ export function usageCounters(u={}) {
   return {promptTokens,completionTokens,totalTokens:number(u.total_tokens)??(promptTokens!==null&&completionTokens!==null?promptTokens+completionTokens:null),cachedTokens:number(u.prompt_tokens_details?.cached_tokens??u.cache_read_input_tokens),reasoningTokens:number(u.completion_tokens_details?.reasoning_tokens),credits:number(u.credits_used??u.used_credits),cost:number(u.cost),costUnit:typeof u.currency==='string'&&/^[A-Z]{3}$/.test(u.currency)?u.currency:null};
 }
 export class UsageAttempt {
-  constructor(ledger,config,request,target,{requestId=randomUUID(),attempt=1,source='api'}={}) {
+  constructor(ledger,config,request,target,{requestId=randomUUID(),attempt=1,source='api',requestContext}={}) {
     this.ledger=ledger;this.clock=performance.now();this.firstTokenMs=null;this.usage={};
     const upstream=(config.upstreams??[]).find(u=>u.id===target.upstreamId),account=config.accounts?.find(a=>a.id===upstream?.accountId);
-    this.row={requestId,attempt,source,startedAt:new Date().toISOString(),routeId:request.model,model:target.model,upstreamId:target.upstreamId,accountId:upstream?.accountId??'',accountLabel:account?.label??account?.id??'',platform:upstream?.kind??'',stream:request.stream===true,hasTools:!!request.tools?.length,context:captureRequestContext(request),dispatched:false,dispatchCount:0,...usageCounters()};
+    // Router supplies metadata captured once from the validated request. Each
+    // attempt owns a copy; a ledger/consumer mutation cannot contaminate a later
+    // attempt. Direct callers retain the original capture-on-construction path.
+    this.row={requestId,attempt,source,startedAt:new Date().toISOString(),routeId:request.model,model:target.model,upstreamId:target.upstreamId,accountId:upstream?.accountId??'',accountLabel:account?.label??account?.id??'',platform:upstream?.kind??'',stream:request.stream===true,hasTools:!!request.tools?.length,context:requestContext===undefined?captureRequestContext(request):structuredClone(requestContext),dispatched:false,dispatchCount:0,...usageCounters()};
     try{this.id=ledger?.beginUsage?.(this.row)}catch(e){console.error('usage_record_write_failed',e.code??'storage_error');}
   }
   chunk(chunk){if(this.firstTokenMs===null&&(chunk.choices??[]).some(c=>c.delta?.content||c.delta?.tool_calls?.length))this.firstTokenMs=Math.round(performance.now()-this.clock);if(chunk.usage)for(const [key,value] of Object.entries(usageCounters(chunk.usage)))if(value!==null)this.usage[key]=value;}

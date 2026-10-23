@@ -2,6 +2,9 @@ import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {hash, errorView, redact, secret} from './util.mjs';
+// Column names/operators are fixed by callers, while every filter value stays
+// bound. Omitting inactive predicates lets SQLite seek indexes and rowid cursors.
+function filters(entries){const terms=[],params=[];for(const [column,value,operator='='] of entries)if(value!==''){terms.push(`${column}${operator}?`);params.push(value);}return {where:terms.length?' WHERE '+terms.join(' AND '):'',params};}
 export class Ledger {
   #statements=new Map();
   // Cache compiled SQL only, never query results: other connections stay visible.
@@ -25,6 +28,9 @@ export class Ledger {
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS usage_calls(id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, account_id TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS usage_account_time ON usage_calls(account_id,started_at);
+      CREATE INDEX IF NOT EXISTS usage_account_id ON usage_calls(account_id,id);
+      CREATE INDEX IF NOT EXISTS records_account_id ON records(account_id,id);
+      CREATE INDEX IF NOT EXISTS records_platform_id ON records(platform,id);
       CREATE TABLE IF NOT EXISTS balance_observations(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL, checked_at TEXT NOT NULL, unit TEXT NOT NULL, value REAL NOT NULL, previous_at TEXT, previous_value REAL);
       CREATE INDEX IF NOT EXISTS balance_account_id ON balance_observations(account_id,id);`);
           break;
@@ -76,17 +82,19 @@ export class Ledger {
   markSubmitted(key,reservationId){return this.#prepare("UPDATE claims SET result=json_set(result,'$.submissionPhase','submitted'), updated_at=? WHERE key=? AND status='running' AND json_extract(result,'$.reservationId')=?").run(new Date().toISOString(),key,reservationId).changes===1;}
   finish(key,status,result,reservationId) {return this.#prepare("UPDATE claims SET status=?, updated_at=?, result=? WHERE key=? AND (? IS NULL OR json_extract(result,'$.reservationId')=?)").run(status,new Date().toISOString(),redact(result),key,reservationId??null,reservationId??null).changes===1;}
   record({day,platform,accountId,task,status,...result}) {this.#prepare('INSERT INTO records(time,day,platform,account_id,task,status,result) VALUES (?,?,?,?,?,?,?)').run(new Date().toISOString(),day,platform,accountId,task,status,redact(result));}
-  records({limit=100,accountId='',platform=''}={}) {return this.#prepare("SELECT * FROM records WHERE (?='' OR account_id=?) AND (?='' OR platform=?) ORDER BY id DESC LIMIT ?").all(accountId,accountId,platform,platform,Math.min(Math.max(Number(limit)||100,1),1000)).map(r=>({...r,result:JSON.parse(r.result)}));}
+  records({limit=100,accountId='',platform=''}={}) {const {where,params}=filters([['account_id',accountId],['platform',platform]]);return this.#prepare(`SELECT * FROM records${where} ORDER BY id DESC LIMIT ?`).all(...params,Math.min(Math.max(Number(limit)||100,1),1000)).map(r=>({...r,result:JSON.parse(r.result)}));}
   beginUsage(row) {return Number(this.#prepare('INSERT INTO usage_calls(started_at,account_id,model,status,detail) VALUES (?,?,?,?,?)').run(row.startedAt,row.accountId??'',row.model??'','running',redact(row)).lastInsertRowid);}
   finishUsage(id,row) {this.#prepare('UPDATE usage_calls SET status=?,detail=? WHERE id=?').run(row.status,redact(row),id);}
-  usage({accountId='',model='',status='',from='',to='',beforeId=0,limit=100}={}) {
-    const where="(?='' OR account_id=?) AND (?='' OR model=?) AND (?='' OR status=?) AND (?='' OR started_at>=?) AND (?='' OR started_at<=?)";
-    const params=[accountId,accountId,model,model,status,status,from,from,to,to];
+  usage({accountId='',model='',status='',from='',to='',beforeId=0,limit=100,includeTotal=true}={}) {
+    const {where,params}=filters([['account_id',accountId],['model',model],['status',status],['started_at',from,'>='],['started_at',to,'<=']]);
     const n=Math.min(Math.max(Number(limit)||100,1),500),cursor=Math.max(Number(beforeId)||0,0);
-    const rows=this.#prepare(`SELECT * FROM usage_calls WHERE ${where} AND (?=0 OR id<?) ORDER BY id DESC LIMIT ?`).all(...params,cursor,cursor,n+1);
+    const cursorWhere=cursor?(where?' AND ':' WHERE ')+'id<?':'';
+    const rows=this.#prepare(`SELECT * FROM usage_calls${where}${cursorWhere} ORDER BY id DESC LIMIT ?`).all(...params,...(cursor?[cursor]:[]),n+1);
     const more=rows.length>n;rows.length=Math.min(rows.length,n);
-    const total=this.#prepare(`SELECT COUNT(*) AS total FROM usage_calls WHERE ${where}`).get(...params).total;
-    return {records:rows.map(r=>({...JSON.parse(r.detail),id:r.id,status:r.status})),total,nextBeforeId:more?rows.at(-1).id:null,source:'gateway',note:'仅记录启用此功能后的网关调用；不包含客户端绕过网关的调用。耗时为请求耗时，非人工会话时长。'};
+    // Analytics already scan their bounded pages and never use an exact total.
+    // Public callers retain fresh exact totals by default; no results are cached.
+    const count=includeTotal===false?{}:{total:this.#prepare(`SELECT COUNT(*) AS total FROM usage_calls${where}`).get(...params).total};
+    return {records:rows.map(r=>({...JSON.parse(r.detail),id:r.id,status:r.status})),...count,nextBeforeId:more?rows.at(-1).id:null,source:'gateway',note:'仅记录启用此功能后的网关调用；不包含客户端绕过网关的调用。耗时为请求耗时，非人工会话时长。'};
   }
   observeBalance(row) {
     if(row.stale||row.error||typeof row.value!=='number'||!Number.isFinite(row.value))return;

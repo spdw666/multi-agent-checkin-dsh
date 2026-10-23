@@ -3,6 +3,7 @@ import {AppError} from './util.mjs';
 import {normalizeChat,validateChat,isContextWindowError} from './openai.mjs';
 import {WorkBuddyPool} from './workbuddy-pool.mjs';
 import {UsageAttempt} from './usage.mjs';
+import {captureRequestContext} from './activity-context.mjs';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {ModelRelay,isRelayTransportFailure} from './model-relay.mjs';
@@ -12,20 +13,45 @@ import {RequestPlan,outputCapacity,supplierTerminal} from './request-plan.mjs';
 const interrupted=signal=>new AppError(signal?.reason?.name==='TimeoutError'?'Gateway request deadline exceeded':'Request cancelled',signal?.reason?.name==='TimeoutError'?504:499,signal?.reason?.name==='TimeoutError'?'request_timeout':'request_cancelled');
 export class Router {
   constructor(config,platforms,{ledger,relayAttemptTimeoutMs=30000,catalogTimeoutMs=20000,relayNetworkRetryDelayMs=250,relayPrefillTimeoutMs=240000,relayRateLimitDelay=(ms,signal)=>sleep(ms,undefined,{signal})}={}){if(!Number.isSafeInteger(relayAttemptTimeoutMs)||relayAttemptTimeoutMs<1||relayAttemptTimeoutMs>600000||!Number.isSafeInteger(catalogTimeoutMs)||catalogTimeoutMs<1||catalogTimeoutMs>60000)throw new TypeError('Relay and catalog deadlines must be positive bounded integers');if(!Number.isSafeInteger(relayNetworkRetryDelayMs)||relayNetworkRetryDelayMs<0||relayNetworkRetryDelayMs>5000)throw new TypeError('Network retry delay must be bounded');if(!Number.isSafeInteger(relayPrefillTimeoutMs)||relayPrefillTimeoutMs<1||relayPrefillTimeoutMs>600000)throw new TypeError('Prefill deadline must be bounded');if(typeof relayRateLimitDelay!=='function')throw new TypeError('Rate-limit delay must be a function');Object.assign(this,{config,platforms,ledger,relayAttemptTimeoutMs,catalogTimeoutMs,relayNetworkRetryDelayMs,relayPrefillTimeoutMs,relayRateLimitDelay});this.catalogFlights=new Map();this.pool=new WorkBuddyPool(config,ledger);this.relay=new ModelRelay(config,platforms,ledger);this.relay.pool=this.pool;this.relay.catalogRead=(id,options)=>this.catalog(id,options);}
-  async catalog(id,{signal}={}){
+  catalogKey(id){
+    const u=this.config.value.upstreams?.find(u=>u.id===id),a=this.config.value.accounts?.find(a=>a.id===u?.accountId),source=JSON.stringify([u,a]);
+    this.catalogSources??=new Map();const prior=this.catalogSources.get(id);
+    if(!prior||prior.source!==source)this.catalogSources.set(id,{source,version:(prior?.version??0)+1});
+    return id+'\0'+this.catalogSources.get(id).version+'\0'+source;
+  }
+  async catalog(id,{signal,batch}={}){
     if(signal?.aborted)throw interrupted(signal);
-    const u=this.config.value.upstreams?.find(u=>u.id===id),a=this.config.value.accounts?.find(a=>a.id===u?.accountId),key=id+'\0'+JSON.stringify(u)+'\0'+JSON.stringify(a?.credentials);
-    let operation=this.catalogFlights.get(key);
+    const key=this.catalogKey(id);
+    let operation=batch?.reads.get(key)??this.catalogFlights.get(key);
     if(!operation){let timer;const controller=new AbortController(),error=new AppError('Model catalogue lookup timed out',504,'model_catalog_timeout');
       operation=Promise.race([Promise.resolve().then(()=>this.platforms.models(id,{signal:controller.signal})),new Promise((_,reject)=>{timer=setTimeout(()=>{reject(error);controller.abort(error)},this.catalogTimeoutMs)})]).finally(()=>{clearTimeout(timer);if(this.catalogFlights.get(key)===operation)this.catalogFlights.delete(key)});
       this.catalogFlights.set(key,operation);
     }
+    batch?.reads.set(key,operation);
     let abort;try{return await(signal?Promise.race([operation,new Promise((_,reject)=>{abort=()=>reject(interrupted(signal));signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort()})]):operation)}finally{if(abort)signal.removeEventListener('abort',abort)}
   }
-  async routeInfo(route) {
-    const relay=this.relay.active(route),discovered=await this.relay.discover(route,this.pool.candidates(route,{ignoreCooldown:true}),undefined,{ignoreCooldown:true}),targets=discovered.targets.filter(t=>this.config.value.upstreams.some(u=>u.id===t.upstreamId&&u.enabled!==false)&&(this.config.value.upstreams.find(u=>u.id===t.upstreamId)?.kind!=='workbuddy'||this.relay.enabled(t)));
+  directoryVersion(){
+    // Disabled routes supply neither public models nor relay candidates. Exclude
+    // their details, but rebuild the enabled set each time so enable/disable
+    // transitions still invalidate an in-progress directory immediately.
+    const value=this.config.value,routes=value.routes.filter(r=>r.enabled!==false);
+    return JSON.stringify([routes,value.upstreams,value.accounts,value.modelRelay,value.server,routes.filter(r=>r.accountPool?.enabled).map(r=>{const row=this.pool.get('wb-pool-route:'+r.id);return [r.id,row?.preferredAccountId,row?.manualVersion];})]);
+  }
+  directoryBatch(){
+    const indexes=new WeakMap();return {reads:new Map(),index:this.relay.discoveryIndex(),lookup:(rows,id)=>{let index=indexes.get(rows);if(!index){index=new Map();for(const row of rows)if(!index.has(row.id))index.set(row.id,row);indexes.set(rows,index);}return index.get(id);}};
+  }
+  async routeInfo(route,batch) {
+    if(!batch){
+      for(let attempt=0;attempt<3;attempt++){
+        const before=this.directoryVersion(),current=this.config.value.routes.find(r=>r.id===route.id);
+        if(!current||current.enabled===false)return undefined;
+        const row=await this.routeInfo(current,this.directoryBatch());if(before===this.directoryVersion())return row;
+      }
+      throw new AppError('Model directory changed during lookup; refresh again',503,'model_directory_changed');
+    }
+    const relay=this.relay.active(route),discovered=await this.relay.discover(route,this.pool.candidates(route,{ignoreCooldown:true}),undefined,{ignoreCooldown:true,...(batch?{index:batch.index,catalogRead:(id,opts)=>this.catalog(id,{...opts,batch}),modelLookup:batch.lookup}:{})}),targets=discovered.targets.filter(t=>this.config.value.upstreams.some(u=>u.id===t.upstreamId&&u.enabled!==false)&&(this.config.value.upstreams.find(u=>u.id===t.upstreamId)?.kind!=='workbuddy'||this.relay.enabled(t)));
     if(!targets.length)return undefined;
-    const metadata=await Promise.all(targets.map(async t=>{const catalog=discovered.catalogs.get(t.upstreamId)??await this.catalog(t.upstreamId).catch(()=>[]);return catalog.find(m=>m.id===t.model)}));
+    const metadata=await Promise.all(targets.map(async t=>{const catalog=discovered.catalogs.get(t.upstreamId)??await this.catalog(t.upstreamId,{batch}).catch(()=>[]);return batch?batch.lookup(catalog,t.model):catalog.find(m=>m.id===t.model)}));
     for(let i=0;i<targets.length;i++)if((this.config.value.upstreams??[]).find(u=>u.id===targets[i].upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(targets[i]))metadata[i]=undefined;
     const selected=route.accountPool?.enabled||relay?metadata.findIndex(m=>m&&m.callable!==false):0;
     if(selected<0||!metadata[selected])return undefined; // A configured id is not proof of a live model.
@@ -45,15 +71,25 @@ export class Router {
     const efforts=primary.reasoningEfforts??(Array.isArray(primary.reasoning?.supportedEfforts)?Object.fromEntries(primary.reasoning.supportedEfforts.map(k=>[k,k])):null);
     return {id:route.id,object:'model',created:0,owned_by:'ai-credit-gateway',name:route.name??primary.name??route.id,upstream:targets[selected].upstreamId,...(kind==='nvidia'?{requestTimeoutMs:nvidiaRequestTimeout(primary.id)}:{}),capabilities:{streaming:true,tools:primary.tools===true,multimodal:primary.multimodal===true},contextWindow,maxTokens,...(relay?{modelRelay:{strictSameModel:true,partition:this.relay.partition(route),modelFamily:discovered.family,targetCount:metadata.filter(m=>m&&m.callable!==false&&(!primary.tools||m.tools===true)&&(!primary.multimodal||m.multimodal===true)).length,fullWindowCompatibleCount:compatible.length,deliveryMode:'verified_request_buffer',attemptTimeoutMs:this.relayAttemptTimeoutMs,attemptTimeoutMode:'prefill_then_progress_idle',prefillTimeoutMs:this.relayPrefillTimeoutMs,prefillMinRequestBytes:131072,requestTimeoutMs:gatewayRequestTimeout(this.config.value.server,route.id)}}:{}),reasoning:primary.reasoning??null,reasoningEfforts:efforts??null,...(primary.reasoningEffortMapping?{reasoningEffortMapping:primary.reasoningEffortMapping,reasoningMappingSource:primary.reasoningMappingSource}:{})};
   }
-  async models(){if(typeof this.config.load==='function')await this.config.load();const rows=await Promise.all(this.config.value.routes.filter(r=>r.enabled!==false).map(r=>this.routeInfo(r)));return {object:'list',data:rows.filter(Boolean)};}
+  async models(){
+    if(typeof this.config.load==='function')await this.config.load();
+    // Completed reads are retained only for this directory batch, allowing a
+    // later opaque-alias phase to reuse an earlier read without a stale TTL.
+    for(let attempt=0;attempt<3;attempt++){
+      const before=this.directoryVersion(),batch=this.directoryBatch();
+      const rows=await Promise.all(this.config.value.routes.filter(r=>r.enabled!==false).map(r=>this.routeInfo(r,batch)));
+      if(before===this.directoryVersion())return {object:'list',data:rows.filter(Boolean)};
+    }
+    throw new AppError('Model directory changed during lookup; refresh again',503,'model_directory_changed');
+  }
   async * chat(raw,signal,{onTarget,source='api',requestId:providedRequestId}={}) {
     const requestId=typeof providedRequestId==='string'&&/^[a-zA-Z0-9_.-]{1,100}$/.test(providedRequestId)?providedRequestId:randomUUID(),requestStarted=Date.now();
-    let request,route,plan,latestUsage,requestCompleted=false,requestError;
+    let request,route,plan,latestUsage,requestContext,requestCompleted=false,requestError;
     try{
     if(signal?.aborted)throw interrupted(signal);
     if(typeof this.config.load==='function')await this.config.load();
     if(signal?.aborted)throw interrupted(signal);
-    request=validateChat(raw);plan=new RequestPlan(request,this.config.value);route=this.config.value.routes.find(r=>r.id===request.model&&r.enabled!==false);
+    request=validateChat(raw);requestContext=captureRequestContext(request);plan=new RequestPlan(request,this.config.value);route=this.config.value.routes.find(r=>r.id===request.model&&r.enabled!==false);
     if(!route)throw new AppError(`Unknown route: ${request.model}`,404,'model_not_found');
     let last,lastSupplierFailure,firstSupplierFailure;const requestBudget=gatewayRequestTimeout(this.config.value.server,route.id);
     const relayActive=this.relay.active(route,source),prepared=await this.relay.prepare(route,this.pool.candidates(route),signal,{source}),targets=prepared.targets,selectionVersion=this.pool.version(route);let previousTarget,relayTrigger;
@@ -64,7 +100,7 @@ export class Router {
     // A 1,200-turn conversation can still be under the byte threshold once tool
     // results are trimmed, but its prefill is far slower than a fresh request.
     // Gate on either real serialized bytes or message count.
-    const requestBytes=Buffer.byteLength(JSON.stringify(request),'utf8');
+    const requestBytes=plan.contract.serializedBytes;
     const longPrefill=requestBytes>=131072||request.messages.length>=128;
     const targetKey=t=>t.upstreamId+'\0'+t.model,rateBlocked=new Map((prepared.blocked??[]).filter(r=>r.reasonCode==='rate_limited').map(r=>[targetKey(r.target),r])),recoveryCircuits=new Map();let recoveredRateLimit=false;
     const rememberRateLimit=target=>{const row=this.relay.blockedTarget(target,this.relay.get('relay-cooldown:'+targetKey(target)));if(row?.reasonCode==='rate_limited')rateBlocked.set(targetKey(target),row);};
@@ -133,7 +169,7 @@ export class Router {
       const progress=()=>{if(!relayActive||targetExpired)return;clearTimeout(targetTimer);const remainingWhole=Math.max(1,requestBudget-(Date.now()-requestStarted)-1000);targetTimer=setTimeout(()=>{targetExpired=true;rejectTarget(timeoutError);targetController.abort(timeoutError);},Math.min(semanticProgress?this.relayAttemptTimeoutMs:attemptBudget,remainingWhole));};
       progress();
       const waitTarget=p=>targetDeadline?Promise.race([p,targetDeadline]):p;
-      const usage=new UsageAttempt(this.ledger,this.config.value,request,target,{requestId,attempt:i+1,source});
+      const usage=new UsageAttempt(this.ledger,this.config.value,request,target,{requestId,attempt:i+1,source,requestContext});
       latestUsage=usage;usage.row.requestContract=plan.contract;
       if(relayActive){usage.row.deliveryMode='verified_request_buffer';usage.row.relay={trigger:relayTrigger??prepared.reasons.get(route.targets[0].upstreamId+'\0'+route.targets[0].model)??'preferred_same_model',fromPlatform:this.config.value.upstreams.find(u=>u.id===(previousTarget??route.targets[0]).upstreamId)?.kind??'',toPlatform:this.config.value.upstreams.find(u=>u.id===target.upstreamId)?.kind??''};}
       try {
@@ -238,7 +274,7 @@ export class Router {
         // credit exhausted, cooldown, invalid route or preparation failure).
         // Count its final outcome, never a fictional supplier attempt or token.
         const terminalRequest={...(request??{messages:[]}),model:plan.contract.clientModelId??''};
-        latestUsage=new UsageAttempt(this.ledger,this.config.value??{},terminalRequest,{upstreamId:'',model:''},{requestId,attempt:0,source});
+        latestUsage=new UsageAttempt(this.ledger,this.config.value??{},terminalRequest,{upstreamId:'',model:''},{requestId,attempt:0,source,requestContext});
         Object.assign(latestUsage.row,{rowType:'request_outcome',platform:'gateway',upstreamId:'',accountId:'',accountLabel:'',startedAt:new Date(requestStarted).toISOString(),requestContract:plan.contract,requestOutcome:plan.summary(state)});
         latestUsage.clock-=Math.max(0,Date.now()-requestStarted);latestUsage.finish(state==='cancelled'?'cancelled':'failed',requestError);
       }
