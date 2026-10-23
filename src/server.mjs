@@ -27,7 +27,9 @@ import {relayPolicy,validateRelay} from './model-relay.mjs';
 import {freeProviderMetadata,freeProviderList,prepareFreeProviderConfig,resolveFreeCredential,freeProviderModels} from './free-providers.mjs';
 import {importedRouteId} from './model-directory.mjs';
 import {gatewayRequestTimeout} from './request-timeouts.mjs';
-import {clientUpdatesReport,runClientUpdateCheck} from './client-updates.mjs';
+import {clientUpdatesReport,runClientUpdateCheck,mergeTargets,normalizeClientUpdates} from './client-updates.mjs';
+import {GatewayControls} from './gateway-controls.mjs';
+import {operationsReport,saveOperationsSettings,readNotification} from './operations.mjs';
 import {rateLimitMetadata} from './rate-limit-metadata.mjs';
 import {gatewayRequestContext,gatewayFailureContract} from './client-contract.mjs';
 export {gatewayRequestTimeout} from './request-timeouts.mjs';
@@ -54,6 +56,7 @@ async function readBody(req,limit=4194304,{allowEmpty=false}={}){
   try{return JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'))}catch{throw new AppError('Invalid JSON body',400,'invalid_request_error');}
 }
 export async function startServer(service,{host,port,key,adminKey,admin=true,onShutdown,clientActivationOptions={}}={}) {
+  if(!service.controls&&service.ledger?.get){service.controls=new GatewayControls(service);if(service.router)service.router.controls=service.controls;}
   const version=JSON.parse(await readFile(join(projectRoot,'package.json'),'utf8')).version;
   const cfg=service.config.value.server;host??=cfg.host;port??=cfg.port;key??=service.keys.apiKey;adminKey??=service.keys.adminKey;
   const controllers=new Set();let baseUrl;
@@ -133,7 +136,15 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='GET'&&url.pathname==='/admin/model-tests')return json(res,200,service.ledger.get('model-audit')??{status:'not_started',results:[]});
         if(req.method==='POST'&&url.pathname==='/admin/model-tests')return json(res,202,startModelAudit(service,await readBody(req,4194304,{allowEmpty:true})));
         if(req.method==='GET'&&url.pathname==='/admin/client-updates')return json(res,200,clientUpdatesReport(service));
-        if(req.method==='POST'&&url.pathname==='/admin/client-updates/check'){await readBody(req,4194304,{allowEmpty:true});return json(res,200,await runClientUpdateCheck(service,{force:true}));}
+        if(req.method==='POST'&&url.pathname==='/admin/client-updates/check'){const body=await readBody(req,4194304,{allowEmpty:true});if(!body||typeof body!=='object'||Array.isArray(body)||body.failedOnly!==undefined&&typeof body.failedOnly!=='boolean'||body.targetIds!==undefined&&(!Array.isArray(body.targetIds)||body.targetIds.length>100||body.targetIds.some(id=>typeof id!=='string'||!id.trim()||id.length>100||!mergeTargets(normalizeClientUpdates(service.config.value.clientUpdates).targets).some(t=>t.id===id))))throw new AppError('更新检查选项无效',400,'invalid_update_check');return json(res,200,await runClientUpdateCheck(service,{force:true,failedOnly:body.failedOnly===true,targetIds:body.targetIds}));}
+        if(req.method==='GET'&&url.pathname==='/admin/operations')return json(res,200,operationsReport(service));
+        if(req.method==='POST'&&url.pathname==='/admin/operations/settings')return json(res,200,saveOperationsSettings(service,await readBody(req,16384)));
+        if(req.method==='GET'&&url.pathname==='/admin/application-keys')return json(res,200,{keys:service.controls.keys()});
+        if(req.method==='POST'&&url.pathname==='/admin/application-keys')return json(res,201,service.controls.createKey(await readBody(req,65536)));
+        const revokeKey=/^\/admin\/application-keys\/([a-zA-Z0-9_-]{1,100})\/revoke$/.exec(url.pathname);
+        if(req.method==='POST'&&revokeKey){await readBody(req,1024,{allowEmpty:true});return json(res,200,{client:service.controls.revokeKey(revokeKey[1])});}
+        const notification=/^\/admin\/notifications\/([a-f0-9]{24})\/read$/.exec(url.pathname);
+        if(req.method==='POST'&&notification){await readBody(req,1024,{allowEmpty:true});return json(res,200,readNotification(service,notification[1]));}
         if(req.method==='GET'&&url.pathname==='/admin/balances')return json(res,200,await balances(service,{refresh:url.searchParams.get('refresh')==='1'}));
         if(req.method==='GET'&&url.pathname==='/admin/usage'){
           const options=Object.fromEntries(['accountId','model','status','from','to','beforeId','limit'].map(k=>[k,url.searchParams.get(k)??'']));
@@ -164,26 +175,32 @@ export async function startServer(service,{host,port,key,adminKey,admin=true,onS
         if(req.method==='POST'&&url.pathname==='/admin/shutdown'&&onShutdown){json(res,200,{stopping:true});setTimeout(onShutdown,50).unref();return;}
         throw new AppError('Admin endpoint not found',404,'not_found');
       }
-      if(!authorized(req,key))throw new AppError('Gateway Bearer key required',401,'authentication_error');
-      if(req.method==='GET'&&url.pathname==='/v1/models')return json(res,200,await service.router.models());
+      const authorization=req.headers.authorization??'',client=authorized(req,key)?null:service.controls?.authenticate(authorization.startsWith('Bearer ')?authorization.slice(7):'');
+      if(!authorized(req,key)&&!client)throw new AppError('Gateway Bearer key required',401,'authentication_error');
+      if(req.method==='GET'&&url.pathname==='/v1/models'){const models=await service.router.models();return json(res,200,client?.allowedModels?.length?{...models,data:models.data.filter(model=>client.allowedModels.includes(model.id))}:models);}
       if(req.method==='POST'&&url.pathname==='/v1/chat/completions'){
         // Read live policy on every request, including the private DSH worker after config reload.
         requestContext=gatewayRequestContext(req.headers,admin);
+        const sessionId=req.headers['x-ai-credit-session-id'];
+        if(sessionId!==undefined&&(typeof sessionId!=='string'||!/^[a-zA-Z0-9_.:-]{1,128}$/.test(sessionId)))throw new AppError('Session ID requires 1–128 ASCII identifier characters',400,'invalid_session_id');
+        requestContext={...requestContext,clientId:client?.id??'master',sessionId};
         res.setHeader('X-Request-Id',requestContext.requestId);res.setHeader('X-AI-Credit-Request-Id',requestContext.requestId);res.setHeader('X-AI-Credit-Source',requestContext.source);
         const policy=service.config.value.server;
-        const body=validateChat(await readBody(req,policy.bodyLimitBytes??67108864));const controller=new AbortController();controllers.add(controller);
+        const body=validateChat(await readBody(req,policy.bodyLimitBytes??67108864)),lease=client?service.controls.acquire(client,body):null;
+        if(lease){requestContext.source=lease.source;requestContext.controlLease=lease;res.setHeader('X-AI-Credit-Source',lease.source);}
+        let served=false;const controller=new AbortController();controllers.add(controller);
         res.setHeader('X-AI-Credit-Request-Timeout-Ms',String(gatewayRequestTimeout(policy,body.model)));
         const timeout=setTimeout(()=>controller.abort(new DOMException('Gateway request deadline exceeded','TimeoutError')),gatewayRequestTimeout(policy,body.model));
         const disconnect=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnect);
         try {
           const stream=service.router.chat(body,controller.signal,requestContext);
-          if(!body.stream)return json(res,200,await collectChat(stream));
+          if(!body.stream){const result=await collectChat(stream);served=true;return json(res,200,result);}
           let first=true;
           for await(const chunk of stream){if(first){first=false;res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});}
             if(!res.write(`data: ${JSON.stringify(chunk)}\n\n`))await waitForResponseDrain(res,controller.signal);
           }
-          res.end('data: [DONE]\n\n');return;
-        }catch(e){if(controller.signal.aborted&&controller.signal.reason?.name==='TimeoutError')throw new AppError('Gateway request deadline exceeded',504,'request_timeout');throw e;}finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);}
+          res.end('data: [DONE]\n\n');served=true;return;
+        }catch(e){if(controller.signal.aborted&&controller.signal.reason?.name==='TimeoutError')throw new AppError('Gateway request deadline exceeded',504,'request_timeout');throw e;}finally{clearTimeout(timeout);controllers.delete(controller);res.off('close',disconnect);lease?.finish({success:served});}
       }
       throw new AppError('Endpoint not found',404,'not_found');
     }catch(e){const error=errorView(e),retry=[429,503,504].includes(error.status)&&Number.isFinite(e.retryAfterSeconds)&&e.retryAfterSeconds>=0&&e.retryAfterSeconds<=86400?{retryAfterSeconds:e.retryAfterSeconds}:{};const metadata=rateLimitMetadata(e);if(![429,503,504].includes(error.status)){delete metadata.retryAfterSeconds;delete metadata.retryAfterSource;}const payload={message:error.message,type:error.code,code:error.code,...retry,...metadata,...gatewayFailureContract(e,requestContext),...(Number.isInteger(e.upstreamStatus)&&e.upstreamStatus>=400&&e.upstreamStatus<=599?{upstreamStatus:e.upstreamStatus}:{})};if(res.destroyed)return;if(requestContext&&!res.headersSent){res.setHeader('X-AI-Credit-Retry-Owner','gateway');res.setHeader('X-Should-Retry','false');}if(res.headersSent){res.end(`event: error\ndata: ${JSON.stringify({error:payload})}\n\n`);}else {if(retry.retryAfterSeconds!==undefined)res.setHeader('Retry-After',String(Math.ceil(retry.retryAfterSeconds)));json(res,error.status,{error:payload});}}

@@ -9,6 +9,7 @@ import {Scheduler} from './scheduler.mjs';
 import {readJson,atomicJson,secret,rememberSecret} from './util.mjs';
 import {registerWorkBuddyTaskExecutors} from './workbuddy-executors.mjs';
 import {workBuddyRotationFlight} from './workbuddy-rotation.mjs';
+import {GatewayControls} from './gateway-controls.mjs';
 export async function createService(file,{schedule=false,workbuddyRuntime={}}={}) {
   const config=new ConfigStore(file);await config.load();const ledger=new Ledger(config.dataDir);
   const credentials=new CredentialManager(config,ledger);const platforms=new Platforms(config,credentials);const claims=new ClaimService(config,credentials,platforms,ledger);const router=new Router(config,platforms,{ledger});const scheduler=new Scheduler(config,claims,ledger);
@@ -19,6 +20,7 @@ export async function createService(file,{schedule=false,workbuddyRuntime={}}={}
   let closing;const service={config,ledger,credentials,platforms,claims,router,scheduler,keys,keysFile,workbuddyRuntime,close(){return closing??=(async()=>{service.workbuddyTaskJobsClosing=true;service.workbuddyExecutorController?.abort(new Error('WB executor service shutdown'));await scheduler.stop();await Promise.allSettled([...(service.workbuddyTaskFlights??[]),...(service.workbuddyTaskJobFlights??[]),workBuddyRotationFlight(service)]);ledger.close();})();}};
   service.workbuddyExecutorController=new AbortController();registerWorkBuddyTaskExecutors(service);
   scheduler.service=service;
+  service.controls=new GatewayControls(service);router.controls=service.controls;
   router.relay.balanceSource=()=>service.balanceCache;
   if(schedule)scheduler.start();return service;
 }

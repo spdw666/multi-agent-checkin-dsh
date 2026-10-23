@@ -117,7 +117,7 @@ test('README keeps the full attribution set, including new references', async ()
 test('README is a detailed long-lived guide rather than a line-count target', async () => {
   const readme = await read('README.md');
   const sections = [
-    '产品定位与架构', '快速开始', 'Windows 原生桌面', '八个页面',
+    '产品定位与架构', '快速开始', 'Windows 原生桌面', '九个页面',
     'wb帐号池详解', '同模型自动接力', '支持的平台与能力边界',
     'OpenAI 兼容客户端接入', 'DSH 与 Hermes 接入', '上下文、工具、推理与超时',
     '每日签到与自动刷新', '配置参考', '本机数据、备份与回滚',

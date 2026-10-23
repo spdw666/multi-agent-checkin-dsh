@@ -654,12 +654,105 @@ function statusFor(compare) {
   return 'unknown';
 }
 
-export async function checkTarget(target, base, {timeoutMs = 15000, fetchImpl = fetch, signal} = {}) {
-  const started = Date.now();
-  const result = {id: target.id, name: target.name, platform: target.platform, note: target.note ?? ''};
+// Source identity is available even when DNS/TLS/HTTP or parsing fails. Do not
+// include the Trae installation identifiers in a newly constructed failure URL.
+function updateSource(target, installed = '', apiVersion = '') {
+  const spec = target.latest ?? {};
+  const sources = {genie: 'genie_update_api', feed: 'electron_updater_feed', json: 'official_json_api',
+    text: 'official_page', html: 'official_changelog', github: 'github_releases', trae: 'trae_update_api',
+    codearts: 'codearts_release_api', remoteExe: 'official_installer_pe', log: 'client_update_log'};
+  let sourceUrl = spec.url ?? '';
+  if (spec.type === 'feed' && sourceUrl) sourceUrl = `${sourceUrl.replace(/\/$/, '')}/${spec.file ?? 'latest.yml'}`;
+  if (spec.type === 'genie' && spec.base) sourceUrl = `${spec.base}/v2/update?platform=${encodeURIComponent(spec.platform ?? '')}&version=${encodeURIComponent(apiVersion || installed || '0.0.0')}`;
+  if (spec.type === 'github' && !sourceUrl && spec.repo) sourceUrl = `https://api.github.com/repos/${spec.repo}/releases/latest`;
+  if (spec.type === 'log') sourceUrl = String(spec.file ?? '').replace('%APPDATA%', ROAMING).replace('%LOCALAPPDATA%', LOCAL);
+  return {source: sources[spec.type] ?? 'none', sourceUrl};
+}
+
+export function classifyClientUpdateError(error, {cancelled = false} = {}) {
+  const details = String(error?.message ?? error ?? '未知更新检查错误').slice(0, 2048);
+  const networkCode = String(error?.cause?.code ?? error?.code ?? '');
+  const http = /\bHTTP\s+(\d{3})\b/i.exec(details);
+  let errorCode = 'update_check_failed', errorLabel = '检查失败', retryable = false;
+  if (cancelled) { errorCode = 'update_cancelled'; errorLabel = '检查已取消'; }
+  else if (error?.name === 'TimeoutError' || /timeout|timed out/i.test(details) || /TIMEOUT|ETIMEDOUT/.test(networkCode)) {
+    errorCode = 'update_timeout'; errorLabel = '检查超时'; retryable = true;
+  } else if (http) {
+    const status = Number(http[1]);
+    errorCode = `update_http_${status}`; errorLabel = `更新源 HTTP ${status}`;
+    retryable = [408, 425, 429, 500, 502, 503, 504].includes(status);
+  } else if (/CERT|TLS|SSL/.test(networkCode) || /certificate|TLS|SSL/i.test(details)) {
+    errorCode = 'update_tls_error'; errorLabel = '证书或 TLS 检查失败';
+  } else if (error?.name === 'SyntaxError' || /version|pattern|manifest|release tag|JSON|update result/i.test(details)) {
+    errorCode = 'update_format_changed'; errorLabel = '更新源格式变化';
+  } else if (/ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EPIPE|UND_ERR_SOCKET/.test(networkCode) || /fetch failed|network|socket|connection reset/i.test(details)) {
+    errorCode = 'update_network_error'; errorLabel = '网络连接失败'; retryable = true;
+  } else if (error?.name === 'AbortError') { errorCode = 'update_cancelled'; errorLabel = '检查已取消'; }
+  return {errorCode, errorLabel, errorDetails: details, retryable};
+}
+
+function retrySleep(ms, signal) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
+    const onAbort = () => { cleanup(); reject(signal.reason ?? new DOMException('Aborted', 'AbortError')); };
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    signal?.addEventListener('abort', onAbort, {once: true});
+  });
+}
+
+function withPreviousSuccess(result, previous) {
+  const successful = ['update_available', 'current', 'ahead', 'unknown'].includes(result.status) && !!result.latest;
+  const priorSuccessful = ['update_available', 'current', 'ahead', 'unknown'].includes(previous?.status) && !!previous?.latest;
+  result.lastSuccessAt = successful ? result.checkedAt : previous?.lastSuccessAt ?? (priorSuccessful ? previous.checkedAt : null);
+  result.lastSuccessLatest = successful ? result.latest : previous?.lastSuccessLatest ?? (priorSuccessful ? previous.latest : '');
+  result.lastSuccessSourceUrl = successful ? result.sourceUrl : previous?.lastSuccessSourceUrl ?? (priorSuccessful ? previous.sourceUrl : '');
+  result.stale = !successful && !!result.lastSuccessLatest;
+  if (result.stale) result.latest = result.lastSuccessLatest;
+  const previousFailures = Number(previous?.consecutiveFailures);
+  result.consecutiveFailures = result.status === 'error' ?
+    (Number.isFinite(previousFailures) ? Math.max(0, Math.floor(previousFailures)) : 0) + 1 : 0;
+  return result;
+}
+
+function targetNextCheckAt(row, config) {
+  if (config.enabled === false || row.status === 'cancelled') return null;
+  if (row.status === 'error' && row.retryDueAt && Number.isFinite(Date.parse(row.retryDueAt))) return row.retryDueAt;
+  const checkedAt = Date.parse(row.checkedAt);
+  // Upgrade old persisted errors too; otherwise a pre-upgrade timeout would
+  // still remain red for a full day before the new scheduling logic took effect.
+  const delay = row.status === 'error' ? failureRetryMinutes(row) * 60000 : config.intervalHours * 3600000;
+  return Number.isFinite(checkedAt) ? new Date(checkedAt + delay).toISOString() : null;
+}
+
+function failureRetryMinutes(row) {
+  const retryable = row.retryable ?? classifyClientUpdateError(row.error).retryable;
+  const storedFailures = Number(row.consecutiveFailures);
+  const failures = Number.isFinite(storedFailures) ? Math.max(1, Math.floor(storedFailures)) : 1;
+  return retryable ? [5, 15, 60][Math.min(failures - 1, 2)] : 60;
+}
+
+function finishTarget(result, previous, base, started, now) {
+  result.checkedAt = new Date(now()).toISOString();
+  result.durationMs = Math.max(0, now() - started);
+  result.phase = 'done';
+  withPreviousSuccess(result, previous);
+  result.retryDueAt = result.status === 'error' ? new Date(Date.parse(result.checkedAt) + failureRetryMinutes(result) * 60000).toISOString() : null;
+  result.nextCheckAt = targetNextCheckAt(result, {intervalHours: 24, ...base});
+  return result;
+}
+
+export async function checkTarget(target, base, {timeoutMs = 15000, fetchImpl = fetch, signal,
+  previous, maxRetries = 2, retryBaseMs = 250, random = Math.random, sleep = retrySleep,
+  now = Date.now, onProgress} = {}) {
+  const started = now();
+  const result = {id: target.id, name: target.name, platform: target.platform, note: target.note ?? '',
+    ...updateSource(target), attemptCount: 0, retryCount: 0, phase: 'checking',
+    errorCode: '', errorLabel: '', errorDetails: '', retryable: false};
   const detected = await abortable(() => readInstalledVersion(target), signal);
   result.installPath = detected.path;
   result.installed = detected.installed || '';
+  Object.assign(result, updateSource(target, detected.installed, detected.apiVersion));
   if (detected.pendingRestart) {
     result.pendingRestart = true;
     result.note = [target.note, 'v' + detected.installed + ' 已下载就绪，重启客户端后生效'].filter(Boolean).join('；');
@@ -670,20 +763,37 @@ export async function checkTarget(target, base, {timeoutMs = 15000, fetchImpl = 
   if (!detected.installed) {
     result.status = 'not_detected';
     result.error = detected.error ?? '未在预期路径读取到版本';
-    result.checkedAt = new Date().toISOString();
-    result.durationMs = Date.now() - started;
-    return result;
+    Object.assign(result, {errorCode: 'update_not_detected', errorLabel: '未检测到客户端', errorDetails: result.error});
+    return finishTarget(result, previous, base, started, now);
   }
   if (base.enabled === false) {
     result.status = 'disabled';
-    result.checkedAt = new Date().toISOString();
-    result.durationMs = Date.now() - started;
-    return result;
+    return finishTarget(result, previous, base, started, now);
   }
   try {
-    const latestResult = await fetchLatestVersion(target, {
-      installed: detected.installed, apiVersion: detected.apiVersion, timeoutMs, fetchImpl, signal
-    });
+    let latestResult;
+    const retries = Math.min(2, Math.max(0, Math.floor(Number(maxRetries) || 0)));
+    for (;;) {
+      signal?.throwIfAborted();
+      result.phase = 'checking';
+      result.attemptCount++;
+      result.retryCount = result.attemptCount - 1;
+      onProgress?.({...result});
+      try {
+        latestResult = await fetchLatestVersion(target, {
+          installed: detected.installed, apiVersion: detected.apiVersion, timeoutMs, fetchImpl, signal
+        });
+        break;
+      } catch (error) {
+        const typed = classifyClientUpdateError(error, {cancelled: signal?.aborted});
+        if (!typed.retryable || result.retryCount >= retries || signal?.aborted) throw error;
+        result.phase = 'retry_wait';
+        const jitter = Math.max(0, Math.min(1, Number(random()) || 0));
+        const delay = Math.max(0, Math.min(2000, retryBaseMs * 2 ** result.retryCount)) * (1 + jitter * 0.25);
+        onProgress?.({...result, ...typed, retryDelayMs: Math.ceil(delay)});
+        await abortable(() => sleep(Math.ceil(delay), signal), signal);
+      }
+    }
     result.latest = latestResult.latest;
     result.source = latestResult.source;
     result.sourceUrl = latestResult.url ?? '';
@@ -708,10 +818,9 @@ export async function checkTarget(target, base, {timeoutMs = 15000, fetchImpl = 
   } catch (error) {
     result.status = signal?.aborted ? 'cancelled' : 'error';
     result.error = error.message;
+    Object.assign(result, classifyClientUpdateError(error, {cancelled: signal?.aborted}));
   }
-  result.checkedAt = new Date().toISOString();
-  result.durationMs = Date.now() - started;
-  return result;
+  return finishTarget(result, previous, base, started, now);
 }
 
 export function mergeTargets(overrides = {}) {
@@ -771,7 +880,9 @@ export function cancelClientUpdateCheck(service, reason = new DOMException('Clie
   return active.promise;
 }
 
-export function runClientUpdateCheck(service, {force = false, targets: explicitTargets, fetchImpl = fetch, signal} = {}) {
+export function runClientUpdateCheck(service, {force = false, failedOnly = false, dueOnly = false, targetIds,
+  targets: explicitTargets, fetchImpl = fetch, signal, now = Date.now,
+  maxRetries = 2, retryBaseMs = 250, random = Math.random, sleep = retrySleep} = {}) {
   const active = activeChecks.get(service);
   if (active) return active.promise;
   const controller = new AbortController();
@@ -780,64 +891,116 @@ export function runClientUpdateCheck(service, {force = false, targets: explicitT
   else signal?.addEventListener('abort', onAbort, {once: true});
   const record = {controller, promise: null};
   activeChecks.set(service, record);
-  record.promise = Promise.resolve().then(() => performClientUpdateCheck(service, {targets: explicitTargets, fetchImpl, signal: controller.signal})).finally(() => {
+  record.promise = Promise.resolve().then(() => performClientUpdateCheck(service, {targets: explicitTargets,
+    failedOnly, dueOnly: dueOnly && !force, targetIds, fetchImpl, signal: controller.signal, now,
+    maxRetries, retryBaseMs, random, sleep})).finally(() => {
     signal?.removeEventListener('abort', onAbort);
     if (activeChecks.get(service) === record) activeChecks.delete(service);
   });
   return record.promise;
 }
 
-async function performClientUpdateCheck(service, {targets: explicitTargets, fetchImpl, signal}) {
+async function performClientUpdateCheck(service, {targets: explicitTargets, failedOnly, dueOnly, targetIds,
+  fetchImpl, signal, now, maxRetries, retryBaseMs, random, sleep}) {
   const config = normalizeClientUpdates(service.config.value.clientUpdates);
-  const previous = service.ledger.get(CLIENT_UPDATE_STATE_KEY);
-  const startedAt = new Date().toISOString();
-  const running = {...previous, status: 'running', startedAt};
-  service.ledger.set(CLIENT_UPDATE_STATE_KEY, running);
-  const targets = explicitTargets?.length ? explicitTargets : mergeTargets(config.targets);
-  const results = [];
+  const previous = service.ledger.get(CLIENT_UPDATE_STATE_KEY) ?? {};
+  const startedAt = new Date(now()).toISOString();
+  const allTargets = explicitTargets?.length ? explicitTargets : mergeTargets(config.targets);
+  if (targetIds !== undefined && (!Array.isArray(targetIds) || targetIds.some(id => typeof id !== 'string' || !id.trim()))) {
+    throw new Error('targetIds must be an array of client IDs');
+  }
+  const requested = targetIds === undefined ? null : new Set(targetIds);
+  if (requested && [...requested].some(id => !allTargets.some(target => target.id === id))) throw new Error('unknown client update target ID');
+  const priorRows = new Map((previous.targets ?? []).map(row => [row.id, row]));
+  const targets = allTargets.filter(target => (!requested || requested.has(target.id)) &&
+    (!failedOnly || ['error', 'cancelled'].includes(priorRows.get(target.id)?.status)) &&
+    (!dueOnly || targetIsDue(priorRows.get(target.id), config, now())));
+  // Partial checks preserve untargeted rows and their original timestamps. A
+  // failed target must not reset the successful targets' independent daily clock.
+  const partial = failedOnly || requested !== null || dueOnly;
+  const order = partial ? [...allTargets.map(target => target.id), ...(previous.targets ?? []).map(row => row.id)] : allTargets.map(target => target.id);
+  const rows = new Map(partial ? priorRows : []);
+  for (const target of targets) rows.set(target.id, {...priorRows.get(target.id), id: target.id,
+    name: target.name, platform: target.platform, ...updateSource(target), phase: 'queued'});
+  const selectedIds = new Set(targets.map(target => target.id));
+  const completed = new Set();
+  const orderedRows = () => [...new Set(order)].map(id => rows.get(id)).filter(Boolean).map(row => ({...row}));
+  const persist = (status = 'running') => {
+    const resultRows = orderedRows();
+    const selectedRows = resultRows.filter(row => selectedIds.has(row.id));
+    const checkedAt = new Date(now()).toISOString();
+    const report = {...previous, status, enabled: config.enabled !== false, intervalHours: config.intervalHours,
+      startedAt, checkedAt: status === 'running' ? previous.checkedAt : checkedAt,
+      durationMs: Math.max(0, now() - Date.parse(startedAt)),
+      selectedTargetIds: [...selectedIds],
+      progress: {total: targets.length, completed: completed.size,
+        running: selectedRows.filter(row => row.phase === 'checking').length,
+        queued: selectedRows.filter(row => row.phase === 'queued').length,
+        retrying: selectedRows.filter(row => row.phase === 'retry_wait').length},
+      summary: summarize(resultRows), targets: resultRows};
+    report.nextCheckAt = status === 'cancelled' ? null : reportNextCheckAt(report, config);
+    service.ledger.set(CLIENT_UPDATE_STATE_KEY, report);
+    return report;
+  };
+  persist();
   const concurrency = 4;
   let cursor = 0;
   const worker = async () => {
     while (!signal.aborted && cursor < targets.length) {
       const target = targets[cursor++];
+      rows.set(target.id, {...rows.get(target.id), phase: 'checking'});
+      persist();
       if (target.enabled === false) {
-        results.push({id: target.id, name: target.name, platform: target.platform, status: 'disabled', checkedAt: new Date().toISOString()});
+        rows.set(target.id, finishTarget({id: target.id, name: target.name, platform: target.platform,
+          ...updateSource(target), status: 'disabled', attemptCount: 0, retryCount: 0}, priorRows.get(target.id), config, now(), now));
+        completed.add(target.id);
+        persist();
         continue;
       }
       try {
-        results.push(await checkTarget(target, config, {timeoutMs: config.timeoutMs, fetchImpl, signal}));
+        const result = await checkTarget(target, config, {timeoutMs: config.timeoutMs, fetchImpl, signal,
+          previous: priorRows.get(target.id), now, maxRetries, retryBaseMs, random, sleep,
+          onProgress: state => { rows.set(target.id, {...rows.get(target.id), ...state}); persist(); }});
+        rows.set(target.id, result);
       } catch (error) {
-        if (!signal.aborted) throw error;
-        results.push({id: target.id, name: target.name, platform: target.platform, status: 'cancelled', checkedAt: new Date().toISOString()});
+        rows.set(target.id, finishTarget({id: target.id, name: target.name, platform: target.platform,
+          ...updateSource(target), status: signal.aborted ? 'cancelled' : 'error', error: error.message,
+          ...classifyClientUpdateError(error, {cancelled: signal.aborted})}, priorRows.get(target.id), config, now(), now));
       }
+      completed.add(target.id);
+      persist();
     }
   };
   await Promise.all(Array.from({length: Math.min(concurrency, targets.length)}, worker));
-  const order = new Map(targets.map((t, i) => [t.id, i]));
-  results.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-  const checkedAt = new Date().toISOString();
-  const report = {
-    status: signal.aborted ? 'cancelled' : 'ok',
-    enabled: config.enabled !== false,
-    intervalHours: config.intervalHours,
-    checkedAt,
-    startedAt,
-    durationMs: Date.parse(checkedAt) - Date.parse(startedAt),
-    nextCheckAt: signal.aborted ? null : new Date(Date.parse(checkedAt) + config.intervalHours * 3600000).toISOString(),
-    summary: summarize(results),
-    targets: results
-  };
-  service.ledger.set(CLIENT_UPDATE_STATE_KEY, report);
-  return report;
+  if (signal.aborted) {
+    for (const target of targets) if (!completed.has(target.id)) {
+      rows.set(target.id, finishTarget({...rows.get(target.id), status: 'cancelled',
+        error: String(signal.reason?.message ?? '检查已取消'),
+        ...classifyClientUpdateError(signal.reason, {cancelled: true})}, priorRows.get(target.id), config, now(), now));
+    }
+  }
+  return persist(signal.aborted ? 'cancelled' : 'ok');
+}
+
+function targetIsDue(row, config, now) {
+  if (!row || row.status === 'cancelled' || ['queued', 'checking', 'retry_wait'].includes(row.phase)) return true;
+  const dueAt = Date.parse(targetNextCheckAt(row, config));
+  return !Number.isFinite(dueAt) || now >= dueAt;
+}
+
+function reportNextCheckAt(report, config) {
+  if (config.enabled === false || report.status === 'cancelled') return null;
+  const times = (report.targets ?? []).map(row => Date.parse(targetNextCheckAt(row, config))).filter(Number.isFinite);
+  if (times.length) return new Date(Math.min(...times)).toISOString();
+  const last = Date.parse(report.checkedAt);
+  return Number.isFinite(last) ? new Date(last + config.intervalHours * 3600000).toISOString() : null;
 }
 
 export function clientUpdatesReport(service) {
   const config = normalizeClientUpdates(service.config.value.clientUpdates);
   const report = service.ledger.get(CLIENT_UPDATE_STATE_KEY) ?? {status: 'not_started'};
-  const checkedAt = Date.parse(report.checkedAt);
   return {...report, enabled: config.enabled, intervalHours: config.intervalHours,
-    nextCheckAt: config.enabled === false || !Number.isFinite(checkedAt) || report.status === 'cancelled'
-      ? null : new Date(checkedAt + config.intervalHours * 3600000).toISOString()};
+    nextCheckAt: reportNextCheckAt(report, config)};
 }
 
 export function clientUpdateDue(service, now = Date.now()) {
@@ -846,6 +1009,8 @@ export function clientUpdateDue(service, now = Date.now()) {
   if (activeChecks.has(service)) return false;
   const report = service.ledger.get(CLIENT_UPDATE_STATE_KEY);
   if (report?.status === 'cancelled') return true;
+  if (report?.targets?.length && report.targets.some(row => targetIsDue(row, config, now))) return true;
+  if (report?.targets?.length) return false;
   if (!report?.checkedAt) return true;
   const last = Date.parse(report.checkedAt);
   if (!Number.isFinite(last)) return true;

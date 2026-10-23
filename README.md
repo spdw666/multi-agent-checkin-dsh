@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="package.json"><img alt="Node.js 22.23.3+" src="https://img.shields.io/badge/Node.js-%3E%3D22.23.3-339933?logo=nodedotjs&logoColor=white"></a>
-  <a href="package.json"><img alt="Gateway 0.7.1" src="https://img.shields.io/badge/Gateway-0.7.1-blue"></a>
+  <a href="package.json"><img alt="Gateway 0.8.0" src="https://img.shields.io/badge/Gateway-0.8.0-blue"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
 </p>
@@ -25,6 +25,10 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 
 性能与并发一致性：见 [缓存、取消隔离与离线基准](docs/performance-and-correctness.md)。配置逐次读盘、相同内容复用校验；模型目录在单批刷新内合并重复读取，并按账号／版本／来源隔离；长请求元数据只扫描一次；诊断统计使用索引分页和单遍日期聚合。账号、路由、排程及模型回答不变，提供固定合成输入的前后对比脚本与开源设计参考。
 
+## 运行中心与更新检查
+
+**运行中心**把模型健康、可选选路策略、应用独立密钥、会话亲和、积分到期日历和异常通知放在同一入口；原生桌面与网页均可操作。默认沿用既有路由顺序，通知和会话亲和需要主动开启，不会自动发起生成式体检。软件更新页支持失败项重试、单项检查、逐项进度、完整错误及上次成功版本。详见[运行中心与应用控制](docs/operations-center.md)。
+
 ## 目录
 
 - [先找到你要做的事](#先找到你要做的事)
@@ -33,7 +37,7 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 - [产品定位与架构](#产品定位与架构)
 - [快速开始](#快速开始)
 - [Windows 原生桌面](#windows-原生桌面)
-- [八个页面](#八个页面)
+- [九个页面](#九个页面)
 - [wb帐号池详解](#wb帐号池详解)
 - [账号导入、导出与整理](#账号导入导出与整理)
 - [账号自动轮换](#账号自动轮换)
@@ -277,7 +281,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\build.ps1 `
 
 窗口隐藏后暂停界面轮询与动效，后台排程不依赖窗口可见。需要停止 WB 某个批次时，先用任务窗口的停止按钮；“关闭任务窗口”只结束该窗口等待。不要把暂停整个后台当作单账号停用。
 
-## 八个页面
+## 九个页面
+
+新增 **运行中心**：健康与选路、应用密钥、会话与到期、通知四个子页。其他八个页面原有操作保持；详见[运行中心说明](docs/operations-center.md)。
 
 | 页面 | 用途 | 关键语义 |
 |---|---|---|

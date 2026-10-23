@@ -3,6 +3,7 @@ import {dayIn} from './util.mjs';
 import {runAutomaticWorkBuddyTasks} from './workbuddy-management.mjs';
 import {evaluateWorkBuddyRotation} from './workbuddy-rotation.mjs';
 import {clientUpdateDue,runClientUpdateCheck,cancelClientUpdateCheck} from './client-updates.mjs';
+import {operationsReport} from './operations.mjs';
 export function dailyPlan(now,schedule,jitter=0) {
   // Search local wall-clock minutes. This also handles DST folds/gaps on a future VPS timezone.
   const fmt=new Intl.DateTimeFormat('en-GB',{timeZone:schedule.timezone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
@@ -117,9 +118,10 @@ export class Scheduler {
     finally {this.ticking=false;}
   }
   async tickOnce() {
+    if(this.service?.controls)try{operationsReport(this.service);}catch(error){console.error('operations_alert_update_failed',error.code??'operations_error');}
     if(this.stopped||this.running)return;
     if(this.service&&clientUpdateDue(this.service)){
-      this.track(runClientUpdateCheck(this.service).catch(error=>{this.ledger.set('client-updates',{status:'error',error:error.message,checkedAt:new Date().toISOString()});}));
+      this.track(runClientUpdateCheck(this.service,{dueOnly:true}).catch(error=>{this.ledger.set('client-updates',{status:'error',error:error.message,checkedAt:new Date().toISOString()});}));
     }
     // WB automatic tasks are a separate user toggle from the daily check-in
     // schedule. Reuse this scheduler's lifecycle and tracked shutdown jobs.
