@@ -71,8 +71,8 @@ test('cold first SDK request carries authoritative model-specific default before
   const f=await wireFixture(t);if(!f)return;const body=await f.invoke(options=>f.g.adapter.stream(options));assert.equal(body.max_completion_tokens,128000);
   const headers=f.capturedHeaders[0];assert.equal(headers['x-bili-plugin-max-output'],'128000');assert.equal(headers['x-bili-plugin-model'],f.id);assert.equal(headers['x-ai-credit-source'],'dsh');
 });
-test('unknown models have no guessed companion header; explicit deployment defaults use the same formal map',async t=>{
+test('declared context negotiates without a guessed output default; explicit output uses the same formal map',async t=>{
   const m={id:'SAMPLE-unknown',name:'SAMPLE',contextWindow:1000000,maxTokens:128000,capabilities:{multimodal:false}},g=await adapter(t,[m]);if(!g)return;
-  const headers=g.adapter.config.profiles().get('ai-credit').piProvider.getModels()[0].headers;assert.equal(headers['x-bili-plugin-max-output'],undefined);assert.equal(headers['x-bili-plugin-model'],undefined);
+  const headers=g.adapter.config.profiles().get('ai-credit').piProvider.getModels()[0].headers;assert.equal(headers['x-bili-plugin-max-output'],undefined);assert.equal(headers['x-bili-plugin-model'],m.id);assert.equal(headers['x-bili-plugin-context-window'],String(m.contextWindow));
   const explicit=await adapter(t,[m],{maxOutputTokens:4096});const profile=explicit.adapter.config.profiles().get('ai-credit');assert.equal(profile.piProvider.getModels()[0].headers['x-bili-plugin-max-output'],String(profile.configuredMaxTokens.get(m.id)));
 });

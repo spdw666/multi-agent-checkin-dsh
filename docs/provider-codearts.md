@@ -4,7 +4,9 @@
 
 真实业务面：current/user认证；statistics/plugin独立积分账本；model/builtin目录；ops/delivery每日活动；claim后confirm并重读delivery。今日已CONFIRMED，不重复提交。余额与签到读取独立容错，Token单列不并入积分。
 
-官方目录6个真实模型但未给容量。仅实测通过普通与SSE的`GLM-5.2`启用聊天：网关显式保守contextWindow=16384/maxTokens=2048，source=`configured_limit`，officialContextWindow/officialMaxTokens=null，绝非官方容量。其余目录项callable:false。新增原生工具实证：GLM-5.2、Qwen3-VL-235B、kimi-k2.6-vl、glm-5.2-sft-harmony 返回标准 tool_calls 和 finish_reason=tool_calls，分别记录 toolsSource=live_tool_calls_verified。此项不代表完整工具回填已通过，toolRoundtripVerified 单独记录。
+当前已验证合同覆盖 builtin 目录的 9 个型号。普通回答、SSE、原生工具调用与结果回传的正式网关四链路测试为 36/36；这与原 DSH 完整工具集验收分开：后者保留 331 个工具，已有 8/9 型号完成真实读取、配对结果回传和最终随机内容核对，Kimi-K3 仍受上游大 Schema 编译限制。逐型号状态见[验证快照](codearts-validation.md)。未知新型号不自动宣称可调用。
+
+容量是网关本地合同（source=`configured_limit`），不是从 builtin 目录读到的官方数值；`officialContextWindow` 和 `officialMaxTokens` 保持 null。本地默认值、硬上限和显式调用预算分开，未宣称已生成至最大输出长度。
 
 chat强制上游v2 SSE，网关按请求返回标准SSE或聚合OpenAI JSON，保留标准delta/tools/usage；legacy text按累计快照另处理。HTTP200流错误为失败，缓冲有界，取消释放reader。输出字段max_completion_tokens归一max_tokens并校验本地上限/冲突。
 
@@ -26,7 +28,7 @@ chat强制上游v2 SSE，网关按请求返回标准SSE或聚合OpenAI JSON，�
 
 `TM.00001041` 为上游明确返回的三会话限制；正式验收分别记录实际结果，不把 HTTP 400 解释成不支持工具，也不在产品中自动循环重试。
 
-GLM-5.2 的 toolRoundtripVerified=true 来自正式网关上实际 DSH 与 Hermes 的读文件、原生工具回传及最终内容核对。其它模型仅返回工具调用的证据不推广为完整回填。TM.00001041 是明确的上游并发限制；失败请求保留记录，独占有界复测结果单独记录，不把 HTTP400 泛化为不支持工具。
+GLM-5.2 的 toolRoundtripVerified=true 来自正式网关上实际 DSH 与 Hermes 的读文件、原生工具回传及最终内容核对。其余当前八个型号的简单工具回填由逐型号真实四链路记录补齐；这不等于所有复杂客户端 Schema 均兼容，也不推广到未来新增型号。TM.00001041 是明确的上游并发限制；失败请求保留记录，独占有界复测结果单独记录，不把 HTTP400 泛化为不支持工具。
 
 ## 并发限制 HTTP 规范化
 
@@ -41,3 +43,28 @@ GLM-5.2 的 toolRoundtripVerified=true 来自正式网关上实际 DSH 与 Herme
 `CLAIMED` 为待确认：status 返回 claimed=false、pendingConfirmation=true、active=true，claim 仅补 `/v1/ops/confirm`，不重发 `/claim`。只有再次读取到 `CONFIRMED` 或 `CONSUMED` 才报告到账；确认失败且仍CLAIMED返回 codearts_claim_unconfirmed。每日真实已确认状态读到后不重复 POST。
 
 后台恢复未确认账本时，`confirmOnly: true` 会再次读取活动状态：CLAIMED 只发 confirm；CONFIRMED/CONSUMED 直接返回已有回执；重新变为 CLAIMABLE 或未知时返回 `submitted: false, reason: pending_confirmation_changed`，不重发 claim，由共享账本继续保留未确认记录。
+
+
+## 稳定的传输会话与独立聊天
+
+请求同时携带与body.model精确一致的model-id/model-name。x-ot-session-id与user-session-id按当前凭据稳定推导，凭据轮换后自然变化；body.chat_id依然按独立对话隔离，并保留工具回填关联，不把不同聊天历史合并。旧实现缺少这些头，顺序调用前三个成功后第4个起出现TM.00001041；候选修复后9型号36项真实调用全部通过。签名算法、登录态与积分通道不改，不清除其他原生会话，不自动重放生成。协议参考[CodeArts2API固定client.go](https://github.com/2951461586/CodeArts2API/blob/c11aa7bba77d148ed04dec2c6a67b74cb8732293/internal/codearts/client.go#L130-L175)和[UPSTREAM会话说明](https://github.com/2951461586/CodeArts2API/blob/c11aa7bba77d148ed04dec2c6a67b74cb8732293/docs/UPSTREAM.md#6-并发会话上限与-x-ot-session-id)；未复制其旧版本头或整套网关。
+
+
+## DSH 首包预算协商
+
+目录声明的 maxTokens 是上限，不自动成为 ModelInfo.defaultMaxTokens。CodeArts显式发布本地默认输出预算；客户端同时传递精确路由ID、context-window和max-output协商头，避免companion异步首包查询回退到通用registry。首包协商保留原331工具的数量、名称及参数验证语义，用户消息不改写；Kimi-K3会按下节规则展开无环本地引用。ArkTS/DeepSeek Agent使用较小默认输出预留，但显式请求仍受独立65536上限检查，不静默裁剪用户指定值。容量调整须由完整工具请求实测确认；不能只调大数字后称验收通过。
+
+## Kimi-K3 参数 Schema 与流错误
+
+仅对 Kimi-K3 展开明确采用 2019-09/2020-12 语义的非递归本地引用。共享 DAG 引用按实例独立展开；`$ref` 的兄弟断言以 `allOf` 保持合取。真正的递归、外部引用、动态引用、旧草案或资源上限命中时，完整保留原 Schema，不截断深度、不减少工具、不放宽为通用 JSON。其它型号的工具 Schema 不变，调用者对象不就地修改。
+
+这是引用兼容修复，不是大工具集已通过的声明。实际完整 DSH 工具集仍遇到 `InferHub.ModelArts.81001.400` / `schema exceeds maximum allowed size`。较紧凑的等价候选只完成离线差分与单函数编译诊断，尚未纳入产品；全 331 工具的 Kimi-K3 闭环仍待后续验收。
+
+HTTP 200 中的 SSE 业务错误仍按失败处理，保留有界、脱敏的 `upstreamCode/upstreamMessage/upstreamStatus`；CodeArts 的序列化错误正文也保留业务码，便于区分 Schema、认证、限流与网络错误。不因传输 HTTP 200 将其记为调用成功。
+
+离线检查（不读取本机登录态、不发真实生成）：
+
+```sh
+node --test tests/provider-codearts.test.mjs tests/codearts-all-models.test.mjs tests/codearts-schema.test.mjs tests/gateway-model-headers.test.mjs
+npm run check
+```

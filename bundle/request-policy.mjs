@@ -24,3 +24,14 @@ export function gatewayRequestPolicy(runtime={},models=[]){
   }
   return {configuredMaxTokens,streamIdleTimeoutMs};
 }
+
+// Carry provider-declared model information on the first packet as well as in
+// ModelInfo; companion metadata discovery is asynchronous. Explicit request
+// budgets/messages/tools are never rewritten here.
+export function gatewayModelHeaders(model={},policy={}){
+  if(typeof model.id!=='string'||! /^[\x21-\x7e]{1,256}$/.test(model.id))return {};
+  const headers={},budget=policy.configuredMaxTokens?.get(model.id);
+  if(Number.isSafeInteger(model.contextWindow)&&model.contextWindow>0){headers['x-bili-plugin-model']=model.id;headers['x-bili-plugin-context-window']=String(model.contextWindow);}
+  if(Number.isSafeInteger(budget)&&budget>0){headers['x-bili-plugin-model']=model.id;headers['x-bili-plugin-max-output']=String(budget);}
+  return headers;
+}

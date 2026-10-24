@@ -1,3 +1,4 @@
+import {normalizeLocalRefs} from './codearts-schema.mjs';
 import {desktopSseResponse,desktopCompletionLimit} from './provider-sse.mjs';
 import {join,dirname} from 'node:path';
 import {readFile,writeFile,mkdir,rename,open,unlink} from 'node:fs/promises';
@@ -86,18 +87,46 @@ export const CODEARTS_TRANSIENT_CODES = Object.freeze({
  * (unproven ≠ unsupported).
  */
 export const CODEARTS_TOOLS_VERIFIED = Object.freeze({
-  'GLM-5.2': 'dsh-codearts-model-tools.jsonl',
-  'Qwen3-VL-235B': 'dsh-codearts-model-tools.jsonl',
-  'kimi-k2.6-vl': 'dsh-codearts-model-tools.jsonl',
-  'glm-5.2-sft-harmony': 'dsh-codearts-model-tools.jsonl',
+  'GLM-5.2': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'Qwen3-VL-235B': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'kimi-k2.6-vl': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'openpangu-2.0-flash': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'openpangu-2.0-pro': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'glm-5.3': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'glm-5.2-sft-harmony': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'deepseek-v4.1-flash': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'kimi-k3': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
 });
 
 /** Models with observed native output; callability still requires a declared local capacity. */
 export const CODEARTS_CHAT_VERIFIED = Object.freeze({
-  'GLM-5.2': 'codearts-four-links.json 普通/SSE 通过 + dsh-codearts-tools-probe.jsonl',
-  'Qwen3-VL-235B': 'dsh-codearts-model-tools.jsonl (HTTP 200 + tool_calls)',
-  'kimi-k2.6-vl': 'dsh-codearts-model-tools.jsonl (HTTP 200 + tool_calls)',
-  'glm-5.2-sft-harmony': 'dsh-codearts-model-tools.jsonl (HTTP 200 + tool_calls)',
+  'GLM-5.2': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'Qwen3-VL-235B': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'kimi-k2.6-vl': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'openpangu-2.0-flash': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'openpangu-2.0-pro': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'glm-5.3': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'glm-5.2-sft-harmony': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'deepseek-v4.1-flash': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'kimi-k3': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+});
+
+// Conservative local request contracts, not invented official output limits.
+// Supplier context reference (2026-10-23):
+// https://support.huaweicloud.com/usermanual-codeartsagent/codeartsagent_ug_0009.html
+// GLM-5.2 keeps its deployed 512K contract. Other limits stay below the published
+// supplier windows; the two hidden VL models use explicit local 256K contracts.
+// The builtin catalog publishes no exact context/output numbers: official* stays null.
+export const CODEARTS_CONFIGURED_LIMITS = Object.freeze({
+  'GLM-5.2': Object.freeze({contextWindow:524288,maxTokens:65536}),
+  'Qwen3-VL-235B': Object.freeze({contextWindow:262144,maxTokens:65536}),
+  'kimi-k2.6-vl': Object.freeze({contextWindow:262144,maxTokens:65536}),
+  'openpangu-2.0-flash': Object.freeze({contextWindow:524288,maxTokens:65536}),
+  'openpangu-2.0-pro': Object.freeze({contextWindow:524288,maxTokens:65536}),
+  'glm-5.3': Object.freeze({contextWindow:1048576,maxTokens:65536}),
+  'glm-5.2-sft-harmony': Object.freeze({contextWindow:202752,maxTokens:65536,defaultMaxTokens:8192}),
+  'deepseek-v4.1-flash': Object.freeze({contextWindow:202752,maxTokens:65536,defaultMaxTokens:8192}),
+  'kimi-k3': Object.freeze({contextWindow:1048576,maxTokens:65536}),
 });
 
 export const defaultCodeArtsStateDb = () => join(process.env.APPDATA ?? '', 'codearts-agent', 'User', 'globalStorage', 'state.vscdb');
@@ -495,19 +524,21 @@ export async function codeartsModels(credential, {limit = 500, ...options} = {})
     const enabled = row?.enable === true;
     const toolsVerified = CODEARTS_TOOLS_VERIFIED[id] !== undefined;
     const chatVerified = CODEARTS_CHAT_VERIFIED[id] !== undefined;
+    const limits = CODEARTS_CONFIGURED_LIMITS[id];
     models.push({
       id,
       name: typeof row?.model_name === 'string' && row.model_name ? row.model_name : id,
       // The upstream catalog carries NO context/output fields (verified: the raw row set has no
-      // length keys); GLM uses conservative configured limits, other capacities remain null.
-      contextWindow: id === 'GLM-5.2' ? 524288 : null, contextWindowSource: id === 'GLM-5.2' ? 'configured_limit' : 'not_published_by_catalog', officialContextWindow: null,
-      maxTokens: id === 'GLM-5.2' ? 65536 : null, maxTokensSource: id === 'GLM-5.2' ? 'configured_limit' : 'not_published_by_catalog', officialMaxTokens: null,
+      // length keys); supported models use explicit configured limits, future models stay null.
+      contextWindow: limits?.contextWindow ?? null, contextWindowSource: limits ? 'configured_limit' : 'not_published_by_catalog', officialContextWindow: null,
+      defaultMaxTokens: limits ? (limits.defaultMaxTokens ?? limits.maxTokens) : null, defaultMaxTokensSource: limits ? 'configured_limit' : 'not_published_by_catalog',
+      maxTokens: limits?.maxTokens ?? null, maxTokensSource: limits ? 'configured_limit' : 'not_published_by_catalog', officialMaxTokens: null,
       tools: toolsVerified,
       toolsSource: toolsVerified ? 'live_tool_calls_verified' : 'unproven',
-      toolChoiceModes: ['auto','none'], auditToolChoice: 'auto', toolRoundtripVerified: id === 'GLM-5.2',
+      toolChoiceModes: ['auto','none'], auditToolChoice: 'auto', toolRoundtripVerified: toolsVerified && chatVerified && !!limits,
       multimodal: row?.supports_images === true,
-      callable: enabled && chatVerified && id === 'GLM-5.2',
-      callableReason: !enabled ? 'disabled_upstream' : id === 'GLM-5.2' ? null : 'context_window_unknown',
+      callable: enabled && chatVerified && !!limits,
+      callableReason: !enabled ? 'disabled_upstream' : !limits ? 'context_window_unknown' : !chatVerified ? 'chat_unverified' : null,
       enabled,
       displayEnabled: row?.display_enabled === true,
       category: typeof row?.model_category === 'string' ? row.model_category : null,
@@ -597,6 +628,14 @@ export function buildCodeArtsChatBody(input, model, chatId) {
   if(choice==='none') delete body.tools;
   else if(choice==='auto') body.tool_choice='auto';
   if (Array.isArray(body.tools) && body.tools.length === 0) delete body.tools;
+  // Moonshot's compiler mistakes shared local-ref DAG nodes for recursion.
+  // Inline only proven acyclic modern local references. Keep every tool,
+  // name, argument constraint and caller-side validation schema intact.
+  if(model==='kimi-k3'&&Array.isArray(body.tools))body.tools=body.tools.map(tool=>{
+    const parameters=tool?.function?.parameters;if(!parameters||typeof parameters!=='object')return tool;
+    const normalized=normalizeLocalRefs(parameters);
+    return normalized.changed?{...tool,function:{...tool.function,parameters:normalized.schema}}:tool;
+  });
   body.max_tokens = desktopCompletionLimit(input, 65536, 2048);
   return body;
 }
@@ -618,7 +657,7 @@ async function trackCodeArtsTools(response,credential,model,chatId,stream) {
   codeartsToolSessions.set(chatSessionKey(credential,model,t.id),{id:chatId,until:Date.now()+600000});
   while(codeartsToolSessions.size>512)codeartsToolSessions.delete(codeartsToolSessions.keys().next().value);
  }};
- if(!stream){record(await response.clone().json());return response;}
+ if(!stream){const value=await response.json();record(value);return Response.json(value,{status:response.status,headers:response.headers});}
  const decoder=new TextDecoder();let pending='';
  return new Response(response.body.pipeThrough(new TransformStream({transform(chunk,controller){
   pending+=decoder.decode(chunk,{stream:true});let index;
@@ -642,6 +681,11 @@ export async function codeartsChat(upstream, credential, input, signal, options 
     'x-auth-token': credential.securityToken,
     'x-snap-traceid': traceId ?? createHash('sha256').update(`${chatId}:${now ?? Date.now()}`).digest('hex').slice(0, 32),
     'app-id': 'CodeAgent3.0', is_confidential: 'false',
+    // The IDE transport session is stable per credential, not per conversation.
+    // Distinct chat_id values still isolate actual conversation/tool history.
+    'x-ot-session-id': 'ses_' + sha256Hex(Buffer.from('codearts\0' + (credential.principal ?? '') + '\0' + credential.accessKey)).slice(0, 24),
+    'user-session-id': 'ses_' + sha256Hex(Buffer.from('codearts\0' + (credential.principal ?? '') + '\0' + credential.accessKey)).slice(0, 24),
+    'model-id': model, 'model-name': model,
   };
   const signed = signCodeArtsRequest(credential, {method: 'POST', path: CODEARTS_CHAT_PATH, rawQuery: '', headers, payload, xSdkDate: sdkDate(now)});
   const response = await fetchImpl(`${CODEARTS_ORIGIN}${CODEARTS_CHAT_PATH}`, {method: 'POST', redirect: 'error', headers: signed, body: payload, signal:signal??AbortSignal.timeout(120000)});

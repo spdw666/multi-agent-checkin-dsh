@@ -13,7 +13,7 @@ import {projectRoot} from '../src/config.mjs';
 import {rememberSecret,errorView} from '../src/util.mjs';
 import {thinkingMetadata} from '../src/reasoning.mjs';
 import {createModelRefresh} from './model-refresh.mjs';
-import {gatewayRequestPolicy} from './request-policy.mjs';
+import {gatewayRequestPolicy,gatewayModelHeaders} from './request-policy.mjs';
 import {wrapGatewayRetryMetadata,registerGatewayRetryRecovery} from './retry-metadata.mjs';
 export const name='dsh-ai-credit-gateway';
 export const inject=['llm'];
@@ -32,7 +32,7 @@ export function createGatewayAdapter({runtime,models,resolveAttachments}) {
     // Companion middleware's async ModelInfo lookup can race its first request.
     // Carry the SAME negotiated model-specific default on that request, without
     // rewriting its output budget or relying on an unrelated model registry.
-    const defaultHeaders=m=>policy.configuredMaxTokens.has(m.id)&&/^[\x21-\x7e]{1,256}$/.test(m.id)?{'x-bili-plugin-model':m.id,'x-bili-plugin-max-output':String(policy.configuredMaxTokens.get(m.id))}:{};
+    const defaultHeaders=m=>gatewayModelHeaders(m,policy);
     const buildModels=()=>rows.map(m=>({id:m.id,name:m.name,api:'openai-completions',provider:providerId,baseUrl:runtime.baseUrl+'/v1',headers:{'X-AI-Credit-Source':'dsh',...defaultHeaders(m)},input:m.capabilities.multimodal?['text','image']:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:m.contextWindow,maxTokens:m.maxTokens,...thinkingMetadata(m)}));
     const base=createProvider({id:providerId,name:'AI网关',auth:{apiKey:{name:'Private gateway shim',async resolve({credential}){return credential?.key?{auth:{apiKey:credential.key},source:'loopback'}:undefined}}},models:buildModels(),api:openAICompletionsApi()});
     const provider={...base,getModels:buildModels};

@@ -1,4 +1,4 @@
-import {AppError} from './util.mjs';
+import {AppError,redact} from './util.mjs';
 
 // Bounded OpenAI SSE normalization shared by desktop adapters. Caller fixes the upstream origin.
 export async function desktopSseResponse(response,{stream=true,model='',signal,prefix='provider',legacyText=false}={}) {
@@ -19,7 +19,13 @@ export async function desktopSseResponse(response,{stream=true,model='',signal,p
     const ec=row.error_code??row.error?.code??row.code;
     if(event==='error'||row.error||(row.error_code!=null&&!['','0',0].includes(row.error_code))){
      const status=[401,40100,51100].includes(Number(ec))?401:[403,40300].includes(Number(ec))?403:[429,42900].includes(Number(ec))?429:502;
-     throw new AppError('上游返回流内业务错误',status,prefix+'_stream_upstream_error');
+     const error=new AppError('上游返回流内业务错误',status,prefix+'_stream_upstream_error');
+     if(ec!==undefined&&ec!==null)error.upstreamCode=redact(String(ec)).slice(0,128);
+     const message=row.error?.message??row.error_msg??row.message??row.msg;
+     if(typeof message==='string')error.upstreamMessage=redact(message).slice(0,300);
+     error.upstreamStatus=response.status;
+     if(prefix==='codearts')error.message+=(error.upstreamCode?' ('+error.upstreamCode+')':'')+(error.upstreamMessage?': '+error.upstreamMessage:'');
+     throw error;
     } event='';
     if(row.data && typeof row.data==='object')row=row.data;
     if(legacyText&&typeof row.text==='string'){

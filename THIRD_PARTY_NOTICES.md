@@ -109,3 +109,7 @@ WB 两个参考项目的完整 MIT 声明与固定提交记录保留在 [src/wor
 继续固定 `changexbc/workbuddy-switch` 的 MIT 提交 `22b318c1f44b335c2222e444abcc2d0f74e160f7`（0.1.62 版本线），未改变原有完整许可。逐项阅读 `crates/wb-switch-core/src/modules/export_import.rs`、`account.rs`、`rotate.rs`、`codebuddy_cli.rs` 及导入/导出界面，参考账号格式、去重预览、备注、积分到期策略和 CLI 存活门控。
 
 本工程独立实现 Node JSON/ZIP 交换、配置提交/备份、网关下一请求偏好与空闲 CLI 写入；未复制 Rust/Tauri/React 程序、客户端进程终止代码、悬浮窗或签名更新器。ZIP 扩展为本网关实现，非固定参考提交的 JSON 导出功能。完整源文件链接与能力对照见 [docs/WB_SWITCH_COMPARISON.md](docs/WB_SWITCH_COMPARISON.md)，实际格式见 [docs/WB_ACCOUNT_TRANSFER.md](docs/WB_ACCOUNT_TRANSFER.md)。
+
+## CodeArts 传输会话协议参照
+
+[2951461586/CodeArts2API](https://github.com/2951461586/CodeArts2API/tree/c11aa7bba77d148ed04dec2c6a67b74cb8732293) 固定提交 c11aa7bba77d148ed04dec2c6a67b74cb8732293：仅对照 client.go 的会话/型号请求头与 UPSTREAM.md 的限制说明，未复制其程序、旧客户端版本头或整套网关。本网关保留独立签名、认证、聊天隔离、工具执行与测试。

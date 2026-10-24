@@ -44,6 +44,7 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 - [同模型自动接力](#同模型自动接力)
 - [支持的平台与能力边界](#支持的平台与能力边界)
 - [ZCode 标准代理接入](#zcode-标准代理接入)
+- [CodeArts 模型接入](#codearts-模型接入)
 - [OpenCode 免费模型接入](#opencode-免费模型接入)
 - [OpenAI 兼容客户端接入](#openai-兼容客户端接入)
 - [DSH 与 Hermes 接入](#dsh-与-hermes-接入)
@@ -661,6 +662,16 @@ node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-ver
 将 `BUN_EXE` 换成实际 Bun 可执行文件，`--app-version` 与已安装 ZCode 客户端版本一致。脚本固定安装上游版本到网关数据目录，动态生成本机私有密钥；安装本身不发送模型请求、不领取额度。需要同步多个网关代码副本时可重复指定 `--target-root GATEWAY_ROOT`，离线复用固定提交可用 `--source PINNED_CHECKOUT`。
 
 **DSH 私有 worker 与桌面/CLI HTTP 后台是不同进程，更新后分别重载。** 只重载其中一个，另一个仍可能执行旧直连代码。代理按需隐藏启动；3012 保留原始上游 HTTP/业务码并触发同账号本地冷却，不自动重发，本地冷却期限不是官方解封时间。完整安装、验收、诊断与回滚见 [ZCode 接入](docs/zcode.md)。
+
+## CodeArts 模型接入
+
+使用已登录的 CodeArts Agent 账号，在模型路由中读取该供给目录并导入所需型号。当前验证合同覆盖 GLM-5.2、Qwen3-VL-235B、kimi-k2.6-vl、openpangu-2.0-flash/pro、glm-5.3、glm-5.2-sft-harmony、deepseek-v4.1-flash、kimi-k3 共 9 型号；未来新增型号仍需逐项验证。
+
+网关保留独立聊天与工具回填关联，并向 DSH 首包传递模型专属的上下文和默认输出预算；不削减工具集、不静默裁剪显式预算。更新后分别确认 DSH worker 和桌面 HTTP 后台已载入新代码，再刷新模型目录。
+
+**验证层级分开看**：9 型号正式四链路测试为 36/36，两款 VL 图片测试通过；原 DSH 保留全部 331 工具的真实读取/回填/最终正文闭环为 8/9。Kimi-K3 的完整大 Schema 仍被上游编译器拒绝，不能把简单工具体检通过写成完整客户端通过。容量标记为本地 configured_limit，不冒充官方声明或已验证最大输出长度。
+
+接入与错误分类见[CodeArts 适配说明](docs/provider-codearts.md)；逐型号容量、实测快照及尚未通过项见[CodeArts 验证快照](docs/codearts-validation.md)。
 
 ## OpenCode 免费模型接入
 
