@@ -21,6 +21,7 @@ export class UsageAttempt {
   }
   chunk(chunk){if(this.firstTokenMs===null&&(chunk.choices??[]).some(c=>c.delta?.content||c.delta?.tool_calls?.length))this.firstTokenMs=Math.round(performance.now()-this.clock);if(chunk.usage)for(const [key,value] of Object.entries(usageCounters(chunk.usage)))if(value!==null)this.usage[key]=value;}
   dispatched(){this.row.dispatched=true;this.row.dispatchCount++;}
+  retractUnsentDispatch(){if(this.row.dispatchCount!==1)return false;this.row.dispatched=false;this.row.dispatchCount=0;return true;}
   // Terminal state is known after the generator's candidate finally block.
   // Rewriting only its last metadata row does not fabricate another attempt.
   finalizeRequest(outcome,relayFailure){

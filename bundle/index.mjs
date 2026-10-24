@@ -23,17 +23,25 @@ const inertAuth={credentials:{async read(){},async list(){return []},async modif
 const unwrap=v=>v&&typeof v.get==='function'?v.get():v;
 async function diagnostic(message){try{const dir=join(process.env.LOCALAPPDATA??homedir(),'AiCreditGateway');await mkdir(dir,{recursive:true});await appendFile(join(dir,'dsh-bundle.log'),new Date().toISOString()+' '+message+'\n')}catch{}}
 export function createGatewayAdapter({runtime,models,resolveAttachments}) {
-  let current=models,modelFingerprint=JSON.stringify(models);
+  let current=structuredClone(models),modelFingerprint=JSON.stringify(models);
   // A gateway request already owns the bounded complete same-model relay pool.
   // Five additional harness retries multiplied an exhausted pool's latency.
   const retryPolicy=()=>resolveRetryPolicy({mode:'normal',maxRetries:1},'ai-credit retry policy');
-  const buildModels=()=>current.map(m=>({id:m.id,name:m.name,api:'openai-completions',provider:providerId,baseUrl:runtime.baseUrl+'/v1',headers:{'X-AI-Credit-Source':'dsh'},input:m.capabilities.multimodal?['text','image']:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:m.contextWindow,maxTokens:m.maxTokens,...thinkingMetadata(m)}));
-  const base=createProvider({id:providerId,name:'AI网关',auth:{apiKey:{name:'Private gateway shim',async resolve({credential}){return credential?.key?{auth:{apiKey:credential.key},source:'loopback'}:undefined}}},models:buildModels(),api:openAICompletionsApi()});
-  const provider={...base,getModels:buildModels};
-  const profile={provider:providerId,displayName:'AI网关',...gatewayRequestPolicy(runtime,current),retryPolicy:retryPolicy(),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
-  let profiles=new Map([[providerId,profile]]);
+  const buildProfile=rows=>{
+    const policy=gatewayRequestPolicy(runtime,rows);
+    // Companion middleware's async ModelInfo lookup can race its first request.
+    // Carry the SAME negotiated model-specific default on that request, without
+    // rewriting its output budget or relying on an unrelated model registry.
+    const defaultHeaders=m=>policy.configuredMaxTokens.has(m.id)&&/^[\x21-\x7e]{1,256}$/.test(m.id)?{'x-bili-plugin-model':m.id,'x-bili-plugin-max-output':String(policy.configuredMaxTokens.get(m.id))}:{};
+    const buildModels=()=>rows.map(m=>({id:m.id,name:m.name,api:'openai-completions',provider:providerId,baseUrl:runtime.baseUrl+'/v1',headers:{'X-AI-Credit-Source':'dsh',...defaultHeaders(m)},input:m.capabilities.multimodal?['text','image']:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:m.contextWindow,maxTokens:m.maxTokens,...thinkingMetadata(m)}));
+    const base=createProvider({id:providerId,name:'AI网关',auth:{apiKey:{name:'Private gateway shim',async resolve({credential}){return credential?.key?{auth:{apiKey:credential.key},source:'loopback'}:undefined}}},models:buildModels(),api:openAICompletionsApi()});
+    const provider={...base,getModels:buildModels};
+    const profile={provider:providerId,displayName:'AI网关',...policy,retryPolicy:retryPolicy(),modelErrors:new Map(),defaultContextWindow:32768,maxRequestImageBytes:20971520,requestImagePixelBudget:4194304,requestImageMaxBytes:1048576,piProvider:provider};
+    return profile;
+  };
+  let profiles=new Map([[providerId,buildProfile(current)]]);
   const adapter=wrapGatewayRetryMetadata(new PiAiAdapter({profiles:()=>profiles,auth:inertAuth,resolveApiKey:async()=>runtime.key,...(resolveAttachments?{resolveAttachments}:{})}),{models:()=>current,ownedGateway:true});
-  return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;current=models;modelFingerprint=next;Object.assign(profile,gatewayRequestPolicy(runtime,current),{retryPolicy:retryPolicy()});profiles=new Map([[providerId,profile]]);return true}};
+  return {adapter,update(models){const next=JSON.stringify(models);if(next===modelFingerprint)return false;const detached=structuredClone(models),profile=buildProfile(detached);current=detached;modelFingerprint=next;profiles=new Map([[providerId,profile]]);return true}};
 }
 export async function createBundleRuntime(configFile,_options={}) {
   // ELECTRON_RUN_AS_NODE can hide process.versions.electron. Never fork execPath

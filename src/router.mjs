@@ -69,7 +69,7 @@ export class Router {
     const maxTokens=outputCapacity(primary)??primary.maxTokens??4096;
     if(kind==='nvidia'&&(primary.importable===false||!Number.isInteger(primary.contextWindow)||primary.contextWindow<1||!Number.isInteger(primary.maxTokens)||primary.maxTokens<1))return undefined;
     const efforts=primary.reasoningEfforts??(Array.isArray(primary.reasoning?.supportedEfforts)?Object.fromEntries(primary.reasoning.supportedEfforts.map(k=>[k,k])):null);
-    return {id:route.id,object:'model',created:0,owned_by:'ai-credit-gateway',name:route.name??primary.name??route.id,upstream:targets[selected].upstreamId,...(kind==='nvidia'?{requestTimeoutMs:nvidiaRequestTimeout(primary.id)}:{}),capabilities:{streaming:true,tools:primary.tools===true,multimodal:primary.multimodal===true},contextWindow,maxTokens,...(relay?{modelRelay:{strictSameModel:true,partition:this.relay.partition(route),modelFamily:discovered.family,targetCount:metadata.filter(m=>m&&m.callable!==false&&(!primary.tools||m.tools===true)&&(!primary.multimodal||m.multimodal===true)).length,fullWindowCompatibleCount:compatible.length,deliveryMode:'verified_request_buffer',attemptTimeoutMs:this.relayAttemptTimeoutMs,attemptTimeoutMode:'prefill_then_progress_idle',prefillTimeoutMs:this.relayPrefillTimeoutMs,prefillMinRequestBytes:131072,requestTimeoutMs:gatewayRequestTimeout(this.config.value.server,route.id)}}:{}),reasoning:primary.reasoning??null,reasoningEfforts:efforts??null,...(primary.reasoningEffortMapping?{reasoningEffortMapping:primary.reasoningEffortMapping,reasoningMappingSource:primary.reasoningMappingSource}:{})};
+    return {id:route.id,object:'model',created:0,owned_by:'ai-credit-gateway',name:route.name??primary.name??route.id,upstream:targets[selected].upstreamId,...(kind==='nvidia'?{requestTimeoutMs:nvidiaRequestTimeout(primary.id)}:{}),capabilities:{streaming:true,tools:primary.tools===true,multimodal:primary.multimodal===true},contextWindow,maxTokens,...(Number.isSafeInteger(primary.defaultMaxTokens)&&primary.defaultMaxTokens>0&&primary.defaultMaxTokens<=maxTokens?{defaultMaxTokens:primary.defaultMaxTokens,...(typeof primary.defaultMaxTokensSource==='string'?{defaultMaxTokensSource:primary.defaultMaxTokensSource}:{})}:{}),...(relay?{modelRelay:{strictSameModel:true,partition:this.relay.partition(route),modelFamily:discovered.family,targetCount:metadata.filter(m=>m&&m.callable!==false&&(!primary.tools||m.tools===true)&&(!primary.multimodal||m.multimodal===true)).length,fullWindowCompatibleCount:compatible.length,deliveryMode:'verified_request_buffer',attemptTimeoutMs:this.relayAttemptTimeoutMs,attemptTimeoutMode:'prefill_then_progress_idle',prefillTimeoutMs:this.relayPrefillTimeoutMs,prefillMinRequestBytes:131072,requestTimeoutMs:gatewayRequestTimeout(this.config.value.server,route.id)}}:{}),reasoning:primary.reasoning??null,reasoningEfforts:efforts??null,...(primary.reasoningEffortMapping?{reasoningEffortMapping:primary.reasoningEffortMapping,reasoningMappingSource:primary.reasoningMappingSource}:{})};
   }
   async models(){
     if(typeof this.config.load==='function')await this.config.load();
@@ -222,6 +222,8 @@ export class Router {
         completed=true;requestCompleted=true;this.controls?.success(route,target,{clientId,sessionId});
         return;
       }catch(e){
+        // An adapter-local block is definitively before fetch, not a new send.
+        if(e.code==='zcode_upstream_blocked'&&e.upstreamRequestSent===false&&usage.retractUnsentDispatch())plan.retractUnsentDispatch();
         if(signal?.aborted)e=interrupted(signal);else if(targetExpired)e=timeoutError;failure=e;last=e;
         skipped=!usage.row.dispatched&&(['control_target_ineligible','client_credit_budget_exceeded'].includes(e.code)||relayActive&&['relay_capacity_incompatible','relay_context_incompatible','tools_not_supported','images_not_supported','reasoning_effort_not_supported','reasoning_parameter_not_supported','wb_inference_disabled'].includes(e.code));
         if(skipped)usage.row.candidatePlan={...usage.row.candidatePlan,state:'skipped',reasonCode:e.code};
@@ -271,7 +273,7 @@ export class Router {
               :`当前同型号供应均未确认支持本次完整请求；请求的输出预算 ${gap.requested} 超过同类供应可承诺的上限 ${gap.capacity}，请把 max_tokens / max_completion_tokens 降到 ${gap.capacity} 以内重试；历史、工具与输出预算均未被裁剪`
             :'当前同型号供应均未确认支持本次完整请求；历史、工具和输出预算均已保留',503,'same_model_unavailable');
         }
-        if(started||signal?.aborted||i===targets.length-1||(!relayReason&&!depleted&&!poolModelAbsent&&e.code!=='wb_inference_disabled'&&!(route.fallbackStatuses??[408,429,500,502,503,504]).includes(e.status??502)))throw e;
+        if(e.code==='zcode_upstream_blocked'||started||signal?.aborted||i===targets.length-1||(!relayReason&&!depleted&&!poolModelAbsent&&e.code!=='wb_inference_disabled'&&!(route.fallbackStatuses??[408,429,500,502,503,504]).includes(e.status??502)))throw e;
         previousTarget=target;relayTrigger=relayReason??'upstream_unavailable';
       }
       finally{clearTimeout(targetTimer);if(response?.body&&!response.body.locked)await response.body.cancel().catch(()=>{});usage.row.requestOutcome=plan.summary(completed?'completed':'ongoing');usage.finish(completed?'completed':skipped?'skipped':signal?.aborted&&signal.reason?.name!=='TimeoutError'||!failure?'cancelled':'failed',failure);controlLease?.observe(usage.finishedRow);}

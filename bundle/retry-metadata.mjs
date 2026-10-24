@@ -3,7 +3,7 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {rateLimitMetadata} from '../src/rate-limit-metadata.mjs';
 import {relayFailureMetadata,validGatewayRequestId} from '../src/client-contract.mjs';
-const gatewayCodes=new Set(['provider_chat_rejected','provider_rate_limited','upstream_rate_limited','same_model_rate_limited','same_model_timeout','same_model_cooldown','same_model_unavailable','same_model_credits_exhausted','relay_context_incompatible','relay_attempt_timeout','request_timeout','request_deadline_exceeded','account_pool_unavailable']);
+const gatewayCodes=new Set(['zcode_upstream_blocked','provider_chat_rejected','provider_rate_limited','upstream_rate_limited','same_model_rate_limited','same_model_timeout','same_model_cooldown','same_model_unavailable','same_model_credits_exhausted','relay_context_incompatible','relay_attempt_timeout','request_timeout','request_deadline_exceeded','account_pool_unavailable']);
 // The official AssistantStreamAccumulator deliberately JSON-detaches chunks.
 // A bounded, random, locally minted label survives that copy; a private Symbol
 // or WeakMap alone does not. No timers, request bodies or credentials are held.
@@ -32,6 +32,11 @@ export function parseGatewayRetryMetadata(message){
       const meta={gatewayCode:gatewayCodes.has(value.code)?value.code:'gateway_terminal_error',...validStatus(status)?{status}:{},...(owned?{gatewayManagedRetry:true,gatewayRetryOwner:'gateway',gatewayRequestId:value.gatewayRequestId}:{}),...(relayFailure?{relayFailure}:{})};
       // Share the server's numeric business-code whitelist and public schema.
       Object.assign(meta,rateLimitMetadata(value));
+      if(meta.gatewayCode==='zcode_upstream_blocked'){
+        meta.upstreamCode=3012;
+        if(typeof value.upstreamRequestSent==='boolean')meta.upstreamRequestSent=value.upstreamRequestSent;
+        if(Number.isInteger(value.upstreamStatus)&&value.upstreamStatus>=100&&value.upstreamStatus<=599)meta.upstreamStatus=value.upstreamStatus;
+      }
       return meta;
     }
     for(const key of ['error','message','body']){const result=visit(value[key],depth+1);if(result)return result;}
@@ -45,7 +50,7 @@ export function enrichGatewayFailure(failure,{ownedRelay=false,partial=false,abo
   const official=meta.retryAfterSource==='official_header'&&meta.retryAfterSeconds!==undefined;
   const transient=meta.rateLimitKind==='transient'&&meta.rateLimitRetryable===true&&official&&meta.retryAfterSeconds>0;
   // No untrusted upstream prose/body survives into durable client history.
-  const message=[`${meta.status??failure.status??'HTTP'}: 网关请求失败（${meta.gatewayCode}）`,meta.upstreamCode!==undefined?`上游代码 ${meta.upstreamCode}`:null,meta.rateLimitKind?`限流类别 ${meta.rateLimitKind}`:null,meta.relayFailure?.root?`主因 ${meta.relayFailure.root.platform??'upstream'}/${meta.relayFailure.root.code??'upstream_error'} HTTP ${meta.relayFailure.root.status??'unknown'}`:null,meta.relayFailure?`已发出 ${meta.relayFailure.attemptCount??0} 次；跳过 ${meta.relayFailure.skippedCount??0} 个不适用候选`:null,meta.gatewayRequestId?`请求 ${meta.gatewayRequestId}`:null,official?`官方等待 ${meta.retryAfterSeconds} 秒`:null].filter(Boolean).join('；');
+  const message=[`${meta.status??failure.status??'HTTP'}: 网关请求失败（${meta.gatewayCode}）`,meta.gatewayCode==='zcode_upstream_blocked'?(meta.upstreamRequestSent===false?`本地冷却拦截，本次未请求官方；此前官方返回 3012；此转发请求被拒绝，不代表账号整体封禁；原生客户端正常时需核查转发兼容性及官方通道支持`:`ZCode 官方拒绝本次转发请求（3012），不代表账号整体封禁；原生客户端正常时需核查转发兼容性及官方通道支持；本次未自动重发`):null,meta.gatewayCode==='zcode_upstream_blocked'&&meta.retryAfterSeconds!==undefined?`本地冷却剩余 ${meta.retryAfterSeconds} 秒（不代表官方解封时间）`:null,meta.upstreamCode!==undefined?`上游代码 ${meta.upstreamCode}`:null,meta.rateLimitKind?`限流类别 ${meta.rateLimitKind}`:null,meta.relayFailure?.root?`主因 ${meta.relayFailure.root.platform??'upstream'}/${meta.relayFailure.root.code??'upstream_error'} HTTP ${meta.relayFailure.root.status??'unknown'}`:null,meta.relayFailure?`已发出 ${meta.relayFailure.attemptCount??0} 次；跳过 ${meta.relayFailure.skippedCount??0} 个不适用候选`:null,meta.gatewayRequestId?`请求 ${meta.gatewayRequestId}`:null,official?`官方等待 ${meta.retryAfterSeconds} 秒`:null].filter(Boolean).join('；');
   const enriched={...failure,...meta,message};
   // Zero is valid protocol metadata, but DSH's LlmFailure only admits positive ms.
   if(official&&meta.retryAfterSeconds>0)enriched.providerRetryAfterMs=meta.retryAfterSeconds*1000;

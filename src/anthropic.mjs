@@ -15,6 +15,12 @@ export async function* anthropicChunks(response){
  let stopped=false,tools=false,input=0,output=0;const indexes=new Map();
  for await(const event of sseEvents(response.body)){let d;try{d=JSON.parse(event.data)}catch{throw new AppError('Malformed Anthropic event',502,'malformed_sse')}
  let delta={},finish=null;
+ const businessCode=d.code??d.error?.code;
+ if(businessCode!==undefined&&![0,'0',200,'200'].includes(businessCode)){
+  const error=new AppError('Anthropic upstream business error',502,'upstream_business_error'),code=Number(businessCode);
+  if(Number.isSafeInteger(code)&&code>=0&&code<=100000)error.upstreamCode=code;
+  throw error;
+ }
  if(d.type==='error')throw new AppError(d.error?.message??'Upstream stream error',502,'upstream_stream_error');
  if(d.type==='message_start'){input=d.message?.usage?.input_tokens??0;delta.role='assistant';}
  else if(d.type==='content_block_start'){let b=d.content_block;if(b.type==='tool_use'){tools=true;const n=indexes.size;indexes.set(d.index,n);delta.tool_calls=[{index:n,id:b.id,type:'function',function:{name:b.name,arguments:Object.keys(b.input??{}).length?JSON.stringify(b.input):''}}];}else if(b.type==='text'&&b.text)delta.content=b.text;}
@@ -25,4 +31,4 @@ export async function* anthropicChunks(response){
  }
  if(!stopped)throw new AppError('Anthropic stream ended before message_stop',502,'truncated_stream');
 }
-export function openaiResponse(response){const it=anthropicChunks(response)[Symbol.asyncIterator]();return new Response(new ReadableStream({async pull(controller){try{const n=await it.next();if(n.done){controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));controller.close();}else controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify(n.value)+'\n\n'));}catch(e){controller.error(e)}},async cancel(){await it.return?.()}}),{headers:{'Content-Type':'text/event-stream'}});}
+export function openaiResponse(response,{mapError}={}){const it=anthropicChunks(response)[Symbol.asyncIterator]();return new Response(new ReadableStream({async pull(controller){try{const n=await it.next();if(n.done){controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));controller.close();}else controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify(n.value)+'\n\n'));}catch(e){controller.error(mapError?mapError(e):e)}},async cancel(){await it.return?.()}}),{headers:{'Content-Type':'text/event-stream'}});}

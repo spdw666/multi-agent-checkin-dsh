@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/TriDefender/zcode-api.git",
+  "commit": "9880d91579fdb9d3e59c2bb900add3ab86722003",
+  "version": "4.8.5",
+  "license": "CC-BY-NC-SA-4.0",
+  "hashNewlines": "LF",
+  "handlerSha256": "2d2c68f0007ab21ddfe05021cf029a86bac48cd48833578fa1accfd1ed7159d4",
+  "patchedHandlerSha256": "33c6322e8053bb361018b28fa906fa0d35fb3f3f9d0a3515c2c14fdb1aad9d8f"
+}

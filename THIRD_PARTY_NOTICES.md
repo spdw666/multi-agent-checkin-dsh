@@ -23,14 +23,14 @@ Trae SOLO bridge 本地新增仅 `deepseek-v4.1-flash` 的 reasoning-only stop �
 | 项目 | 许可证 | 使用决定 |
 |---|---|---|
 | [ZlaxeyX/workbuddy-auto-checkin](https://github.com/ZlaxeyX/workbuddy-auto-checkin) | MIT | 参考按天幂等与 Windows 计划任务；其默认不带 `/v2` 的旧接口并未直接照搬，实际使用客户端与 dsh-connect-workbuddy 的 `/v2` 接口 |
-| [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign) | MIT | 参考 ZCode enc:v1 凭据形状和签到活动接口；启动客户端后本机凭据与只读 billing preview 已通过；活动领取与模型反代尚未完成 |
+| [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign) | MIT | 参考 ZCode enc:v1 凭据形状和签到活动接口；本机凭据、余额与权益领取已核验；模型标准代理的独立来源与实际工具闭环见下方 ZCode 标准代理条目 |
 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | MIT | 核对 bundle、PiAiAdapter、provider 注册契约；实际验证绑定本机 0.2.0-rc.2 Desktop runtime，而非 GitHub 主线版本 |
 | [cmochance/codex-app-transfer](https://github.com/cmochance/codex-app-transfer) | MIT | 参考 WorkBuddy 模型目录线索，未复制 Rust 源码 |
 | [0xgetz/minimax-agent-automation](https://github.com/0xgetz/minimax-agent-automation) | MIT | 仅参考持久化浏览器状态与签到 UI；注册、一次性邮箱、多账号批量注册等流程未纳入本工程 |
 
 QwenWork 个人版账号上下文与加密存储形状依据本机已安装 QwenWorkCN 1.2.5 的只读源码观察后独立实现；产品源文件不随工程分发。它与 Qwen Code CLI、Qoder 或企业版并非同一接入适配器。
 
-构建依赖 esbuild 0.28.2（MIT）；核心运行使用 Node.js 内置 HTTP、crypto、SQLite，无外部运行依赖。DSH peers 的许可证随宿主包提供；本工程不将宿主 runtime 重新打包。
+构建依赖 esbuild 0.28.2（MIT）；Node 核心运行使用内置 HTTP、crypto、SQLite，无外部运行依赖。可选 ZCode 标准代理另用 Bun 及固定上游依赖，许可与安装边界见下方独立条目。DSH peers 的许可证随宿主包提供；本工程不将宿主 runtime 重新打包。
 
 另查阅 denysvitali/llm-proxy 的 ZCode/MiniMax Code 接入说明；仓库未声明清晰 LICENSE，本工程未复制其代码，MiniMax Code 也未混当为 MiniMax Agent。
 
@@ -40,7 +40,15 @@ QwenWork 个人版账号上下文与加密存储形状依据本机已安装 Qwen
 - [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign)：MIT，Copyright (c) 2026 Shuffle-1992。参考 ZCode 官方 Aliyun SDK 验证流程；将 SDK 调用和领取回执持久化改为本网关实现。完整 MIT 文本保存在 `vendor/LICENSE.TraeSign`。ZCode 实际免费权益领取与余额回执已核验，更新上表早期“尚未完成”的状态。
 - MiniMax Code 已安装桌面版中的本地 OAuth lease v1、原生请求头和账号配置形状：只读观察后独立实现客户端，不复制、不分发其产品源码。通过本机具备 capability 的管道向客户端取短期 access-token；refresh-token 的轮换交由客户端处理。
 - QwenWorkCN 个人版的 `code: ok`、`account-context` 和 `wallets` 按实际响应解析。每日额度是服务器自动重置，不声称存在手动签到接口。
-- [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api)：README License 声明 MIT（没有独立 LICENSE）；提交 17933d242621d4482ed1ce11c8eaf938b4e08e78。复用三个上下文模块，去除 TypeScript 类型；来源、改动和版权记录见 vendor/zcode-context/NOTICE.md。此项更正早期仅参考的描述。
+- [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api/tree/17933d242621d4482ed1ce11c8eaf938b4e08e78)：历史提交 `17933d242621d4482ed1ce11c8eaf938b4e08e78` 的 README License 声明 MIT（该提交没有独立 LICENSE）。复用三个上下文模块，去除 TypeScript 类型；来源、改动和版权记录见 [vendor/zcode-context/NOTICE.md](vendor/zcode-context/NOTICE.md)。此项仅描述历史固定提交，不是下述完整代理 v4.8.5 的许可证。
+
+## ZCode 完整标准代理
+
+- 来源：[TriDefender/zcode-api](https://github.com/TriDefender/zcode-api/tree/9880d91579fdb9d3e59c2bb900add3ab86722003)，固定提交 `9880d91579fdb9d3e59c2bb900add3ab86722003`，package 版本 **4.8.5**。
+- 上游署名：Copyright (c) 2026 TriDefender and the ZCode Proxy contributors。该固定版本的 [完整 LICENSE](https://github.com/TriDefender/zcode-api/blob/9880d91579fdb9d3e59c2bb900add3ab86722003/LICENSE) 与 `package.json` 声明 **CC-BY-NC-SA-4.0**；[许可证官方文本](https://creativecommons.org/licenses/by-nc-sa/4.0/)由 Creative Commons 提供。安装时保留上游完整 LICENSE，不改写为 MIT。
+- 本仓库提供 `integrations/zcode-standard-proxy/bridge.ts`、隔离配置示例和 `upstream-response.patch`，安装脚本下载或复用固定提交后，在本机网关数据目录中构建独立 runtime。上游完整代理代码不作为本网关 MIT 原创实现声明；对上游 handler 的响应观察钩子补丁保留其 **CC-BY-NC-SA-4.0** 归属，并明确记录为本项目修改。
+- handler 补丁仅增加可选响应观察回调，使网关保留原始 HTTP 状态、3012 业务码与同账号本地冷却语义；完整协议翻译、派发、压缩流和工具映射使用固定版本的标准代理路径。原 DSH 负责工具执行及结果回填，不替换为上游 Agent。
+- `vendor/zcode-context` 的历史 MIT 声明和本次 v4.8.5 / CC-BY-NC-SA-4.0 runtime 是两个独立固定版本记录，前者不用于替后者改标许可证。安装、组件边界与验收口径见 [docs/zcode.md](docs/zcode.md)。
 
 ## MiniMax Code 官方协议参照
 MiniMax-AI/minimax-code，MIT；模型目录、Mavis Messages 与 Matrix 余额协议按官方源码验证，本工程独立实现统一 OpenAI 映射。许可证 vendor/minimax-code.LICENSE。

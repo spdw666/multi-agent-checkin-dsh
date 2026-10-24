@@ -46,6 +46,7 @@ export class RequestPlan{
   platform(target){return platform(this.config.upstreams?.find(u=>u.id===target?.upstreamId)?.kind);}
   candidate(){this.candidateCount++;}
   dispatched(first){this.dispatchCount++;if(first)this.attemptCount++;}
+  retractUnsentDispatch(){if(this.dispatchCount<1||this.attemptCount<1)return false;this.dispatchCount--;this.attemptCount--;return true;}
   seedBlocked(rows=[]){
     const row=rows.find(r=>Number.isInteger(r.status)&&(r.errorCode||r.reasonCode));if(row)this.fallbackRoot={code:code(row.errorCode??row.reasonCode),status:status(row.status),platform:this.platform(row.target)};
   }

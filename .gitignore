@@ -11,3 +11,6 @@ __pycache__/
 vendor/workbuddy-core.mjs
 vendor/trae-core.mjs
 *.wasm
+
+# Generated authenticated loopback route, never publish local bridge credentials.
+/src/zcode-standard-proxy.runtime.json

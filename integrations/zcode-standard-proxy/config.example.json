@@ -1,0 +1,36 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 19426
+  },
+  "provider": "zai",
+  "plan": "start-plan",
+  "defaultModel": "glm-5.3-flash",
+  "models": [
+    "glm-5.3",
+    "glm-5.3-flash"
+  ],
+  "identity": {},
+  "claim": {
+    "enabled": false,
+    "auto": false
+  },
+  "async": {
+    "enabled": false
+  },
+  "highspeed": {
+    "enabled": false
+  },
+  "mcp": {
+    "enabled": false,
+    "gateway": {
+      "enabled": false
+    }
+  },
+  "responses": {
+    "enabled": false
+  },
+  "logging": {
+    "level": "info"
+  }
+}

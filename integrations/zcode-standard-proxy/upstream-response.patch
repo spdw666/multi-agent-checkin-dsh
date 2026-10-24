@@ -1,0 +1,27 @@
+diff --git a/src/proxy/handler.ts b/src/proxy/handler.ts
+--- a/src/proxy/handler.ts
++++ b/src/proxy/handler.ts
+@@ -64,6 +64,8 @@ export interface ProxyHandlerOptions {
+   auth: AuthManager;
+   /** Override the global fetch (for testing). Defaults to global `fetch`. */
+   fetchImpl?: typeof fetch;
++  /** Observe or wrap dispatched responses without replacing the upstream transport. */
++  onUpstreamResponse?: (response: Response, body: string | undefined) => Response | Promise<Response>;
+   /**
+    * When true, emit additional per-request diagnostic lines: upstream URL,
+    * redacted request headers, body preview, upstream response status and
+@@ -311,7 +313,7 @@ export async function proxyRequest(
+     // Signing decisions (exempt-path, handshake origin, bypass keying) run
+     // against the PRE-routing provider URL — the client's signer wraps the
+     // routing transport, so its checks see the original URL too.
+-    return sendWithClientSigning(signer, {
++    const response = await sendWithClientSigning(signer, {
+       url: req.url,
+       headerPairs: pairs,
+       credential: credentialString(cred),
+@@ -345,4 +347,5 @@ export async function proxyRequest(
+         return sendUpstreamRequest(sendReq, outboundPairs, transformedBody, translateMode, useOrderedTransport, fetchImpl, clientReq.signal, hasCustomFetchImpl);
+       },
+     });
++    return opts.onUpstreamResponse ? await opts.onUpstreamResponse(response, transformedBody) : response;
+   };

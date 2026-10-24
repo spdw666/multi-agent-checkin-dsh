@@ -4,7 +4,13 @@ export function gatewayRequestPolicy(runtime={},models=[]){
   if(max!==undefined&&(!Number.isSafeInteger(max)||max<1))throw new TypeError('runtime.maxOutputTokens must be a positive safe integer');
   const configuredMaxTokens=new Map();let streamIdleTimeoutMs=180000;
   for(const m of models){
-    if(max!==undefined&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0)configuredMaxTokens.set(m.id,Math.min(max,m.maxTokens));
+    // piProvider profiles do not infer ModelInfo.defaultMaxTokens from model.maxTokens.
+    // Publish only a provider-declared default (currently verified native ZCode),
+    // so companion middleware does not replace it with a generic registry cap.
+    // This never clamps an explicit per-request GenerateOptions.maxTokens.
+    const declaredDefault=Number.isSafeInteger(m.defaultMaxTokens)&&m.defaultMaxTokens>0?m.defaultMaxTokens:undefined;
+    const requestedDefault=max??declaredDefault;
+    if(requestedDefault!==undefined&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0)configuredMaxTokens.set(m.id,Math.min(requestedDefault,m.maxTokens));
     const declared=m.requestTimeoutMs;
     const knownKimi=m.id==='moonshotai/kimi-k3'||/^nvidia[^/]*\/(?:moonshotai\/)?kimi-k3$/.test(m.id);
     const requested=Number.isSafeInteger(declared)&&declared>0?declared:knownKimi?600000:180000;

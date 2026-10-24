@@ -1,0 +1,127 @@
+# ZCode 标准代理接入
+
+ZCode 模型调用可选走隔离的本机标准代理，再由网关向调用端提供统一 OpenAI 接口。账号、路由、工具执行器和历史仍由原调用端与网关管理，代理不替换 DSH Agent，不接管原 DSH 的文件、命令或其他工具。
+
+## 已验证能力与模型目录
+
+当前验收账号在原 DSH 的 ZCode 目录中有两款模型，均完成真实工具闭环：
+
+| 模型 | DSH 路由示例 | 验收内容 |
+|---|---|---|
+| `glm-5.3` | `zcode-native/glm-5.3` | 原 DSH 实际执行 `read`，结果回填后由模型生成匹配文件内容的最终正文 |
+| `glm-5.3-flash` | `zcode-native/glm-5.3-flash` | 同一原 DSH 工具执行与结果回填闭环；已另测代理停止后的按需冷启动 |
+
+验收保留 **331 个原工具和 128000 输出预算**。用户的 **Default** 模型选择不改为显式 Max；该轮网关实际推理策略为 **`max`**。菜单选择、网关解析后的有效策略和上游实际请求分别记录，不把一个 UI 标签当成完整请求证据。
+
+模型清单以**当前账号权益和实际目录**为准。标准代理中的兼容型号表、大小写映射或别名不是新增账号权益，也不是“表中所有型号都已真实接通”的证明。未在当前目录出现的模型不批量导入，新增型号按自己的普通/SSE/工具/回填结果验收。
+
+## 请求链路
+
+```text
+原 DSH / OpenAI 兼容调用端
+  → 网关路由、账号与同账号冷却检查
+  → 已认证的 loopback 标准代理
+  → 固定版本 ZCode 标准协议链路
+  → 官方模型响应
+  → 原调用端执行工具
+  → 工具结果经同一路线回填
+  → 模型最终正文
+```
+
+- 代理只在 `127.0.0.1` 监听，使用安装时动态生成的本机私有密钥。
+- 上游认证复用网关选中的同一账号；本机桥接密钥与 ZCode 认证分开，私有桥接头不透传到上游。
+- 原始 OpenAI 请求、完整工具 schema、调用 ID 和工具结果通过完整标准转换路径处理，不先转换成另一协议再重复转换。
+- 安装配置关闭代理自身的领取、自动领取、idle、高速模式和 MCP 等非模型路径。原调用端继续拥有工具执行权。
+- 代理由网关 helper 按需隐藏启动，不要求手动保持一个工作终端；安装目录位于 `ConfigStore.dataDir/zcode-standard-proxy`，不依赖临时工作目录。
+
+## 安装
+
+先完成网关的 [源码安装](../README.md#快速开始)、ZCode 官方客户端登录，以及网关中的账号保存和模型路由导入。另需可运行 TypeScript runtime 的 **Bun** 与用于获取固定提交的 Git。`--app-version` 使用已安装 ZCode 的真实应用版本，不把示例版本当成所有机器的默认值。
+
+在网关仓库根目录执行：
+
+```powershell
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE
+```
+
+`BUN_EXE` 替换为实际 Bun 可执行文件。脚本将固定上游版本安装到该配置的数据目录，构建所需 worker，并生成运行配置和私有本机密钥。**安装不发送模型生成请求，也不执行领取或新增账号。** 不把私有运行配置、密钥或安装目录中的登录材料提交到仓库。
+
+### 多个网关代码副本
+
+源码网关、桌面版 core 与 DSH 插件可能是不同代码副本。对要使用这条路线的副本重复指定 `--target-root`：
+
+```powershell
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE --target-root GATEWAY_ROOT --target-root OTHER_GATEWAY_ROOT
+```
+
+`GATEWAY_ROOT` 和 `OTHER_GATEWAY_ROOT` 替换为各自网关代码根目录，而不是用户聊天目录或 DSH 宿主程序目录。显式提供目标时，只配置列出的副本；需要源码根目录也使用代理时，把它一并列出。安装完成后核对回执中的目标数量，以及每个目标的 `src/zcode-standard-proxy.runtime.json`。
+
+### 复用固定提交
+
+已有完整固定提交 checkout 时，可使用 `--source` 避免重复获取源码：
+
+```powershell
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE --source PINNED_CHECKOUT
+```
+
+`PINNED_CHECKOUT` 必须对应下文固定提交，且已跟踪文件保持干净。安装器只复制该提交跟踪的文件，不复制 checkout 中未跟踪的登录文件或 `node_modules`。完全离线安装还需要 Bun 缓存中已有锁定依赖；“复用本地源码”不等于缺失依赖也无需获取。
+
+重复运行本安装器会保留原本机桥密钥。若数据目录已有其他方式创建、缺少安装器来源记录的 runtime，脚本保留原目录并停止；先备份现有部署，再使用干净的数据目录安装，不覆盖未知文件。修改桥版本或客户端版本后，除下面两个网关消费者外，也应停止属于这份配置的旧代理，让下一次请求重新按需启动；安装回执中的 `restart_required=true` 不表示已经替你重启进程。
+
+## 分别重载两个消费者
+
+**DSH 私有 worker 与桌面/CLI HTTP 后台是独立进程。** 一个进程更新不证明另一个已读到新模块。
+
+1. 等待各自正在运行的请求结束，保留当前配置和会话。
+2. DSH bundle 更新后重载其私有 worker；使用界面“重启 DSH”时，该操作会退出客户端，先结束当前任务。bundle 安装与回滚入口见 [DSH](dsh.md)。
+3. 桌面网关独立重启 HTTP 后台；CLI 管理的后台可用同一配置的 `stop` / `start`，不要额外起第二个实例。
+
+```powershell
+node bin/ai-credit.mjs stop --config config.local.json
+node bin/ai-credit.mjs start --config config.local.json
+```
+
+4. 回到各调用端刷新目录，分别确认实际请求已进入新代理分支。进程在线、`/health` 正常或源文件哈希一致，只是运行准备证据，不替代下面的真实模型验收。
+
+## 验收
+
+每个当前目录型号至少分别验证普通正文与原工具闭环；工具测试使用本机新建的无敏感文本文件，并要求模型在实际读取后仅返回文件中的随机校验值。
+
+可复用提示词：
+
+```text
+保持当前所选模型、账号和全部原工具。请使用你原有的文件读取工具读取 SAMPLE_FILE；收到真实工具结果后，只回复文件中 CHECK= 后面的值。不要猜测，不切换模型，不修改设置。
+```
+
+记录并逐项核对：
+
+- 调用端实际选中的模型与档位；默认选择和实际有效推理策略分开记录。
+- 本轮网关账本中的路由、实际供给、请求预算与最终状态。
+- 原调用端真实 `tool/call` 和 `tool/result`，调用 ID 匹配且工具结果无错误。
+- 工具回填后的下一轮上游响应，以及模型最终正文是否匹配随机校验值。
+- 一次停止代理后的按需启动与同样的工具闭环；测试结束恢复用户原选择。
+
+公开仓库只说明验证方法与能力，不附带本机账号、聊天、请求 ID、校验值或私有回执。
+
+## 3012、冷却与诊断
+
+3012 表示官方拒绝本次转发请求，不直接等同于账号整体封禁。网关保留**原始上游 HTTP 状态与业务码**，外层 OpenAI 兼容错误可能另用 503 表示调用失败；两者分别记录，不用外层状态覆盖源状态。
+
+同一账号收到 3012 后进入本地冷却。冷却有效时，本机直接返回已记录原因，不再次向上游发请求；同账号切换另一个 ZCode 模型也可能被该门控拦下。这不是另一型号又实际发出一次失败请求。**本地剩余冷却秒数只表示本机退避期限，不是官方解封时间。** 不自动重放终止错误，也不靠清空冷却反复试探。
+
+排查顺序：核对真实请求型号 → 核对该消费者是否已重载 → 核对完整代理是否就绪与进入分支 → 区分本地拦截和真实派发 → 查看原始 HTTP/业务码及请求诊断。不要将领取成功、余额有值或模型目录可见视为推理成功。
+
+## 回滚
+
+变更前备份每个消费者代码副本及其运行配置。回滚只恢复这次的 ZCode 入口/helper/运行配置，停止属于该配置的代理，再分别重载 DSH worker 与 HTTP 后台；账号、模型路由、默认选择和聊天历史保留。禁用或移除可选代理运行配置后使用既有直接路径，但这不承诺旧直接路径能避开原有上游拒绝。
+
+对独立副本先核对恢复文件的 SHA-256 和基线行为，再操作实际消费者；代理进程退出本身不是回滚完成证据。恢复后分别验证两个消费者的加载状态与请求行为。
+
+## 固定来源与许可
+
+- 标准代理固定 [TriDefender/zcode-api v4.8.5，提交 `9880d91579fdb9d3e59c2bb900add3ab86722003`](https://github.com/TriDefender/zcode-api/tree/9880d91579fdb9d3e59c2bb900add3ab86722003)。
+- 该版本采用 **CC-BY-NC-SA-4.0**，上游 Copyright (c) 2026 TriDefender and the ZCode Proxy contributors；保留其[完整 LICENSE](https://github.com/TriDefender/zcode-api/blob/9880d91579fdb9d3e59c2bb900add3ab86722003/LICENSE)及[许可证官方文本](https://creativecommons.org/licenses/by-nc-sa/4.0/)。
+- 本项目通过 `integrations/zcode-standard-proxy/upstream-response.patch` 给 handler 增加可选响应观察回调，保留原始状态、业务码与账本语义；该上游派生补丁按其原许可标注。
+- `vendor/zcode-context` 是另一个历史提交的三个上下文模块，按该历史提交 README 的 MIT 声明记录。不能把历史 MIT 声明用于重新标注本次 v4.8.5 runtime，也不把本仓库原创代码的 MIT 许可证扩张到独立代理。
+
+完整归属及修改说明见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。

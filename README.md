@@ -43,6 +43,7 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 - [账号自动轮换](#账号自动轮换)
 - [同模型自动接力](#同模型自动接力)
 - [支持的平台与能力边界](#支持的平台与能力边界)
+- [ZCode 标准代理接入](#zcode-标准代理接入)
 - [OpenCode 免费模型接入](#opencode-免费模型接入)
 - [OpenAI 兼容客户端接入](#openai-兼容客户端接入)
 - [DSH 与 Hermes 接入](#dsh-与-hermes-接入)
@@ -70,6 +71,7 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 | 把模型交给 DSH/Hermes | **模型路由 → 全部模型 / 选择导入** | 保存后回到主列表，并在调用端刷新模型列表 |
 | 只测试几款模型 | 主列表勾选 **选测**，点 **测试选中模型**；未导入条目用 `scope:models` 管理 API | 普通、流式、工具和回传四项结果及失败原因；测试不自动导入 |
 | 使用 OpenCode 免费模型 | [OpenCode 接入步骤](#opencode-免费模型接入) | 官方本机服务、最近普通/SSE 结果及文本桥接边界 |
+| 使用 ZCode 模型及原 DSH 工具 | [ZCode 标准代理接入](#zcode-标准代理接入) | 安装本机代理、分别重载 DSH worker 与桌面 HTTP 后台，再验证真实工具闭环 |
 | 检查官方客户端版本或打开软件 | **软件更新 → 刷新 / 立即检查**；双击或右键对应行 | 来源、最后检查时间、缓存与待重启说明；检查不安装更新 |
 | 暂时不发布一款模型 | 模型页取消导入，或 **导出选中模型** | 路由从主列表和 `/v1/models` 隐藏，配置与历史保留 |
 | WB 某账号不再消耗积分 | 浏览该账号，点 **停用该账号** | 显示积分调用已停用；自动签到和任务开关不变 |
@@ -648,6 +650,18 @@ CLI 检测到心跳新鲜的会话或明确运行进程时推迟，不关闭用�
 
 “免费平台”清单说明已有注册适配、接入条件与来源，不承诺你已获得当前免费资格，也不代表每个平台都有自动签到。先看所选平台说明、额度单位和模型目录，再决定是否导入；不接收任意第三方中转站 URL。详见 [直接 API Key 录入](docs/free-provider-key.md)。
 
+## ZCode 标准代理接入
+
+ZCode 可选用本机完整标准代理链路，保留原 DSH 的工具选择、执行和结果回填，不替换成 ZCode Agent。当前账号权益目录中的 **`glm-5.3` 与 `glm-5.3-flash` 两款模型均已在原 DSH 完成真实 `read` → 工具结果回填 → 最终正文验收**，保留 **331 个工具、128000 输出预算**；Default 选择在这次网关请求中实际使用 `max`。型号清单以账号当前目录为准，上游兼容映射表不代表账号获得了其中全部模型。
+
+```powershell
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE
+```
+
+将 `BUN_EXE` 换成实际 Bun 可执行文件，`--app-version` 与已安装 ZCode 客户端版本一致。脚本固定安装上游版本到网关数据目录，动态生成本机私有密钥；安装本身不发送模型请求、不领取额度。需要同步多个网关代码副本时可重复指定 `--target-root GATEWAY_ROOT`，离线复用固定提交可用 `--source PINNED_CHECKOUT`。
+
+**DSH 私有 worker 与桌面/CLI HTTP 后台是不同进程，更新后分别重载。** 只重载其中一个，另一个仍可能执行旧直连代码。代理按需隐藏启动；3012 保留原始上游 HTTP/业务码并触发同账号本地冷却，不自动重发，本地冷却期限不是官方解封时间。完整安装、验收、诊断与回滚见 [ZCode 接入](docs/zcode.md)。
+
 ## OpenCode 免费模型接入
 
 OpenCode 走 **已安装的官方 CLI / 本机服务**，不是把桌面 OAuth 令牌直接发往公共免费推理 URL。网关读取官方服务状态并验证认证后的本机 API；服务未就绪时调用官方 `service start`，重新发现端口后再调用。首次官方登录仍需在 OpenCode 完成。免费目录从官方本机服务实时读取，仅选择 `providerID:opencode` 的 `-free` 条目，模型下线或改名按本轮目录处理。
@@ -1090,6 +1104,7 @@ node --test tests/http.test.mjs
 | [同模型接力](docs/model-relay.md) / [可靠性契约](docs/reliability.md) | 候选跳过、真实尝试、单一重试所有权、typed 根因与期限 |
 | [Windows 运行时与流清理](docs/runtime-reliability.md) | 最低 Node 22.23.3、已验运行时与自然退出验证 |
 | [OpenCode 免费文本桥](docs/opencode.md) | 官方 CLI 冷启动、实时免费目录、可选专用连接与纯文本契约 |
+| [ZCode 标准代理](docs/zcode.md) | 完整代理安装、账号实时目录、原 DSH 工具闭环、双进程重载与 3012 冷却 |
 | [DSH](docs/dsh.md) / [请求策略](docs/dsh-request-policy.md) | bundle、profile、预算与回滚 |
 | [Hermes](docs/hermes.md) / [OpenAI 客户端](docs/openai-clients.md) | Provider、helper 与接入 |
 | [FleshOut](docs/fleshout-sync.md) | 同步、整库备份与冲突检测 |
@@ -1103,7 +1118,7 @@ node --test tests/http.test.mjs
 
 ## 许可与致谢
 
-原创实现采用 [MIT](LICENSE)。第三方保留版权头、完整许可证、固定来源与修改说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。代码复用、独立组件与设计/协议参照分开记录，不把上游整项目功能当成本项目功能。
+原创实现采用 [MIT](LICENSE)。可选 ZCode 标准代理使用的上游 v4.8.5 runtime 采用 **CC-BY-NC-SA-4.0**，与历史 `vendor/zcode-context` 固定提交的 MIT 声明分开记录，不因本仓库 MIT 声明而变更。第三方保留版权头、完整许可证、固定来源与修改说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。代码复用、独立组件与设计/协议参照分开记录，不把上游整项目功能当成本项目功能。
 
 | 项目 | 使用方式 |
 |---|---|
@@ -1117,7 +1132,7 @@ node --test tests/http.test.mjs
 | [ZlaxeyX/workbuddy-auto-checkin](https://github.com/ZlaxeyX/workbuddy-auto-checkin) | 每日幂等/计划任务参照，未照搬旧端点 |
 | [wangmingdong/workbuddy-signin](https://github.com/wangmingdong/workbuddy-signin) | MiniMax 签到与积分卡片组织 |
 | [Shuffle-1992/TraeSign](https://github.com/Shuffle-1992/TraeSign) | ZCode 登录形状与验证流程 |
-| [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | 复用三个上下文模块，保留 vendor NOTICE |
+| [TriDefender/zcode-api](https://github.com/TriDefender/zcode-api) | 历史三个上下文模块保留原提交 MIT 声明与 vendor NOTICE；可选完整标准代理固定 v4.8.5 / CC-BY-NC-SA-4.0，许可与改动另记 |
 | [wicm84266964/Buddy2api](https://github.com/wicm84266964/Buddy2api) | 千问协议助手与完整许可 |
 | [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | 官方目录/Mavis/Matrix 核对，独立统一映射 |
 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | bundle / Provider / PiAiAdapter 契约 |
