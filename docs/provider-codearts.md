@@ -4,7 +4,7 @@
 
 真实业务面：current/user认证；statistics/plugin独立积分账本；model/builtin目录；ops/delivery每日活动；claim后confirm并重读delivery。今日已CONFIRMED，不重复提交。余额与签到读取独立容错，Token单列不并入积分。
 
-当前已验证合同覆盖 builtin 目录的 9 个型号。普通回答、SSE、原生工具调用与结果回传的正式网关四链路测试为 36/36；这与原 DSH 完整工具集验收分开：后者保留 331 个工具，已有 8/9 型号完成真实读取、配对结果回传和最终随机内容核对，Kimi-K3 仍受上游大 Schema 编译限制。逐型号状态见[验证快照](codearts-validation.md)。未知新型号不自动宣称可调用。
+当前已验证合同覆盖 builtin 目录的 9 个型号。普通回答、SSE、原生工具调用与结果回传的正式网关四链路测试为 36/36；这与原 DSH 完整工具集验收分开：后者保留 331 个工具，9/9 型号均完成真实读取、配对结果回传和最终随机内容核对，包含 Kimi-K3。逐型号状态见[验证快照](codearts-validation.md)。未知新型号不自动宣称可调用。
 
 容量是网关本地合同（source=`configured_limit`），不是从 builtin 目录读到的官方数值；`officialContextWindow` 和 `officialMaxTokens` 保持 null。本地默认值、硬上限和显式调用预算分开，未宣称已生成至最大输出长度。
 
@@ -58,7 +58,9 @@ GLM-5.2 的 toolRoundtripVerified=true 来自正式网关上实际 DSH 与 Herme
 
 仅对 Kimi-K3 展开明确采用 2019-09/2020-12 语义的非递归本地引用。共享 DAG 引用按实例独立展开；`$ref` 的兄弟断言以 `allOf` 保持合取。真正的递归、外部引用、动态引用、旧草案或资源上限命中时，完整保留原 Schema，不截断深度、不减少工具、不放宽为通用 JSON。其它型号的工具 Schema 不变，调用者对象不就地修改。
 
-这是引用兼容修复，不是大工具集已通过的声明。实际完整 DSH 工具集仍遇到 `InferHub.ModelArts.81001.400` / `schema exceeds maximum allowed size`。较紧凑的等价候选只完成离线差分与单函数编译诊断，尚未纳入产品；全 331 工具的 Kimi-K3 闭环仍待后续验收。
+单纯展开曾触发 `InferHub.ModelArts.81001.400` / `schema exceeds maximum allowed size`。现进一步提取闭合对象重复约束及全部 anyOf/oneOf 分支共同约束到强制 allOf 合取层，最大函数从154071缩至65118字符；保留全部331工具、名称、顺序和参数验证语义。特殊数据键安全保留，遇到未验证的资源/动态/tuple/旧依赖作用域时整输入原样返回。
+
+紧凑化已部署并完成原DSH实际 read、配对结果回填、最终随机正文核对，两次实际生成均为同一CodeArts供给；当前完整331工具验收9/9。独立验证器82907次差分零差异，保护域及反例另有测试。该65118是实际测量值，不冒充官方统一大小上限；实际短输入也不证明最大上下文或最大生成长度。
 
 HTTP 200 中的 SSE 业务错误仍按失败处理，保留有界、脱敏的 `upstreamCode/upstreamMessage/upstreamStatus`；CodeArts 的序列化错误正文也保留业务码，便于区分 Schema、认证、限流与网络错误。不因传输 HTTP 200 将其记为调用成功。
 

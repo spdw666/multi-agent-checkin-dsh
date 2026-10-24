@@ -1,3 +1,4 @@
+import {compactExpandedSchema} from './codearts-schema-compact.mjs';
 import {normalizeLocalRefs} from './codearts-schema.mjs';
 import {desktopSseResponse,desktopCompletionLimit} from './provider-sse.mjs';
 import {join,dirname} from 'node:path';
@@ -634,7 +635,9 @@ export function buildCodeArtsChatBody(input, model, chatId) {
   if(model==='kimi-k3'&&Array.isArray(body.tools))body.tools=body.tools.map(tool=>{
     const parameters=tool?.function?.parameters;if(!parameters||typeof parameters!=='object')return tool;
     const normalized=normalizeLocalRefs(parameters);
-    return normalized.changed?{...tool,function:{...tool.function,parameters:normalized.schema}}:tool;
+    if(normalized.status!=='expanded')return tool;
+    const compacted=compactExpandedSchema(normalized.schema);
+    return normalized.changed||compacted.report.savedBytes>0?{...tool,function:{...tool.function,parameters:compacted.schema}}:tool;
   });
   body.max_tokens = desktopCompletionLimit(input, 65536, 2048);
   return body;

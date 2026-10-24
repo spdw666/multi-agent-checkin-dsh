@@ -669,7 +669,7 @@ node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-ver
 
 网关保留独立聊天与工具回填关联，并向 DSH 首包传递模型专属的上下文和默认输出预算；不削减工具集、不静默裁剪显式预算。更新后分别确认 DSH worker 和桌面 HTTP 后台已载入新代码，再刷新模型目录。
 
-**验证层级分开看**：9 型号正式四链路测试为 36/36，两款 VL 图片测试通过；原 DSH 保留全部 331 工具的真实读取/回填/最终正文闭环为 8/9。Kimi-K3 的完整大 Schema 仍被上游编译器拒绝，不能把简单工具体检通过写成完整客户端通过。容量标记为本地 configured_limit，不冒充官方声明或已验证最大输出长度。
+**验证层级分开看**：9 型号正式四链路测试为 36/36，两款 VL 图片测试通过；原 DSH 保留全部 331 工具的真实读取/回填/最终正文闭环为 9/9。Kimi-K3 已通过保留全部参数约束的无引用紧凑化完成完整闭环；简单工具体检与完整客户端验收仍分别记录。容量标记为本地 configured_limit，不冒充官方声明或已验证最大输出长度。
 
 接入与错误分类见[CodeArts 适配说明](docs/provider-codearts.md)；逐型号容量、实测快照及尚未通过项见[CodeArts 验证快照](docs/codearts-validation.md)。
 
