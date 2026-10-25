@@ -17,7 +17,9 @@
 - 目录来源及发现时间只证明可见条目，不证明当前账号有调用权益。
 - 官方缺失、改名、地区差异及账号权益变化要分别核对；历史曾测 ID 缺失不是单独的下架证明。
 - 非聊天模型保留明确分类，专用图像/音频/向量 API 不冒充 DSH/Hermes 聊天模型。
-- 工具声明不是工具执行证据。每款保留的 Agent 模型在每个客户端分别核验实际文件工具、配对结果回填、最终随机字符串及确切供应账本；普通回答和 HTTP 200 不代替这一步。
+- 连通性先逐型号、逐客户端发送一条无工具短消息，核对非空最终回复、实际错误、耗时及精确供应账本；不先用长历史或完整工具配置阻塞基本检查。
+- 工具声明不是工具执行证据。短消息回复、简单工具闭环、完整原生配置分别统计；工作验收仍检查实际文件工具、配对结果回填、最终回复及确切供应账本。普通回答和 HTTP 200 不代替工具执行证据。
+- 单型号套餐拒绝只关闭对应型号的本次尝试；账号级认证、资源耗尽或明确限流才按相应账号池处理。保留原拒绝、未提交和新条件补测记录，不覆盖历史来扩大成功数。
 
 ## 原生目录参数与容量来源
 
@@ -25,7 +27,15 @@ Trae 的 remote 展示目录和原生 chat wire 目录分别读取。合并时�
 
 Qoder 的 `context_config` 和 `thinking_config` 是原生参数声明，保存在 `qoderNativeParameters`，带 `source` 与 `wireVerified:false`。Context 选项保留原 ID、`token_count` 与严格布尔默认标记；Thinking 保留 mode、原生 effort ID 与默认标记。只有一个明确默认项时才给出默认值，多个默认项、缺失或畸形声明保持未知。
 
-这层原始声明不覆盖实际 `max_input_tokens`，不替缺失输入容量的型号开启 callable，也不自动生成通用 `reasoningEfforts` 或添加请求字段。目录没有官方输出声明时，既有配置默认值继续标记为 `configured_default`，`officialMaxTokens` 保持 null。原显式预算、采样、图像、工具和结果回填均保持。原生字段契约可对照 [Qoder SDK 模型选择策略](https://docs.qoder.com/cli/sdk/model-policy) 与 [TypeScript ModelInfo 参考](https://docs.qoder.com/cli/sdk/references-typescript)；当前账号的具体值仍以当前签名目录为准。
+这层原始声明不覆盖实际 `max_input_tokens`，不替缺失输入容量的型号开启 callable，也不自动生成通用 `reasoningEfforts` 或从目录默认项强加请求控制。目录没有官方输出声明时，既有配置默认值继续标记为 `configured_default`，`officialMaxTokens` 保持 null。原显式预算、采样、图像、工具和结果回填均保持。原生字段契约可对照 [Qoder SDK 模型选择策略](https://docs.qoder.com/cli/sdk/model-policy) 与 [TypeScript ModelInfo 参考](https://docs.qoder.com/cli/sdk/references-typescript)；当前账号的具体值仍以当前签名目录为准。
+
+## Qoder 请求与流式信封
+
+请求保留原有 OpenAI 字段，同时把有效输出预算写入原生 `parameters.max_tokens`。仅调用方明确指定时才传递 `temperature`、`top_p`、`tool_choice`、`reasoning_effort` / `enable_thinking` 及已声明的 `contextWindow` → `context_length`；`none` 同步关闭原生 model config 的 reasoning 标记。没有显式上下文选项就不添加默认选择，也不改变 `model_config.max_input_tokens`。
+
+流式响应先区分传输 HTTP 与 SSE 内层 wrapper。当前 wrapper 同时含 `statusCodeValue` 和 `body`，普通事件只接受 numeric `200`；`event: finish` 的状态豁免仍保留 body 内实际 error 的检查。先解析有效 body，外层矛盾字段不覆盖它；普通 payload 的 `code` 不是通用失败判据。null、缺失或 null choices、usage 和控制 marker 按各自语义处理。
+
+当前原生 wrapper 已有正文、reasoning 或工具进展后，EOF 可结束；只收到控制帧不当作模型回复。旧 body-only wrapper 保留原有完整帧和结束标记检查。解析错误提供有界 reason、机器码和状态，不把 raw body、异常文本或凭据写入诊断。此兼容合同不证明账号套餐、模型权限或双客户端工作验收通过。
 
 ## DSH 型号默认预算
 

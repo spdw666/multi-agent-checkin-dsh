@@ -75,14 +75,84 @@ export async function qoderStatus(c,task='daily-checkin',options={}){if(task!=='
 export function normalizeQoderQuota(q){const clean=x=>x&&typeof x==='object'?Object.fromEntries(['total','used','remaining','percentage','unit'].filter(k=>typeof x[k]==='number'||k==='unit'&&typeof x[k]==='string').map(k=>[k,x[k]])):null;const userQuota=clean(q.userQuota),addOnQuota=clean(q.addOnQuota);return {source:'official_quota_usage',unit:'credits',total:userQuota?.remaining!=null&&addOnQuota?.remaining!=null?userQuota.remaining+addOnQuota.remaining:null,userQuota,addOnQuota,expiresAt:q.expiresAt??null,isQuotaExceeded:q.isQuotaExceeded===true}}
 export async function qoderHealth(c,options={}){const [sr,qr]=await Promise.allSettled([qoderStatus(c,'daily-checkin',options),openapi(c,'/api/v2/quota/usage',options)]);if(sr.status==='rejected'&&qr.status==='rejected')throw sr.reason;const checkin=sr.status==='fulfilled'?sr.value:{known:false,active:false,claimable:false,claimed:false,error:sr.reason.code??'provider_status_failed'},credits=qr.status==='fulfilled'?normalizeQoderQuota(qr.value):{total:null,error:qr.reason.code??'provider_balance_failed'};return {status:'authenticated',supportsCheckin:checkin.known?checkin.supportsCheckin===true:null,checkinKnown:checkin.known===true,checkinError:checkin.known?null:checkin.error,checkin,credits,balance:{value:credits.total,unit:'Credits',parts:[{name:'套餐',value:credits.userQuota?.remaining??null,unit:'Credits'},{name:'加购',value:credits.addOnQuota?.remaining??null,unit:'Credits'}],note:!checkin.known?'签到状态读取失败，未确认活动是否开启':credits.error?'余额读取失败；签到独立核验':'官方额度；活动每日10:00(UTC+8)刷新',checkedIn:checkin.known?checkin.claimed:null},capabilities:{checkin:checkin.known?checkin.supportsCheckin===true:null,inference:true}}}
 export async function qoderClaim(c,task='daily-checkin',options={}){const before=await qoderStatus(c,task,options),eligible=before.campaigns.filter(x=>x.claimable);if(!eligible.length)return {...before,submitted:false,alreadyClaimed:before.claimed};const results=[];for(const item of eligible){if(!/^[\w-]+$/.test(item.id))throw new AppError('Qoder活动标识无效',502,'provider_invalid_response');const path='/sash/api/v1/me/campaigns/'+item.id;const receipt=await openapi(c,path+'/claim',{...options,body:{}});const reward=await openapi(c,path+'/reward',options);results.push({id:item.id,status:receipt.status,replayed:receipt.replayed===true,rewardStatus:reward.status??reward.claimStatus??null,amount:item.amount})}const after=await qoderStatus(c,task,options);if(results.some(x=>!after.campaigns.some(y=>y.id===x.id&&y.claimed)))throw new AppError('Qoder领取后状态尚未确认',502,'provider_claim_unconfirmed');const credits=normalizeQoderQuota(await openapi(c,'/api/v2/quota/usage',options));return {...after,submitted:true,rechecked:true,alreadyClaimed:results.every(x=>x.replayed),results,credit:results.filter(x=>!x.replayed).reduce((sum,x)=>sum+(Number(x.amount)||0),0),quota:credits}}
+const qoderBusinessCodes=new Set(['invalid_request','invalid_request_error','model_not_found','permission_denied','unauthorized','rate_limit','rate_limited','quota_exceeded','insufficient_quota','resource_exhausted','overloaded','server_error','context_length_exceeded']);
+const qoderStreamFailures=new WeakSet();
+function qoderStreamError(reason,packet){
+ // Never retain raw frame/message/header/body/exception text. Numeric business
+ // codes and a closed machine-code set survive; arbitrary text is not a code.
+ const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value),root=record(packet)?packet:{},error=record(root.error)?root.error:{};
+ const safeCode=value=>Number.isSafeInteger(value)&&Math.abs(value)<=999999999999?value:typeof value==='string'&&/^\d{1,12}$/.test(value)?value:typeof value==='string'&&qoderBusinessCodes.has(value.toLowerCase())?value.toLowerCase():undefined;
+ const safeStatus=value=>{const n=typeof value==='string'&&/^\d{3}$/.test(value)?Number(value):value;return Number.isInteger(n)&&n>=100&&n<=599?n:undefined};
+ const code=safeCode(error.code)??safeCode(root.code),status=[root.statusCodeValue,root.status,error.status,root.status_code,error.status_code].map(safeStatus).find(value=>value!==undefined);
+ const e=new AppError(`Qoder响应失败 [reason=${reason}${code!==undefined?`; upstreamCode=${code}`:''}${status!==undefined?`; upstreamStatus=${status}`:''}]`,502,'provider_stream_error');
+ e.qoderFailureReason=reason;if(code!==undefined)e.upstreamCode=code;if(status!==undefined)e.upstreamStatus=status;qoderStreamFailures.add(e);return e;
+}
 export function unwrapQoderSSE(body){
- const reader=body.getReader(),decoder=new TextDecoder(),encoder=new TextEncoder();let buffer='',finished=false,done=false;
- const stream=new ReadableStream({async pull(ctrl){try{for(;;){const n=await reader.read();if(n.done){done=true;buffer+=decoder.decode();if(buffer.trim())throw Error('truncated');if(!finished)throw Error('unfinished');ctrl.enqueue(encoder.encode('data: [DONE]\n\n'));ctrl.close();reader.releaseLock();return}buffer=(buffer+decoder.decode(n.value,{stream:true})).replaceAll('\r\n','\n');if(buffer.length>4*1024*1024)throw Error('frame limit');let i;let emitted=false;while((i=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,i);buffer=buffer.slice(i+2);const line=frame.split('\n').filter(x=>x.startsWith('data:')).map(x=>x.slice(5).trimStart()).join('\n');if(!line)continue;if(line==='[DONE]'){finished=true;continue}let parsed=JSON.parse(line);if(parsed.body==='[DONE]'){finished=true;continue}if(typeof parsed.body==='string')parsed=JSON.parse(parsed.body);else if(parsed.body&&typeof parsed.body==='object')parsed=parsed.body;else if(parsed.headers&&!parsed.choices)continue;if(parsed.error||parsed.code&&!parsed.choices)throw Error('upstream error');if(!Array.isArray(parsed.choices))continue;if(parsed.choices.some(x=>x.finish_reason!=null))finished=true;ctrl.enqueue(encoder.encode('data: '+JSON.stringify(parsed)+'\n\n'));emitted=true}if(emitted)return}}catch{done=true;await reader.cancel().catch(()=>{});ctrl.error(new AppError('Qoder响应中断或服务端错误',502,'provider_stream_error'))}},async cancel(reason){if(!done){done=true;await reader.cancel(reason)}}});return stream;
+ const reader=body.getReader(),decoder=new TextDecoder(),encoder=new TextEncoder();let buffer='',finished=false,done=false,released=false,nativeWrapperSeen=false,modelPayloadSeen=false,pendingParseFailure,lastControl;
+ const release=()=>{if(!released){released=true;reader.releaseLock()}};
+ const marker=text=>text==='[DONE]'||text==='[NOT_EXCEED_QUOTA]'||text.startsWith('[EXCEED_QUOTA]')||text.startsWith('[NOTIFICATIONS]');
+ const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+ const payloadSeen=packet=>{const d=packet.choices?.[0]?.delta??packet.choices?.[0]?.message;return typeof d?.content==='string'&&d.content.length>0||typeof d?.reasoning_content==='string'&&d.reasoning_content.length>0||d?.reasoning_item!==undefined||!!d?.responses_reasoning_update?.encrypted_content||!!d?.tool_calls?.some(call=>(call?.id?.length??0)>0||(call?.function?.name?.length??0)>0||(call?.function?.arguments?.length??0)>0)};
+ const stream=new ReadableStream({async pull(ctrl){try{for(;;){
+  const n=await reader.read();if(n.done){done=true;buffer+=decoder.decode();if(buffer.trim())throw qoderStreamError('incomplete_frame');if(pendingParseFailure&&!modelPayloadSeen)throw pendingParseFailure;if(!finished&&!(nativeWrapperSeen&&modelPayloadSeen))throw lastControl??qoderStreamError('missing_finish');ctrl.enqueue(encoder.encode('data: [DONE]\n\n'));ctrl.close();release();return}
+  buffer=(buffer+decoder.decode(n.value,{stream:true})).replaceAll('\r\n','\n');if(buffer.length>4*1024*1024)throw qoderStreamError('frame_limit');let i;let emitted=false;
+  while((i=buffer.indexOf('\n\n'))>=0){
+   const frame=buffer.slice(0,i);buffer=buffer.slice(i+2);const lines=frame.split('\n'),line=lines.filter(x=>x.startsWith('data:')).map(x=>x.slice(5).trimStart()).join('\n').trim(),event=lines.find(x=>x.startsWith('event:'))?.slice(6).trim();if(!line)continue;if(line==='[DONE]'){finished=true;continue}if(marker(line))continue;if(event==='finish')finished=true;
+   let parsed;
+   try{
+    try{parsed=JSON.parse(line)}catch{throw qoderStreamError('invalid_frame_json')}
+    if(parsed===null)continue;if(!record(parsed))throw qoderStreamError('invalid_frame_shape');
+    const wrapper=parsed.statusCodeValue!==undefined&&parsed.body!==undefined;
+    if(wrapper){
+     nativeWrapperSeen=true;const envelope=parsed;
+     // Current native $2 checks wrapper status BEFORE unwrapping. A plain
+     // code (including '0') is not the packet HTTP-success discriminator.
+     if(envelope.statusCodeValue!==200&&event!=='finish'){
+      let detail={};if(typeof envelope.body==='string'){try{const value=JSON.parse(envelope.body);if(record(value))detail=value}catch{}}
+      throw qoderStreamError('upstream_packet_status',{...detail,statusCodeValue:envelope.statusCodeValue});
+     }
+     if(envelope.body==null)continue;if(typeof envelope.body!=='string')throw qoderStreamError('invalid_wrapper_body',envelope);
+     const inner=envelope.body.trim();if(!inner||marker(inner)){if(inner==='[DONE]')finished=true;continue}
+     try{parsed=JSON.parse(inner)}catch{throw qoderStreamError('invalid_body_json',envelope)}
+    }else{
+     if(parsed.error)throw qoderStreamError('upstream_business_error',parsed);
+     // Preserve the preexisting body-only envelope for older gateways/tests.
+     if(typeof parsed.body==='string'){const inner=parsed.body.trim();if(marker(inner)){if(inner==='[DONE]')finished=true;continue}try{parsed=JSON.parse(inner)}catch{throw qoderStreamError('invalid_body_json',parsed)}}else if(record(parsed.body))parsed=parsed.body;
+    }
+    if(parsed===null)continue;if(!record(parsed))throw qoderStreamError('invalid_body_shape');
+    if(parsed.error)throw qoderStreamError('upstream_business_error',parsed);
+    if(parsed.choices==null){if(parsed.usage)parsed={...parsed,choices:[]};else{lastControl=qoderStreamError('missing_finish',parsed);continue}}
+    if(!Array.isArray(parsed.choices)||parsed.choices.some(choice=>!record(choice)))throw qoderStreamError('invalid_choices');
+   }catch(error){
+    if(qoderStreamFailures.has(error)&&!['upstream_business_error','upstream_packet_status'].includes(error.qoderFailureReason)){pendingParseFailure=error;continue}throw error;
+   }
+   if(payloadSeen(parsed))modelPayloadSeen=true;if(parsed.choices.some(x=>x.finish_reason!=null))finished=true;ctrl.enqueue(encoder.encode('data: '+JSON.stringify(parsed)+'\n\n'));emitted=true;
+  }if(emitted)return
+ }}catch(error){done=true;await reader.cancel().catch(()=>{});release();ctrl.error(qoderStreamFailures.has(error)?error:qoderStreamError('transport_error'))}},async cancel(reason){if(!done){done=true;try{await reader.cancel(reason)}finally{release()}}}});return stream;
+}
+function qoderRequestParameters(input,model,max){
+ // Current 0.4.11 worker l3e/Qtt puts generation controls in parameters;
+ // its FKl separately preserves the original model max_input_tokens.
+ const parameters={max_tokens:max};for(const key of ['temperature','top_p','tool_choice'])if(input[key]!==undefined)parameters[key]=input[key];
+ if(input.reasoning_effort!==undefined){
+  const effort=typeof input.reasoning_effort==='string'?input.reasoning_effort.trim().toLowerCase():'';
+  if(!['none','low','medium','high','xhigh','max'].includes(effort))throw new AppError('Qoder思考档格式无效',400,'reasoning_effort_not_supported');
+  const declared=model.qoderNativeParameters?.thinking;
+  if(declared&&(effort==='none'?!declared.modes.some(mode=>mode.id==='disabled'):declared.efforts.length&&!declared.efforts.some(option=>option.id===effort)))throw new AppError('Qoder当前型号未声明该思考档',400,'reasoning_effort_not_supported');
+  parameters.reasoning_effort=effort;parameters.enable_thinking=effort!=='none';
+ }
+ if(input.contextWindow!==undefined){
+  const context=input.contextWindow,options=model.qoderNativeParameters?.context?.options;
+  if(!Number.isSafeInteger(context)||context<=0||(options?.length?!options.some(option=>option.tokenCount===context):context>model.contextWindow))throw new AppError('Qoder当前型号未声明该上下文选项',400,'provider_context_option_invalid');
+  parameters.context_length=context;
+ }
+ return parameters;
 }
 export function normalizeQoderMessages(messages){return messages.map(m=>{let out={...m};if(out.tool_calls&&out.content==null)out.content='';if(out.role==='developer'){out.role='system';delete out.tool_calls}return out})}
 export async function qoderChat(upstream,c,input,signal,options={}){
  const models=await qoderModels(c,{...options,signal}),m=models.find(x=>x.id===input.model);if(!m?.callable)throw new AppError('Qoder模型缺失已核验容量',400,'provider_model_unverified');const max=input.max_tokens??input.max_completion_tokens??m.maxTokens;if(!Number.isSafeInteger(max)||max<=0||max>m.maxTokens)throw new AppError('Qoder输出超过配置上限',400,'provider_output_limit');
  const request=randomUUID(),set=randomUUID(),session=randomUUID(),messages=input.messages??[],text=messages.filter(x=>x.role==='user').at(-1)?.content??'',prompt=typeof text==='string'?text:'';let p={model:m.id,stream:true,stream_options:{include_usage:true},max_tokens:max};for(const k of ['messages','tools','tool_choice','temperature','top_p','stop','presence_penalty','frequency_penalty','reasoning_effort'])if(input[k]!==undefined)p[k]=input[k];p.messages=normalizeQoderMessages(messages);p={...p,request_id:request,request_set_id:set,chat_record_id:request,session_id:session,chat_task:'FREE_INPUT',chat_context:{text:prompt,features:[],extra:{context:[],modelConfig:{key:m.id,is_reasoning:m.isReasoning===true},originalContent:prompt},chatPrompt:'',imageUrls:null},is_reply:true,is_retry:false,source:1,version:'3',agent_id:'agent_common',task_id:'common',session_type:'qoderclicn',aliyun_user_type:'',model_config:{key:m.id,display_name:m.name,model:'',format:'openai',is_vl:m.multimodal,is_reasoning:m.isReasoning===true,api_key:'',url:'',source:'system',max_input_tokens:m.contextWindow},business:{product:'cli',version:VERSION,type:'agent',id:set,name:prompt.slice(0,10),begin_at:Date.now(),stage:'processing'}};
- const url=region(c).infer+'/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1',signed=signQoder(url,JSON.stringify(p),c,{model:m.id}),r=await(options.fetchImpl??providerFetch)(url,{method:'POST',...signed,headers:{...signed.headers,Accept:'text/event-stream'},signal,proxyUrl:c.proxyUrl,redirect:'error'});if(!r.ok){await r.body?.cancel();throw new AppError(`Qoder聊天 HTTP ${r.status}`,r.status,'provider_chat_rejected')}if(!r.body)throw new AppError('Qoder响应为空',502,'provider_stream_error');return {response:new Response(unwrapQoderSSE(r.body),{status:200,headers:{'Content-Type':'text/event-stream'}})};
+ p.parameters=qoderRequestParameters(input,m,max);if(p.parameters.enable_thinking===false){p.model_config.is_reasoning=false;p.chat_context.extra.modelConfig.is_reasoning=false;}
+ const url=region(c).infer+'/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1',signed=signQoder(url,JSON.stringify(p),c,{model:m.id}),r=await(options.fetchImpl??providerFetch)(url,{method:'POST',...signed,headers:{...signed.headers,Accept:'text/event-stream'},signal,proxyUrl:c.proxyUrl,redirect:'error'});if(!r.ok){await r.body?.cancel();throw new AppError(`Qoder聊天 HTTP ${r.status}`,r.status,'provider_chat_rejected')}if(!r.body)throw qoderStreamError('empty_body');return {response:new Response(unwrapQoderSSE(r.body),{status:200,headers:{'Content-Type':'text/event-stream'}})};
 }
 export const qoderProvider={resolve:resolveQoderCredential,models:qoderModels,health:qoderHealth,status:qoderStatus,claim:qoderClaim,chat:qoderChat};
