@@ -773,6 +773,8 @@ Trae 的展示目录与实际 chat 通道分别核验；输出上限只采用精
 
 Qoder 请求按原生 `parameters` 信封传递输出预算，以及调用方明确指定的思考档、采样和已声明的上下文选项；上下文选择器不改写模型实际输入上限。SSE 同时区分传输 HTTP 与内层 `statusCodeValue`，保留有界、脱敏的失败原因和状态，不再把内层拒绝一律折叠成无原因的流错误。兼容原生 finish、空控制帧及已有实际模型内容后的 EOF；控制帧、目录可见和离线回归都不算模型回复或账号权益证明。
 
+Lobster 缺省的输入容量按精确型号分别保留来源：既有六项来自原客户端 registry；`qwen3.5-plus-2026-04-20` 采用制造商对同一快照的 1,000,000 tokens 声明，并标记 `manufacturer_documentation`，不冒充 Lobster 官方通道声明。官方有效容量优先，显式异常值不套用回退，其他型号不借用该容量；输出预算、权益和工具声明不随此改变。见 [精确来源说明](docs/lobster-qwen-manufacturer-context.md)。
+
 当前 Qoder 协议兼容基线与已核验原客户端 `1.1.75-hotfix.1` 对齐，同步使用在 `Cosy-Version`、COSY payload 和签名 body 的版本字段；身份、签名算法、协议 v1/v3 与调用方参数保持。版本对齐本身不作为型号已接通的证据。
 
 Qoder 对显式 `message` JSON 链保留有界内层业务码和有限排队字段，避免把所有外层 403 直接等同于余额不足；最多解析四层，每段 UTF-8 不超过 4096 字节，不记录原始消息。此诊断不自动启用轮询、重放或账户切换；只有实际取得内层码后才判断相应条件。参考 [Qoder 官方队列状态说明](https://docs.qoder.com/cli/sdk/references-typescript#sdkmodelqueuestatusmessage)。

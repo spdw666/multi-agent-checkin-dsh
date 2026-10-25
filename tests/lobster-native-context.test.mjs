@@ -41,9 +41,18 @@ for (const [id, value] of Object.entries(expected)) {
 }
 for(const id of ['qwen3.5-plus-2026-04-20','glm-5v-turbo','doubao-seed-2-0-code-preview-260215']) test(`generic selector never grants capacity: ${id}`,async()=>{
   const [m]=await catalog([entry(id,{contextWindows:[{id:'model-default',contextWindow:200000}],presetContextWindows:{balanced:400000}})]);
-  assert.equal(m.contextWindow,null);assert.equal(m.officialContextWindow,null);
-  assert.equal(m.contextWindowSource,null);assert.equal(m.callable,false);
-  assert.equal(m.callableReason,'context_window_unknown');assert.equal(m.contextWindowEvidence,undefined);
+  // The exact Qwen snapshot now has a separately sourced manufacturer declaration.
+  // The generic selector still grants no capacity; the declared 1M does not
+  // borrow its 200k selector or the unrelated 400k preset.
+  if (id === 'qwen3.5-plus-2026-04-20') {
+    assert.equal(m.contextWindow,1000000);assert.equal(m.officialContextWindow,null);
+    assert.equal(m.contextWindowSource,'manufacturer_documentation');assert.equal(m.callable,true);
+    assert.equal(m.callableReason,null);assert.equal(m.contextWindowEvidence.declaredContextWindow,1000000);
+  } else {
+    assert.equal(m.contextWindow,null);assert.equal(m.officialContextWindow,null);
+    assert.equal(m.contextWindowSource,null);assert.equal(m.callable,false);
+    assert.equal(m.callableReason,'context_window_unknown');assert.equal(m.contextWindowEvidence,undefined);
+  }
 });
 for(const value of [0,-1,1.5,'204800',false,Number.MAX_SAFE_INTEGER+1])test(`explicit invalid context has no fallback: ${JSON.stringify(value)}`,async()=>{
   const [m]=await catalog([entry('MiniMax-M2.7',{contextWindow:value})]);

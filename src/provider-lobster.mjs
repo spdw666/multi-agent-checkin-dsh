@@ -318,6 +318,19 @@ const NATIVE_CONTEXT_WINDOWS = Object.freeze({
   'glm-5.1': 202800,
   'glm-5': 202800,
 });
+// Exact snapshot declaration by the model manufacturer; this is not a Lobster
+// service-advertised capacity or a generic family/default limit.
+const MANUFACTURER_CONTEXT_EVIDENCE = Object.freeze({
+  source: 'manufacturer_documentation',
+  modelId: 'qwen3.5-plus-2026-04-20',
+  manufacturer: 'Alibaba Cloud Model Studio',
+  sourceUrl: 'https://www.alibabacloud.com/help/en/model-studio/qwen3-5-plus',
+  contentSha256: '11655aaaec6367d0c109629280f21de0bf9d0b2f5aa75a079281690039abe063',
+  textSha256: 'd84a5b3c1cc5a895c02ba0c513bea91542fae079810cf5e2165bed28ffd7ace2',
+  section: 'Snapshot Versions / qwen3.5-plus-2026-04-20 / Context Limits',
+  capturedAt: '2026-10-25T12:59:42.876Z',
+  declaredContextWindow: 1000000,
+});
 export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signal, timeoutMs = 30000} = {}) {
   if (typeof fetchImpl !== 'function') throw new AppError('LobsterAI 网络请求需要显式注入 fetchImpl', 400, 'lobster_fetch_not_injected');
   if (!secret?.accessToken) throw new AppError('LobsterAI 凭据不可用', 401, 'lobster_credential_missing');
@@ -332,8 +345,9 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
     // Only absent/null metadata uses the pinned native exact-ID declaration.
     // An explicit malformed/zero/negative value stays unknown, not a fallback.
     const nativeContextWindow = entry.contextWindow == null && Object.hasOwn(NATIVE_CONTEXT_WINDOWS, id) ? NATIVE_CONTEXT_WINDOWS[id] : null;
-    const contextWindow = officialContextWindow ?? nativeContextWindow;
-    const contextWindowSource = officialContextWindow !== null ? 'official_catalog' : nativeContextWindow !== null ? 'native_client_registry' : null;
+    const manufacturerContextWindow = entry.contextWindow == null && id === MANUFACTURER_CONTEXT_EVIDENCE.modelId ? MANUFACTURER_CONTEXT_EVIDENCE.declaredContextWindow : null;
+    const contextWindow = officialContextWindow ?? nativeContextWindow ?? manufacturerContextWindow;
+    const contextWindowSource = officialContextWindow !== null ? 'official_catalog' : nativeContextWindow !== null ? 'native_client_registry' : manufacturerContextWindow !== null ? 'manufacturer_documentation' : null;
     const thinkingOptions = Array.isArray(entry?.thinkingConfig?.options) ? entry.thinkingConfig.options.map(o => o?.level).filter(v => typeof v === 'string') : [];
     thinkingProfiles.set(id,thinkingOptions);
     const accessible = entry?.accessible !== false;
@@ -343,7 +357,7 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
       contextWindow,
       officialContextWindow,
       contextWindowSource,
-      ...(nativeContextWindow !== null ? {contextWindowEvidence: NATIVE_CONTEXT_EVIDENCE} : {}),
+      ...(nativeContextWindow !== null ? {contextWindowEvidence: NATIVE_CONTEXT_EVIDENCE} : manufacturerContextWindow !== null ? {contextWindowEvidence: MANUFACTURER_CONTEXT_EVIDENCE} : {}),
       maxTokens: CONFIGURED_OUTPUT_TOKENS,
       maxTokensSource: 'configured_default',
       officialMaxTokens: null,
