@@ -299,6 +299,25 @@ async function lobsterRequest(secret, {method = 'GET', path, query, body, fetchI
  * a conservative `maxTokens` marked `maxTokensSource:'configured_default'` (never claimed as official).
  * `supportsToolCalling` is null upstream on every observed entry → tools:false rather than a guess.
  */
+// Version-pinned metadata declaration from the installed official native client.
+// This is the native registry's exact-ID fallback for LobsteraiServer, not a
+// service-advertised capacity. No runtime options or local config can extend it.
+const NATIVE_CONTEXT_EVIDENCE = Object.freeze({
+  source: 'native_client_registry',
+  nativeVersion: '2026.10.23',
+  artifactSha256: '9e64675081a5e9c689b35672ee864ab878df4c88c3bb177ea08dab11b028a7f6',
+  member: 'dist-electron/shared/providers/constants.js',
+  memberSha256: '9050623fcc7ac0a3eba6ac246fa502e56a8fd69a621e873d28d76d25a2534643',
+  sourceUrl: 'https://github.com/netease-youdao/LobsterAI/blob/main/src/shared/providers/constants.ts',
+});
+const NATIVE_CONTEXT_WINDOWS = Object.freeze({
+  'MiniMax-M2.7': 204800,
+  'qwen3.6-plus': 1000000,
+  'kimi-k2.6': 262144,
+  'kimi-k2.5': 262144,
+  'glm-5.1': 202800,
+  'glm-5': 202800,
+});
 export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signal, timeoutMs = 30000} = {}) {
   if (typeof fetchImpl !== 'function') throw new AppError('LobsterAI 网络请求需要显式注入 fetchImpl', 400, 'lobster_fetch_not_injected');
   if (!secret?.accessToken) throw new AppError('LobsterAI 凭据不可用', 401, 'lobster_credential_missing');
@@ -309,7 +328,12 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
   return list.map(entry => {
     const id = typeof entry?.modelId === 'string' && entry.modelId ? entry.modelId : null;
     if (!id) return null;
-    const contextWindow = Number.isSafeInteger(entry.contextWindow) && entry.contextWindow > 0 ? entry.contextWindow : null; // official fact when present
+    const officialContextWindow = Number.isSafeInteger(entry.contextWindow) && entry.contextWindow > 0 ? entry.contextWindow : null;
+    // Only absent/null metadata uses the pinned native exact-ID declaration.
+    // An explicit malformed/zero/negative value stays unknown, not a fallback.
+    const nativeContextWindow = entry.contextWindow == null && Object.hasOwn(NATIVE_CONTEXT_WINDOWS, id) ? NATIVE_CONTEXT_WINDOWS[id] : null;
+    const contextWindow = officialContextWindow ?? nativeContextWindow;
+    const contextWindowSource = officialContextWindow !== null ? 'official_catalog' : nativeContextWindow !== null ? 'native_client_registry' : null;
     const thinkingOptions = Array.isArray(entry?.thinkingConfig?.options) ? entry.thinkingConfig.options.map(o => o?.level).filter(v => typeof v === 'string') : [];
     thinkingProfiles.set(id,thinkingOptions);
     const accessible = entry?.accessible !== false;
@@ -317,6 +341,9 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
       id,
       name: typeof entry?.modelName === 'string' && entry.modelName ? entry.modelName : id,
       contextWindow,
+      officialContextWindow,
+      contextWindowSource,
+      ...(nativeContextWindow !== null ? {contextWindowEvidence: NATIVE_CONTEXT_EVIDENCE} : {}),
       maxTokens: CONFIGURED_OUTPUT_TOKENS,
       maxTokensSource: 'configured_default',
       officialMaxTokens: null,

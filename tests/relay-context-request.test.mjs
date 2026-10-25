@@ -158,10 +158,21 @@ test('transient network retry: cancellation after the first transport failure pr
   assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['primary']);
 });
 
-test('transient network recovery: a large request waits for the short primary cooldown rather than leaking a standby 400',async()=>{
+test('transient network recovery: a large request waits for the short primary cooldown rather than leaking a standby 400',async t=>{
+  const {syncBuiltinESMExports}=await import('node:module');
+  // Keep catalogue/planning work inside the circuit's lifetime even on a busy
+  // runner. Sync the router's named timers/promises import to the fake clock.
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:1000});
+  syncBuiltinESMExports();
+  t.after(()=>{t.mock.timers.reset();syncBuiltinESMExports();});
   const f=fixture(),raw=request();raw.messages[1].content='中'.repeat(100000);
   f.state.set('relay-cooldown:primary\0'+model,{until:Date.now()+10,reasonCode:'upstream_unavailable',errorCode:'provider_network_error'});
-  const before=JSON.stringify(raw),out=await collectChat(f.router.chat(raw));
+  const before=JSON.stringify(raw),pending=collectChat(f.router.chat(raw));
+  await new Promise(setImmediate);
+  assert.equal(f.calls.length,0,'no supplier dispatches while the primary is cooling and the standby is too small');
+  t.mock.timers.tick(34);await new Promise(setImmediate);
+  assert.equal(f.calls.length,0,'the original 10ms circuit plus 25ms recovery guard must finish before dispatch');
+  t.mock.timers.tick(1);const out=await pending;
   assert.equal(out.choices[0].message.content,'FULL_REQUEST_PRESERVED');
   assert.deepEqual(f.calls.map(c=>c.target.upstreamId),['primary']);
   assert.equal(JSON.stringify(f.calls[0].request),before);assert.equal(JSON.stringify(raw),before);
