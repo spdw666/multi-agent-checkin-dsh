@@ -77,6 +77,22 @@ export async function qoderHealth(c,options={}){const [sr,qr]=await Promise.allS
 export async function qoderClaim(c,task='daily-checkin',options={}){const before=await qoderStatus(c,task,options),eligible=before.campaigns.filter(x=>x.claimable);if(!eligible.length)return {...before,submitted:false,alreadyClaimed:before.claimed};const results=[];for(const item of eligible){if(!/^[\w-]+$/.test(item.id))throw new AppError('Qoder活动标识无效',502,'provider_invalid_response');const path='/sash/api/v1/me/campaigns/'+item.id;const receipt=await openapi(c,path+'/claim',{...options,body:{}});const reward=await openapi(c,path+'/reward',options);results.push({id:item.id,status:receipt.status,replayed:receipt.replayed===true,rewardStatus:reward.status??reward.claimStatus??null,amount:item.amount})}const after=await qoderStatus(c,task,options);if(results.some(x=>!after.campaigns.some(y=>y.id===x.id&&y.claimed)))throw new AppError('Qoder领取后状态尚未确认',502,'provider_claim_unconfirmed');const credits=normalizeQoderQuota(await openapi(c,'/api/v2/quota/usage',options));return {...after,submitted:true,rechecked:true,alreadyClaimed:results.every(x=>x.replayed),results,credit:results.filter(x=>!x.replayed).reduce((sum,x)=>sum+(Number(x.amount)||0),0),quota:credits}}
 const qoderBusinessCodes=new Set(['invalid_request','invalid_request_error','model_not_found','permission_denied','unauthorized','rate_limit','rate_limited','quota_exceeded','insufficient_quota','resource_exhausted','overloaded','server_error','context_length_exceeded']);
 const qoderStreamFailures=new WeakSet();
+function qoderInnerDiagnostics(root,safeCode){
+ // Diagnostic-only: inspect explicit message JSON, never free text or unknown
+ // fields. Four levels/16KiB total bound work; no raw content is retained.
+ const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value),queue={};let current=record(root.error)?root.error:root,innerBusinessCode,bytes=0;
+ for(let depth=0;depth<4;depth++){
+  let next=current.message;
+  if(typeof next==='string'){const size=Buffer.byteLength(next);if(size>4096||(bytes+=size)>16384)break;try{next=JSON.parse(next)}catch{break}}
+  if(!record(next))break;current=record(next.error)?next.error:next;
+  const code=safeCode(current.code);if(code!==undefined)innerBusinessCode=code;
+  for(const key of ['isQueued','serviceAvailable'])if(typeof current[key]==='boolean')queue[key]=current[key];
+  for(const key of ['queueCount','retryAfterSeconds','waitTime']){const value=current[key],max=key==='queueCount'?1000000:86400;if(Number.isSafeInteger(value)&&value>=0&&value<=max)queue[key]=value;}
+  // Only publicly observed machine labels; arbitrary token-shaped text is omitted.
+  if(['slow','p3'].includes(current.queueType))queue.queueType=current.queueType;
+ }
+ return{...(innerBusinessCode!==undefined?{innerBusinessCode}:{}),...(Object.keys(queue).length?{qoderQueue:queue}:{})};
+}
 function qoderStreamError(reason,packet){
  // Never retain raw frame/message/header/body/exception text. Numeric business
  // codes and a closed machine-code set survive; arbitrary text is not a code.
@@ -84,8 +100,9 @@ function qoderStreamError(reason,packet){
  const safeCode=value=>Number.isSafeInteger(value)&&Math.abs(value)<=999999999999?value:typeof value==='string'&&/^\d{1,12}$/.test(value)?value:typeof value==='string'&&qoderBusinessCodes.has(value.toLowerCase())?value.toLowerCase():undefined;
  const safeStatus=value=>{const n=typeof value==='string'&&/^\d{3}$/.test(value)?Number(value):value;return Number.isInteger(n)&&n>=100&&n<=599?n:undefined};
  const code=safeCode(error.code)??safeCode(root.code),status=[root.statusCodeValue,root.status,error.status,root.status_code,error.status_code].map(safeStatus).find(value=>value!==undefined);
- const e=new AppError(`Qoder响应失败 [reason=${reason}${code!==undefined?`; upstreamCode=${code}`:''}${status!==undefined?`; upstreamStatus=${status}`:''}]`,502,'provider_stream_error');
- e.qoderFailureReason=reason;if(code!==undefined)e.upstreamCode=code;if(status!==undefined)e.upstreamStatus=status;qoderStreamFailures.add(e);return e;
+ const diagnostics=qoderInnerDiagnostics(root,safeCode),inner=diagnostics.innerBusinessCode,queue=Object.entries(diagnostics.qoderQueue??{}).map(([key,value])=>`; queue.${key}=${value}`).join('');
+ const e=new AppError(`Qoder响应失败 [reason=${reason}${code!==undefined?`; upstreamCode=${code}`:''}${status!==undefined?`; upstreamStatus=${status}`:''}${inner!==undefined?`; innerBusinessCode=${inner}`:''}${queue}]`,502,'provider_stream_error');
+ e.qoderFailureReason=reason;if(code!==undefined)e.upstreamCode=code;if(status!==undefined)e.upstreamStatus=status;Object.assign(e,diagnostics);qoderStreamFailures.add(e);return e;
 }
 export function unwrapQoderSSE(body){
  const reader=body.getReader(),decoder=new TextDecoder(),encoder=new TextEncoder();let buffer='',finished=false,done=false,released=false,nativeWrapperSeen=false,modelPayloadSeen=false,pendingParseFailure,lastControl;

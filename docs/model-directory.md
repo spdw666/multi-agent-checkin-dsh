@@ -69,3 +69,9 @@ node --test tests/model-directory-large-selection.test.mjs
 
 - [Microsoft：DataGridView 大数据量性能建议](https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/best-practices-for-scaling-the-windows-forms-datagridview-control)
 - [Microsoft：DataGridView 虚拟模式](https://learn.microsoft.com/en-us/dotnet/desktop/winforms/controls/virtual-mode-in-the-windows-forms-datagridview-control)
+
+## Qoder 嵌套错误与队列诊断
+
+外层 `403` 不单独说明拒绝原因。适配器只沿显式 `message` 对象或 JSON 字符串读取最多四层，每段不超过 4096 UTF-8 字节，保留安全内层 `innerBusinessCode`；排队字段只接受有界整数、布尔值及已观察到的有限机器标签。自由文本、模型键、请求标识和原始响应不进入错误诊断。
+
+官方 SDK 提供 `model_queue_status`，同一查询可经历等待、就绪后继续请求；公开 [同型案例](https://github.com/decolua/9router/issues/3510) 的内层码为 `10605`，但其他 `403` 不据此推定为排队。当前这项改动仅增强诊断，保持原 HTTP/code/retry 语义，不自动轮询、重放或换账户。
