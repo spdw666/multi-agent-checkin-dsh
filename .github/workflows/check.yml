@@ -48,3 +48,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./desktop/tests/Run-WbRefreshFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbRefreshTests"
+      - name: Verify virtual model directory and asynchronous loading lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -NoProfile -File ./desktop/tests/Run-CatalogFixture.ps1 -Contract -OutputDirectory "$env:RUNNER_TEMP/ModelDirectoryTests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($mode in @('late-success', 'late-error', 'retry')) {
+            powershell -NoProfile -File ./desktop/tests/Run-DirectoryLifecycleFixture.ps1 -Mode $mode -OutputDirectory "$env:RUNNER_TEMP/ModelDirectoryLifecycleTests"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

@@ -877,25 +877,26 @@ namespace AiCreditDesktop {
             else if(watchingAudit){watchingAudit=false;var counts=audit.ContainsKey("summary")?audit["summary"] as Dictionary<string,object>:null;status.Text=state=="completed"?scope+"体检完成："+Json.Get(audit,"completed")+" / "+Json.Get(audit,"total")+"；全部通过 "+(counts==null?"0":Json.Get(counts,"passed","0"))+"，其他结果见状态列及悬停详情":"模型体检中断，请查看结果后重试";}
         }
         private Task ModelDirectory() { return ModelDirectory(null); }
-        internal async Task ModelDirectory(string capture) {
-            var result=await Backend.Request("GET","/admin/model-directory");
-            using(var dialog=new ProductForm {Text="全部平台模型 · 勾选导入 DSH",Size=new Size(1280,800),MinimumSize=new Size(1060,640),StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Background,Font=Theme.Body,Padding=new Padding(24)}) {
+        internal Task ModelDirectory(string capture) {
+            using(var dialog=new ProductForm {Text="全部平台模型 · 勾选导入 DSH",Size=new Size(1280,800),MinimumSize=new Size(1060,640),StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Background,Font=Theme.Body,Padding=new Padding(24)})
+            using(var filterTimer=new System.Windows.Forms.Timer {Interval=120}) {
                 var grid=ModelDirectoryView.Create();
                 var top=new FlowLayoutPanel {Dock=DockStyle.Top,Height=72};var search=new TextBox {Width=300,Font=Theme.Body};var platform=new ComboBox {Width=170,DropDownStyle=ComboBoxStyle.DropDownList};platform.Items.Add("全部平台");platform.SelectedIndex=0;
                 top.Controls.Add(new Label {Text="筛选模型",AutoSize=true,ForeColor=Theme.Ink,Padding=new Padding(0,5,12,0)});top.Controls.Add(search);top.Controls.Add(platform);var category=new ComboBox {Width=130,DropDownStyle=ComboBoxStyle.DropDownList};category.Items.AddRange(new object[]{"全部类型","聊天","向量","重排","图像","音频","视频","视觉","其他","待分类"});category.SelectedIndex=0;top.Controls.Add(category);
                 var footer=new FlowLayoutPanel {Dock=DockStyle.Bottom,Height=108};var save=Theme.Button("保存导入选择");save.BackColor=Theme.Accent;save.ForeColor=Color.White;var all=Theme.Button("勾选筛选结果");var none=Theme.Button("取消筛选结果");var hint=new Label {AutoSize=true,MaximumSize=new Size(880,0),ForeColor=Theme.Muted,Margin=new Padding(8,8,0,0)};footer.Controls.Add(save);footer.Controls.Add(all);footer.Controls.Add(none);footer.Controls.Add(hint);
-                int count=ModelDirectoryView.Populate(grid,result,platform);
-                hint.Text=ModelDirectoryView.CatalogSummary(result);
-                Action filter=()=>{grid.CurrentCell=null;foreach(DataGridViewRow row in grid.Rows){string text=Convert.ToString(row.Cells[2].Value)+" "+Convert.ToString(row.Cells[3].Value);row.Visible=(platform.SelectedIndex==0||Convert.ToString(row.Cells[1].Value)==Convert.ToString(platform.SelectedItem))&&(search.Text.Length==0||text.IndexOf(search.Text,StringComparison.OrdinalIgnoreCase)>=0)&&(category.SelectedIndex==0||Convert.ToString(row.Cells[4].Value)==Convert.ToString(category.SelectedItem));}};search.TextChanged+=(s,e)=>filter();platform.SelectedIndexChanged+=(s,e)=>filter();category.SelectedIndexChanged+=(s,e)=>filter();
-                string catalogHint=ModelDirectoryView.CatalogSummary(result)+"；取消勾选＝取消导入并停用，配置与历史保留；缺失目录项仅可取消。";
-                Action sync=()=>{int changes=ModelDirectoryView.ChangedCount(grid);hint.Text="待保存 "+changes+" 项变更 · "+catalogHint;save.Enabled=changes>0;};
+                string catalogHint="正在读取模型目录；窗口可立即关闭，不执行模型体检。";bool loaded=false,loading=false;int count=0;var retry=Theme.Button("重试读取目录");retry.Visible=false;footer.Controls.Add(retry);
+                grid.Enabled=false;save.Enabled=false;all.Enabled=false;none.Enabled=false;hint.Text=catalogHint;
+                Action sync=()=>{if(dialog.IsDisposed||dialog.Disposing)return;int changes=ModelDirectoryView.ChangedCount(grid);hint.Text=loaded?"待保存 "+changes+" 项变更 · "+catalogHint:catalogHint;save.Enabled=loaded&&changes>0;};
+                Action filter=()=>{filterTimer.Stop();if(!loaded||dialog.IsDisposed||dialog.Disposing)return;ModelDirectoryView.Filter(grid,platform.SelectedIndex==0?"":Convert.ToString(platform.SelectedItem),search.Text,category.SelectedIndex==0?"":Convert.ToString(category.SelectedItem));};
+                filterTimer.Tick+=(s,e)=>filter();search.TextChanged+=(s,e)=>{filterTimer.Stop();filterTimer.Start();};platform.SelectedIndexChanged+=(s,e)=>filter();category.SelectedIndexChanged+=(s,e)=>filter();
                 all.Click+=(s,e)=>{ModelDirectoryView.SelectVisible(grid,true);sync();};none.Click+=(s,e)=>{ModelDirectoryView.SelectVisible(grid,false);sync();};
-                grid.CellValueChanged+=(s,e)=>{if(e.RowIndex>=0)sync();};sync();
-                save.Click+=async(s,e)=>{grid.EndEdit();save.Enabled=false;all.Enabled=false;none.Enabled=false;grid.Enabled=false;try{if(await SaveDirectorySelection(grid)){await LoadAll();status.Text="导入变更已保存；未改动模型保持原样，目录约 30 秒内同步";}dialog.DialogResult=DialogResult.OK;}catch(Exception x){hint.Text="保存失败，选择保留："+x.Message;}finally{grid.Enabled=true;all.Enabled=true;none.Enabled=true;save.Enabled=ModelDirectoryView.ChangedCount(grid)>0;}};
+                grid.CellValuePushed+=(s,e)=>{if(e.RowIndex>=0)sync();};
+                save.Click+=async(s,e)=>{grid.EndEdit();save.Enabled=false;all.Enabled=false;none.Enabled=false;grid.Enabled=false;try{if(await SaveDirectorySelection(grid)){await LoadAll();status.Text="导入变更已保存；未改动模型保持原样，目录约 30 秒内同步";}if(!dialog.IsDisposed&&!dialog.Disposing)dialog.DialogResult=DialogResult.OK;}catch(Exception x){if(!dialog.IsDisposed&&!dialog.Disposing)hint.Text="保存失败，选择保留："+x.Message;}finally{if(!dialog.IsDisposed&&!dialog.Disposing){grid.Enabled=true;all.Enabled=true;none.Enabled=true;save.Enabled=ModelDirectoryView.ChangedCount(grid)>0;}}};
                 dialog.Controls.Add(grid);dialog.Controls.Add(footer);dialog.Controls.Add(top);
-                if(capture!=null)dialog.Shown+=(s,e)=>dialog.BeginInvoke(new Action(()=>{using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(capture,System.Drawing.Imaging.ImageFormat.Png);}File.WriteAllText(capture+".json",Json.Text(new {modelCount=count,selected=grid.Rows.Cast<DataGridViewRow>().Count(r=>object.Equals(r.Cells[0].Value,true)),checkboxColumn=grid.Columns[0] is DataGridViewCheckBoxColumn}),new UTF8Encoding(false));dialog.DialogResult=DialogResult.OK;}));
+                Func<Task> load=async()=>{if(loading||loaded||dialog.IsDisposed)return;loading=true;retry.Visible=false;catalogHint="正在读取模型目录；窗口可立即关闭，不执行模型体检。";sync();try{var result=await Backend.Request("GET","/admin/model-directory");if(dialog.IsDisposed||dialog.Disposing||!dialog.Visible)return;count=ModelDirectoryView.Populate(grid,result,platform);catalogHint=ModelDirectoryView.CatalogSummary(result)+"；国内 WorkBuddy 按模型合并；取消导入保留配置与历史；缺失项仅可取消。";loaded=true;grid.Enabled=true;all.Enabled=true;none.Enabled=true;filter();sync();if(capture!=null){using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(capture,System.Drawing.Imaging.ImageFormat.Png);}File.WriteAllText(capture+".json",Json.Text(new {modelCount=count,selected=ModelDirectoryView.SelectedCount(grid),checkboxColumn=grid.Columns[0] is DataGridViewCheckBoxColumn,virtualMode=grid.VirtualMode}),new UTF8Encoding(false));dialog.DialogResult=DialogResult.OK;}}catch(Exception x){if(!dialog.IsDisposed&&!dialog.Disposing&&dialog.Visible){catalogHint="目录读取失败："+x.Message;sync();retry.Visible=true;}}finally{loading=false;}};
+                retry.Click+=async(s,e)=>await load();dialog.Shown+=async(s,e)=>await load();dialog.FormClosed+=(s,e)=>filterTimer.Stop();
                 dialog.ShowDialog(this);
-            }
+            }return Task.FromResult(0);
         }
 
         private void BuildRecords() { var p = Page("领取记录"); p.Controls.Add(records); var b = Toolbar(p); AddButton(b, "刷新领取记录", LoadRecords); records.CellDoubleClick += (s, e) => { if (e.RowIndex < 0) return; using (var d = new JsonDialog("领取详情", (Dictionary<string, object>)records.Rows[e.RowIndex].Tag)) d.ShowDialog(this); }; }
@@ -993,19 +994,88 @@ namespace AiCreditDesktop {
         protected override void Dispose(bool disposing) { if (disposing) { if(balanceTransition!=null)balanceTransition.Dispose();if(routesTransition!=null)routesTransition.Dispose();tray.Visible = false; tray.Dispose(); refreshTimer.Dispose(); } base.Dispose(disposing); }
     }
     internal static class ModelDirectoryView {
-        internal static string CatalogSummary(Dictionary<string,object> result){var providers=Json.Rows(result,"providers").ToArray();int total=providers.Sum(p=>Json.Rows(p,"models").Count());var nv=providers.Where(p=>Json.Get(p,"kind")=="nvidia").ToArray();var models=nv.SelectMany(p=>Json.Rows(p,"models")).ToArray();var free=models.Where(m=>object.Equals(m.ContainsKey("freeEndpoint")?m["freeEndpoint"]:false,true)).ToArray();return total+" 个目录项；NVIDIA "+models.Length+" / 免费 "+free.Length+" / 免费聊天 "+free.Count(m=>object.Equals(m.ContainsKey("chat")?m["chat"]:false,true))+" / 可选 "+nv.Sum(p=>Json.Rows(p,"models").Count(m=>Importable(p,m)));}
+        // Values and selection live outside DataGridView. Filtering changes an index list,
+        // not 1,000+ row Visible properties, and bulk changes update the dirty set once.
+        private sealed class ImportTarget {internal string UpstreamId,Model;internal bool Imported;internal readonly HashSet<string> RouteIds=new HashSet<string>(StringComparer.Ordinal);}
+        private sealed class Entry {
+            internal string Label,Model,Name,Category,Status,Detail,Search,UpstreamId;internal bool Imported,Selected,Importable,CancelLocked,Error;internal int Rank;
+            internal string Tools,Images;internal readonly Dictionary<string,ImportTarget> Targets=new Dictionary<string,ImportTarget>(StringComparer.Ordinal);
+        }
+        private sealed class DirectoryState {
+            internal List<Entry> Entries=new List<Entry>(),Visible=new List<Entry>();internal readonly HashSet<Entry> Dirty=new HashSet<Entry>();internal int SortColumn=-1;internal bool Ascending=true;
+        }
+        private static DirectoryState State(DataGridView grid){return grid.Tag as DirectoryState;}
+        private static bool DomesticWorkBuddy(IDictionary<string,object> p){string edition=Json.Get(p,"edition");return Json.Get(p,"kind")=="workbuddy"&&edition!="ai"&&edition!="global"&&edition!="international";}
+        private static string ProviderLabel(IDictionary<string,object> provider){return DomesticWorkBuddy(provider)?"WorkBuddy 国内账号池":Json.Get(provider,"kind")+" / "+Json.Get(provider,"accountId",Json.Get(provider,"id"));}
+        private static List<Entry> BuildEntries(Dictionary<string,object> result){
+            var entries=new List<Entry>();var domestic=new Dictionary<string,Entry>(StringComparer.Ordinal);var errors=new Dictionary<string,Entry>(StringComparer.Ordinal);
+            foreach(var provider in Json.Rows(result,"providers")){
+                bool nv=Json.Get(provider,"kind")=="nvidia",cn=DomesticWorkBuddy(provider);string label=ProviderLabel(provider);
+                foreach(var m in Json.Rows(provider,"models")){
+                    bool imported=object.Equals(m.ContainsKey("imported")?m["imported"]:false,true),importable=Importable(provider,m);string id=Json.Get(m,"id");Entry entry;
+                    if(!cn||!domestic.TryGetValue(id,out entry)){entry=new Entry{Label=label,Model=id,Rank=-1};entries.Add(entry);if(cn)domestic[id]=entry;}
+                    string uid=Json.Get(provider,"id"),targetKey=uid+"\n"+id;ImportTarget target;
+                    if(!entry.Targets.TryGetValue(targetKey,out target)){target=new ImportTarget{UpstreamId=uid,Model=id};entry.Targets[targetKey]=target;}
+                    target.Imported|=imported;foreach(string routeId in Json.Strings(m,"importedRouteIds"))target.RouteIds.Add(routeId);
+                    entry.Imported|=imported;entry.Selected=entry.Imported;entry.Importable|=importable;
+                    int rank=(importable?4:0)+(NvidiaPresentation.Object(m,"audit").Count>0?2:0)+(imported?1:0);
+                    if(rank>entry.Rank){
+                        entry.Rank=rank;entry.UpstreamId=uid;entry.Name=Json.Get(m,"name",id);entry.Category=NvidiaPresentation.ModelCategory(m);
+                        if(!nv&&entry.Category=="待分类"&&Json.Get(m,"source")!="configured_route")entry.Category="聊天";
+                        entry.Status=NvidiaPresentation.ModelStatus(m);
+                        if(nv&&!importable)entry.Status=Json.Get(m,"category")=="chat"?Json.Get(m,"unavailableReason","聊天元数据待核验"):entry.Category+" · 专用 API，不导入 DSH 聊天";
+                        if(nv)entry.Status=(object.Equals(m.ContainsKey("freeEndpoint")?m["freeEndpoint"]:false,true)?"Build免费 · ":"API目录 · 免费未声明 · ")+entry.Status;
+                        if(Json.Get(m,"source")=="configured_route")entry.Status=(Json.Get(m,"catalogStatus")=="upstream_disabled"?"上游已停用":Json.Get(m,"catalogStatus")=="unavailable"?"目录读取失败":"当前目录未提供")+"（可取消）";
+                        entry.Tools=object.Equals(m.ContainsKey("tools")?m["tools"]:false,true)?"支持":"未声明";entry.Images=object.Equals(m.ContainsKey("multimodal")?m["multimodal"]:false,true)?"支持":"未声明";
+                        entry.Detail=Json.Get(m,"unavailableReason",Json.Get(NvidiaPresentation.Object(m,"audit"),"reason"))+"\n上下文："+Json.Get(m,"contextWindow","未声明")+"\n"+(Json.Get(m,"maxTokensSource")=="configured_default"?"本地保守输出设置："+Json.Get(m,"maxTokens","未设置"):"输出配置："+Json.Get(m,"maxTokens","未设置"))+(Json.Get(m,"officialMaxTokens").Length>0?"；官方最大："+Json.Get(m,"officialMaxTokens"):"");
+                    }
+                }
+                if(provider.ContainsKey("error")&&provider["error"]!=null){
+                    Entry error;if(!errors.TryGetValue(label,out error)){error=new Entry{Label=label,Model="—",Name="目录待恢复",Category="—",Tools="—",Images="—",Error=true,Status=""};errors[label]=error;entries.Add(error);}
+                    var detail=provider["error"] as Dictionary<string,object>;string message=detail==null?"目录读取失败":Json.Get(detail,"message");error.Status=error.Status.Length==0?message:error.Status+"；"+message;
+                }
+            }
+            foreach(var e in entries){e.Search=(e.Name??"")+" "+e.Model;if(!e.Error){e.Status=(e.Imported?"已导入 · ":"可选择 · ")+e.Status;e.CancelLocked=!e.Importable&&!e.Imported;}}
+            return entries;
+        }
+        internal static string CatalogSummary(Dictionary<string,object> result){var providers=Json.Rows(result,"providers").ToArray();int raw=providers.Sum(p=>Json.Rows(p,"models").Count()),shown=BuildEntries(result).Count(e=>!e.Error);var nv=providers.Where(p=>Json.Get(p,"kind")=="nvidia").ToArray();var models=nv.SelectMany(p=>Json.Rows(p,"models")).ToArray();var free=models.Where(m=>object.Equals(m.ContainsKey("freeEndpoint")?m["freeEndpoint"]:false,true)).ToArray();return shown+" 个目录项（原始 "+raw+"） ；NVIDIA "+models.Length+" / 免费 "+free.Length+" / 免费聊天 "+free.Count(m=>object.Equals(m.ContainsKey("chat")?m["chat"]:false,true))+" / 可选 "+nv.Sum(p=>Json.Rows(p,"models").Count(m=>Importable(p,m)));}
         internal static bool Importable(IDictionary<string,object> provider,IDictionary<string,object> model){bool nvidia=Json.Get(provider,"kind")=="nvidia";if(nvidia){bool chat=object.Equals(model.ContainsKey("chat")?model["chat"]:false,true)||Json.Get(model,"category")=="chat";return chat&&object.Equals(model.ContainsKey("importable")?model["importable"]:false,true)&&object.Equals(model.ContainsKey("freeEndpoint")?model["freeEndpoint"]:false,true);}return model.ContainsKey("importable")?object.Equals(model["importable"],true):!object.Equals(model.ContainsKey("callable")?model["callable"]:true,false);}
-        internal static DataGridView Create(){var grid=Theme.Grid("平台","名称","模型 ID","类型","工具","图片","导入 / 可用状态");grid.ReadOnly=false;grid.MultiSelect=true;grid.Columns.Insert(0,new DataGridViewCheckBoxColumn{Name="导入",HeaderText="导入",FillWeight=35});foreach(DataGridViewColumn col in grid.Columns)col.ReadOnly=col.Index!=0;grid.Columns[3].FillWeight=170;grid.Columns[4].FillWeight=65;grid.Columns[5].FillWeight=60;grid.Columns[6].FillWeight=60;grid.Columns[7].FillWeight=180;return grid;}
-        internal static int Populate(DataGridView grid,Dictionary<string,object> result,ComboBox platform){int count=0;foreach(var provider in Json.Rows(result,"providers")){bool nv=Json.Get(provider,"kind")=="nvidia";string label=Json.Get(provider,"kind")+" / "+Json.Get(provider,"accountId");if(platform!=null)platform.Items.Add(label);foreach(var m in Json.Rows(provider,"models")){bool imported=object.Equals(m.ContainsKey("imported")?m["imported"]:false,true),importable=Importable(provider,m);string category=NvidiaPresentation.ModelCategory(m);if(!nv&&category=="待分类"&&Json.Get(m,"source")!="configured_route")category="聊天";string state=NvidiaPresentation.ModelStatus(m);if(nv&&!importable)state=Json.Get(m,"category")=="chat"?Json.Get(m,"unavailableReason","聊天元数据待核验"):category+" · 专用 API，不导入 DSH 聊天";else state=(imported?"已导入 · ":"可选择 · ")+state;if(nv)state=(object.Equals(m.ContainsKey("freeEndpoint")?m["freeEndpoint"]:false,true)?"Build免费 · ":"API目录 · 免费未声明 · ")+state;if(Json.Get(m,"source")=="configured_route")state="已导入 · "+(Json.Get(m,"catalogStatus")=="upstream_disabled"?"上游已停用":Json.Get(m,"catalogStatus")=="unavailable"?"目录读取失败":"当前目录未提供")+"（可取消）";int i=grid.Rows.Add(imported,label,Json.Get(m,"name"),Json.Get(m,"id"),category,object.Equals(m.ContainsKey("tools")?m["tools"]:false,true)?"支持":"未声明",object.Equals(m.ContainsKey("multimodal")?m["multimodal"]:false,true)?"支持":"未声明",state);var row=grid.Rows[i];if(!importable)row.DefaultCellStyle.ForeColor=Theme.Warning;row.Cells[7].ToolTipText=state+"\n"+Json.Get(m,"unavailableReason",Json.Get(NvidiaPresentation.Object(m,"audit"),"reason"))+"\n上下文："+Json.Get(m,"contextWindow","未声明")+"\n"+(Json.Get(m,"maxTokensSource")=="configured_default"?"本地保守输出设置："+Json.Get(m,"maxTokens","未设置"):"输出配置："+Json.Get(m,"maxTokens","未设置"))+(Json.Get(m,"officialMaxTokens").Length>0?"；官方最大："+Json.Get(m,"officialMaxTokens"):"");row.Tag=new Dictionary<string,object>{{"upstreamId",Json.Get(provider,"id")},{"model",Json.Get(m,"id")},{"imported",imported},{"callable",importable},{"importable",importable},{"category",category},{"importedRouteIds",Json.Strings(m,"importedRouteIds")}};ModelImportSelection.Configure(row,importable,imported);count++;}if(provider.ContainsKey("error")&&provider["error"]!=null){var error=provider["error"] as Dictionary<string,object>;int i=grid.Rows.Add(false,label,"目录待恢复","—","—","—","—",error==null?"目录读取失败":Json.Get(error,"message"));grid.Rows[i].ReadOnly=true;grid.Rows[i].DefaultCellStyle.ForeColor=Theme.Warning;}}ModelImportSelection.CommitAndGuard(grid);return count;}
-        internal static void SelectVisible(DataGridView grid,bool selected){grid.EndEdit();grid.CurrentCell=null;foreach(DataGridViewRow row in grid.Rows){var tag=row.Tag as Dictionary<string,object>;if(row.Visible&&tag!=null&&(!selected||object.Equals(tag["importable"],true)))row.Cells[0].Value=selected;}}
-        internal static int ChangedCount(DataGridView grid){return grid.Rows.Cast<DataGridViewRow>().Count(row=>{var tag=row.Tag as Dictionary<string,object>;return tag!=null&&object.Equals(row.Cells[0].Value,true)!=object.Equals(tag["initialSelected"],true);});}
+        internal static DataGridView Create(){
+            var grid=Theme.Grid("平台","名称","模型 ID","类型","工具","图片","导入 / 可用状态");grid.Tag=new DirectoryState();grid.VirtualMode=true;grid.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.None;grid.ReadOnly=false;grid.MultiSelect=true;
+            grid.Columns.Insert(0,new DataGridViewCheckBoxColumn{Name="导入",HeaderText="导入",FillWeight=35});foreach(DataGridViewColumn col in grid.Columns){col.ReadOnly=col.Index!=0;col.SortMode=DataGridViewColumnSortMode.Programmatic;}
+            grid.Columns[3].FillWeight=170;grid.Columns[4].FillWeight=65;grid.Columns[5].FillWeight=60;grid.Columns[6].FillWeight=60;grid.Columns[7].FillWeight=180;
+            grid.CellValueNeeded+=(s,e)=>{var state=State(grid);if(e.RowIndex>=0&&e.RowIndex<state.Visible.Count)e.Value=Value(state.Visible[e.RowIndex],e.ColumnIndex);};
+            grid.CellValuePushed+=(s,e)=>{var state=State(grid);if(e.ColumnIndex==0&&e.RowIndex>=0&&e.RowIndex<state.Visible.Count)SetSelected(state,state.Visible[e.RowIndex],object.Equals(e.Value,true));};
+            grid.CurrentCellDirtyStateChanged+=(s,e)=>{if(grid.IsCurrentCellDirty)grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
+            grid.CellBeginEdit+=(s,e)=>{var state=State(grid);if(e.RowIndex<0||e.RowIndex>=state.Visible.Count)return;var row=state.Visible[e.RowIndex];e.Cancel=e.ColumnIndex!=0||row.Error||row.CancelLocked;};
+            grid.CellFormatting+=(s,e)=>{var state=State(grid);if(e.RowIndex>=0&&e.RowIndex<state.Visible.Count&&(!state.Visible[e.RowIndex].Importable||state.Visible[e.RowIndex].Error))e.CellStyle.ForeColor=Theme.Warning;};
+            grid.CellToolTipTextNeeded+=(s,e)=>{var state=State(grid);if(e.RowIndex>=0&&e.RowIndex<state.Visible.Count){var row=state.Visible[e.RowIndex];e.ToolTipText=row.Status+"\n"+row.Detail;}};
+            grid.ColumnHeaderMouseClick+=(s,e)=>{var state=State(grid);grid.EndEdit();grid.CurrentCell=null;state.Ascending=state.SortColumn!=e.ColumnIndex||!state.Ascending;state.SortColumn=e.ColumnIndex;Sort(state);foreach(DataGridViewColumn col in grid.Columns)col.HeaderCell.SortGlyphDirection=col.Index==e.ColumnIndex?(state.Ascending?SortOrder.Ascending:SortOrder.Descending):SortOrder.None;grid.Invalidate();};
+            return grid;
+        }
+        private static object Value(Entry e,int column){switch(column){case 0:return e.Selected;case 1:return e.Label;case 2:return e.Name;case 3:return e.Model;case 4:return e.Category;case 5:return e.Tools;case 6:return e.Images;default:return e.Status;}}
+        private static void Sort(DirectoryState state){if(state.SortColumn<0)return;state.Visible=state.Ascending?state.Visible.OrderBy(e=>Convert.ToString(Value(e,state.SortColumn)),StringComparer.OrdinalIgnoreCase).ToList():state.Visible.OrderByDescending(e=>Convert.ToString(Value(e,state.SortColumn)),StringComparer.OrdinalIgnoreCase).ToList();}
+        private static void SetSelected(DirectoryState state,Entry entry,bool selected){
+            if(entry.Error||entry.Selected==selected||selected&&(!entry.Importable||entry.CancelLocked))return;
+            entry.Selected=selected;if(!selected&&!entry.Importable)entry.CancelLocked=true;
+            if(entry.Selected!=entry.Imported)state.Dirty.Add(entry);else state.Dirty.Remove(entry);
+        }
+        internal static int Populate(DataGridView grid,Dictionary<string,object> result,ComboBox platform){
+            var state=State(grid);grid.EndEdit();grid.CurrentCell=null;grid.RowCount=0;state.Entries=BuildEntries(result);state.Dirty.Clear();
+            if(platform!=null){platform.BeginUpdate();try{platform.Items.Clear();platform.Items.Add("全部平台");foreach(string label in Json.Rows(result,"providers").Select(p=>ProviderLabel(p)).Distinct())platform.Items.Add(label);platform.SelectedIndex=0;}finally{platform.EndUpdate();}}
+            Filter(grid,"","","");return state.Entries.Count(e=>!e.Error);
+        }
+        internal static void Filter(DataGridView grid,string platform,string search,string category){
+            var state=State(grid);grid.EndEdit();grid.CurrentCell=null;state.Visible=state.Entries.Where(e=>(string.IsNullOrEmpty(platform)||e.Label==platform)&&(string.IsNullOrEmpty(search)||e.Search.IndexOf(search,StringComparison.OrdinalIgnoreCase)>=0)&&(string.IsNullOrEmpty(category)||e.Category==category)).ToList();Sort(state);grid.RowCount=state.Visible.Count;grid.Invalidate();
+        }
+        internal static void SelectVisible(DataGridView grid,bool selected){grid.EndEdit();grid.CurrentCell=null;var state=State(grid);foreach(var e in state.Visible)SetSelected(state,e,selected);grid.InvalidateColumn(0);}
+        internal static int ChangedCount(DataGridView grid){var state=State(grid);return state==null?0:state.Dirty.Count;}
+        internal static int SelectedCount(DataGridView grid){return State(grid).Entries.Count(e=>!e.Error&&e.Selected);}
         internal static List<object> Changes(DataGridView grid){
-            grid.EndEdit();var items=new List<object>();
-            foreach(DataGridViewRow row in grid.Rows){var tag=row.Tag as Dictionary<string,object>;if(tag==null)continue;bool selected=object.Equals(row.Cells[0].Value,true),initial=object.Equals(tag["initialSelected"],true);if(selected==initial)continue;
-                if(selected&&!object.Equals(tag["callable"],true))throw new InvalidOperationException("当前目录未提供的模型仅可取消导入");
-                var item=new Dictionary<string,object>{{"upstreamId",tag["upstreamId"]},{"model",tag["model"]},{"enabled",selected}};
-                if(!selected){var ids=Json.Strings(tag,"importedRouteIds");if(ids.Length==0)throw new InvalidOperationException("缺少已导入路由标识，请重新读取目录");item["importedRouteIds"]=ids;}
-                items.Add(item);
+            grid.EndEdit();var items=new List<object>();var state=State(grid);
+            foreach(var entry in state.Entries.Where(e=>state.Dirty.Contains(e))){
+                if(entry.Selected){if(!entry.Importable)throw new InvalidOperationException("当前目录未提供的模型仅可取消导入");items.Add(new Dictionary<string,object>{{"upstreamId",entry.UpstreamId},{"model",entry.Model},{"enabled",true}});}
+                else foreach(var target in entry.Targets.Values.Where(t=>t.Imported)){if(target.RouteIds.Count==0)throw new InvalidOperationException("缺少已导入路由标识，请重新读取目录");items.Add(new Dictionary<string,object>{{"upstreamId",target.UpstreamId},{"model",target.Model},{"enabled",false},{"importedRouteIds",target.RouteIds.ToArray()}});}
             }return items;
         }
 

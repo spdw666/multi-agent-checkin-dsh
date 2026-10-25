@@ -52,7 +52,9 @@ export async function exportModels(service,routeIds){
   });
 }
 export async function importModels(service,items,{enabled=true}={}) {
-  if(!Array.isArray(items)||items.length>500||!items.length)throw new AppError('Select 1–500 models',400,'invalid_selection');
+  // The directory can contain thousands of entries. Keep one atomic commit for
+  // a full filtered selection rather than partially saving 500-item UI chunks.
+  if(!Array.isArray(items)||items.length>5000||!items.length)throw new AppError('Select 1–5000 models',400,'invalid_selection');
   const prepared=[];
   for(const item of structuredClone(items)){
     if(!item||typeof item.upstreamId!=='string'||typeof item.model!=='string'||!item.model)throw new AppError('Invalid model selection',400,'invalid_selection');
