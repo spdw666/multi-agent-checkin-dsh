@@ -205,7 +205,7 @@ function prompt(mode='success'){
 const run=(f,extra={})=>runWorkBuddyOfficialCli({service:f.service,accountId:'SAMPLE-ACCOUNT',operationId:'SAMPLE-OPERATION',prompt:prompt(),model:'SAMPLE-EXACT-MODEL',requireTool:/^Write$/,timeoutMs:5000,...extra});
 async function waitForMarker(service,limit=5000){
  const {hash}=await import('../src/util.mjs'),root=join(service.config.dataDir,'wb-executor-runtime',hash('SAMPLE-ACCOUNT\0SAMPLE-UID')),file=join(root,'workspace','SAMPLE-marker.json');
- const deadline=Date.now()+limit;while(Date.now()<deadline){try{await access(file);return file;}catch{}await delay(15);}throw Error('SAMPLE child marker did not arrive');
+ const deadline=Date.now()+limit;while(Date.now()<deadline){try{JSON.parse(await readFile(file,'utf8'));return file;}catch(error){if(error.code!=='ENOENT'&&!(error instanceof SyntaxError))throw error;}await delay(15);}throw Error('SAMPLE child marker did not arrive');
 }
 
 test('real Node fake CLI proves stdin execution, a closed tool pair and an actual local marker',async t=>{

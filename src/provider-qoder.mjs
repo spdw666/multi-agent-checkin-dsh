@@ -50,7 +50,22 @@ export function signQoder(url,plain,c,{model,encode=true}={}){
  return {body,headers:{...bearer(c),Authorization:`Bearer COSY.${payload}.${signature}`,'Cosy-Version':VERSION,'Cosy-ClientType':'5','Cosy-Data-Policy':'agree','Cosy-Date':ts,'Cosy-Key':cosyKey,'Cosy-Scene':'assistant','Cosy-User':c.uid,'Cosy-Business-Product':'cli','Cosy-Business-Type':'agent','Login-Version':'v2',...(model?{'X-Model-Key':model,'X-Model-Source':'system'}:{})}};
 }
 function cacheKey(c){return c.edition+':'+c.uid}
-export function parseQoderModels(data){const seen=new Map();for(const scene of ['chat','developer','assistant','app'])for(const m of Array.isArray(data?.[scene])?data[scene]:[]){if(!m?.key||m.enable===false||seen.has(m.key)||(m.source&&m.source!=='system'))continue;const ctx=Number.isSafeInteger(m.max_input_tokens)&&m.max_input_tokens>0?m.max_input_tokens:null,out=Number.isSafeInteger(m.max_output_tokens)&&m.max_output_tokens>0?m.max_output_tokens:1024;seen.set(m.key,{id:m.key,name:m.display_name??m.key,contextWindow:ctx,maxTokens:out,maxTokensSource:m.max_output_tokens>0?'official_catalog':'configured_default',officialMaxTokens:m.max_output_tokens>0?m.max_output_tokens:null,tools:true,multimodal:m.is_vl===true,reasoning:null,isReasoning:m.is_reasoning===true,callable:!!ctx,source:'qoder-official-signed-catalog',priceFactor:m.price_factor??null})}return [...seen.values()]}
+function qoderNativeParameters(model){
+ const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+ const entries=value=>record(value)?Object.entries(value):[];
+ const singleDefault=options=>{const defaults=options.filter(option=>option.isDefault);return defaults.length===1?defaults[0]:null};
+ const contextOptions=entries(model.context_config).filter(([,value])=>record(value)&&Number.isSafeInteger(value.token_count)&&value.token_count>0).map(([id,value])=>({id,tokenCount:value.token_count,isDefault:value.is_default===true}));
+ const thinkingModes=entries(model.thinking_config).filter(([,value])=>record(value)).map(([id,value])=>({id,isDefault:value.is_default===true}));
+ const efforts=entries(record(model.thinking_config?.enabled)?model.thinking_config.enabled.efforts:null).filter(([,value])=>record(value)).map(([id,value])=>({id,isDefault:value.is_default===true}));
+ if(!contextOptions.length&&!thinkingModes.length)return null;
+ // Preserve the native declaration, not a guessed OpenAI wire mapping. A
+ // context selector includes reserves and is not max_input_tokens; unknown
+ // or ambiguous defaults must never make a previously uncallable row callable.
+ return {source:'qoder-official-signed-catalog',wireVerified:false,
+  context:contextOptions.length?{source:'context_config',options:contextOptions,defaultTokenCount:singleDefault(contextOptions)?.tokenCount??null}:null,
+  thinking:thinkingModes.length?{source:'thinking_config',modes:thinkingModes,defaultMode:singleDefault(thinkingModes)?.id??null,efforts,defaultEffort:singleDefault(efforts)?.id??null}:null};
+}
+export function parseQoderModels(data){const seen=new Map();for(const scene of ['chat','developer','assistant','app'])for(const m of Array.isArray(data?.[scene])?data[scene]:[]){if(!m?.key||m.enable===false||seen.has(m.key)||(m.source&&m.source!=='system'))continue;const ctx=Number.isSafeInteger(m.max_input_tokens)&&m.max_input_tokens>0?m.max_input_tokens:null,out=Number.isSafeInteger(m.max_output_tokens)&&m.max_output_tokens>0?m.max_output_tokens:1024,native=qoderNativeParameters(m);seen.set(m.key,{id:m.key,name:m.display_name??m.key,contextWindow:ctx,maxTokens:out,maxTokensSource:m.max_output_tokens>0?'official_catalog':'configured_default',officialMaxTokens:m.max_output_tokens>0?m.max_output_tokens:null,tools:true,multimodal:m.is_vl===true,reasoning:null,isReasoning:m.is_reasoning===true,callable:!!ctx,source:'qoder-official-signed-catalog',priceFactor:m.price_factor??null,...(native?{qoderNativeParameters:native}:{})})}return [...seen.values()]}
 export async function qoderModels(c,options={}){const cached=catalogCache.get(cacheKey(c));if(!options.force&&!options.refresh&&cached&&Date.now()-cached.at<300000)return cached.models;const url=region(c).infer+'/algo/api/v2/model/list?Encode=1',s=signQoder(url,'',c,{encode:false}),data=await providerJson(url,c,{...options,headers:s.headers});const models=parseQoderModels(data);if(!models.length)throw new AppError('Qoder官方目录未返回可核验模型',502,'provider_catalog_empty');catalogCache.set(cacheKey(c),{at:Date.now(),models});return models}
 async function openapi(c,path,options={}){return providerJson(region(c).openapi+path,c,{...options,headers:bearer(c)})}
 export function qoderCampaignStatus(data,c,now=Date.now()){

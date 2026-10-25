@@ -19,6 +19,14 @@
 - 非聊天模型保留明确分类，专用图像/音频/向量 API 不冒充 DSH/Hermes 聊天模型。
 - 工具声明不是工具执行证据。每款保留的 Agent 模型在每个客户端分别核验实际文件工具、配对结果回填、最终随机字符串及确切供应账本；普通回答和 HTTP 200 不代替这一步。
 
+## 原生目录参数与容量来源
+
+Trae 的 remote 展示目录和原生 chat wire 目录分别读取。合并时仅从精确匹配的 wire model 透传有效正整数 `maxTokens`；匹配优先级保持原规则，显示别名保留原 `wireConfigName` 与 function。没有 wire 匹配、缺失输出字段或无效值时保持未知，不复制其他型号的输出，也不把 remote 的上下文选择器当输出容量。推理、费率、工具、输入能力和调用通道不因这项透传改动而变化。
+
+Qoder 的 `context_config` 和 `thinking_config` 是原生参数声明，保存在 `qoderNativeParameters`，带 `source` 与 `wireVerified:false`。Context 选项保留原 ID、`token_count` 与严格布尔默认标记；Thinking 保留 mode、原生 effort ID 与默认标记。只有一个明确默认项时才给出默认值，多个默认项、缺失或畸形声明保持未知。
+
+这层原始声明不覆盖实际 `max_input_tokens`，不替缺失输入容量的型号开启 callable，也不自动生成通用 `reasoningEfforts` 或添加请求字段。目录没有官方输出声明时，既有配置默认值继续标记为 `configured_default`，`officialMaxTokens` 保持 null。原显式预算、采样、图像、工具和结果回填均保持。原生字段契约可对照 [Qoder SDK 模型选择策略](https://docs.qoder.com/cli/sdk/model-policy) 与 [TypeScript ModelInfo 参考](https://docs.qoder.com/cli/sdk/references-typescript)；当前账号的具体值仍以当前签名目录为准。
+
 ## DSH 型号默认预算
 
 目录中的 `defaultMaxTokens` 与 `maxTokens` 分别表示显式默认值和当前公布上限。DSH 适配器优先采用前者；仅当前者缺省时才以同一精确路由的有效上限建立本地默认值。显式 `null`、无效值或未知上限不补造。首包头与实际 ModelInfo 使用同一默认映射，避免模型注册表中另一来源的同名型号覆盖它。

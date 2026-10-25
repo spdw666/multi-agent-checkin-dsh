@@ -270,6 +270,11 @@ export function mergeTraeModelSources(
       name: model.name,
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
+      // get_detail_param supplies the output ceiling separately from the remote
+      // context selector. Preserve the exact matched wire model's declaration;
+      // a display-only row or invalid/missing limit remains unknown.
+      ...Number.isSafeInteger(wireModel?.maxTokens) && (wireModel?.maxTokens ?? 0) > 0
+        ? { maxTokens: wireModel?.maxTokens } : {},
       ...creditMultiplier === undefined ? {} : { creditMultiplier },
       input: ['text'],
       // Trae's own answer to "does this model read images". Carried through so
