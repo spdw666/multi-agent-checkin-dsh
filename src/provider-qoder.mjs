@@ -15,7 +15,7 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`;
 const STD='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=',CUSTOM='_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!$';
-const VERSION='1.1.57',catalogCache=new Map();
+const VERSION='1.1.75-hotfix.1',catalogCache=new Map();
 function region(c){if(!['cn','global'].includes(c.edition))throw new AppError('Qoder区域未配置',400,'provider_region_required');return c.edition==='cn'?{openapi:'https://openapi.qoder.com.cn',infer:'https://gateway.qoder.com.cn'}:{openapi:'https://openapi.qoder.sh',infer:'https://api2.qoder.sh'}}
 const identityCache=new Map();
 export function readQoderNativeIdentity(helper,uid,{authMtimeMs,now=Date.now(),spawnImpl=spawnSync}={}){

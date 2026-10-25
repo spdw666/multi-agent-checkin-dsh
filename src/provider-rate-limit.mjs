@@ -16,13 +16,16 @@ function numericCode(value){
   const number=typeof value==='number'?value:typeof value==='string'&&/^\d{4,6}$/.test(value)?Number(value):NaN;
   return Number.isSafeInteger(number)&&number>=1000&&number<=999999?number:undefined;
 }
-function officialBusinessCode(value){
+function businessDiagnosticCode(value){
   if(!record(value))return;
   const error=own(value,'error'),data=own(value,'data'),errorData=own(error,'data'),dataError=own(data,'error');
   // The official 429 mapper gives error.data.code precedence over wrappers.
   // Only these documented structural containers are inspected, never text.
   const candidates=[own(errorData,'code'),own(error,'code'),own(value,'code'),own(own(dataError,'data'),'code'),own(dataError,'code'),own(data,'code')];
-  for(const candidate of candidates){const code=numericCode(candidate);if(code!==undefined)return knownCodes.has(code)?code:undefined}
+  for(const candidate of candidates){const code=numericCode(candidate);if(code!==undefined)return code}
+}
+function officialBusinessCode(value){
+  const code=businessDiagnosticCode(value);return knownCodes.has(code)?code:undefined;
 }
 
 export function parseBuddyRetryAfter(value,now=Date.now()){
@@ -70,11 +73,13 @@ export async function buddyChatRejection(response,{signal,errorBodyMaxBytes,erro
   const now=Date.now();let retryAfterSeconds;
   try{retryAfterSeconds=parseBuddyRetryAfter(response.headers?.get('retry-after'),now)}catch{}
   const data=await boundedErrorJson(response,{signal,maxBytes:boundedOption(errorBodyMaxBytes,MAX_ERROR_BYTES),timeoutMs:boundedOption(errorBodyTimeoutMs,MAX_ERROR_TIME_MS)});
-  const upstreamCode=officialBusinessCode(data);
+  const upstreamCode=officialBusinessCode(data),diagnosticCode=businessDiagnosticCode(data);
   const rateLimitKind=transientCodes.has(upstreamCode)?'transient':longWindowCodes.has(upstreamCode)?'long_window':usageCodes.has(upstreamCode)?'usage_limit':'unknown';
   const rateLimitRetryable=response.status===429&&rateLimitKind==='transient';
   const labels={transient:'官方短窗口限流',long_window:'官方长窗口限流',usage_limit:'官方用量或订阅条件限制',unknown:'官方请求受限，具体原因待确认'};
-  const error=new AppError(`Buddy聊天接口 HTTP ${response.status}${response.status===429?'：'+labels[rateLimitKind]:''}`,response.status,'provider_chat_rejected');
+  // The finite numeric diagnostic survives errorView without retaining raw
+  // messages. It is NOT an allowlist/policy decision; unknown codes stay unknown.
+  const error=new AppError(`Buddy聊天接口 HTTP ${response.status}${response.status===429?'：'+labels[rateLimitKind]:''}${diagnosticCode!==undefined?` [businessCode=${diagnosticCode}]`:''}`,response.status,'provider_chat_rejected');
   if(upstreamCode!==undefined)error.upstreamCode=upstreamCode;
   error.rateLimitKind=rateLimitKind;error.rateLimitRetryable=rateLimitRetryable;
   if(retryAfterSeconds!==undefined){error.retryAfterSeconds=retryAfterSeconds;error.retryAfterSource='official_header'}

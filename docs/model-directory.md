@@ -37,6 +37,14 @@ Qoder 的 `context_config` 和 `thinking_config` 是原生参数声明，保存�
 
 当前原生 wrapper 已有正文、reasoning 或工具进展后，EOF 可结束；只收到控制帧不当作模型回复。旧 body-only wrapper 保留原有完整帧和结束标记检查。解析错误提供有界 reason、机器码和状态，不把 raw body、异常文本或凭据写入诊断。此兼容合同不证明账号套餐、模型权限或双客户端工作验收通过。
 
+Qoder 当前协议兼容版本基线为已核验原客户端 `1.1.75-hotfix.1`；`Cosy-Version`、COSY payload 的 `cosyVersion` 与签名 body 的 `business.version` 同步更新。原身份、签名算法、协议 v1/v3、实际输入容量与调用方参数保持；没有用版本变化推导型号级最低版本或调用成功。
+
+## Buddy 拒绝诊断
+
+HTTP 拒绝从既有结构容器中的 `code` 读取有限整数，错误文本保留 `[businessCode=数字]`，经公共错误序列化后仍可定位该次拒绝。仅处理 1000–999999 的安全整数或四至六位十进制字符串；不从任意消息文本、请求字段或 HTML 提取，不记录上游 raw message、body、header。
+
+诊断数字不等于已知策略码。原 `upstreamCode` 白名单、短/长窗口及用量分类、`Retry-After` 和重试条件保持；未知数字只保留诊断，不被解释为可重试、额度耗尽或套餐状态。实际型号原因仍以该请求回执和已核验的原生定义为准。
+
 ## DSH 型号默认预算
 
 目录中的 `defaultMaxTokens` 与 `maxTokens` 分别表示显式默认值和当前公布上限。DSH 适配器优先采用前者；仅当前者缺省时才以同一精确路由的有效上限建立本地默认值。显式 `null`、无效值或未知上限不补造。首包头与实际 ModelInfo 使用同一默认映射，避免模型注册表中另一来源的同名型号覆盖它。
