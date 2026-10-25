@@ -779,7 +779,7 @@ Lobster 缺省的输入容量按精确型号分别保留来源：既有六项来
 
 Qoder 对显式 `message` JSON 链保留有界内层业务码和有限排队字段，避免把所有外层 403 直接等同于余额不足；最多解析四层，每段 UTF-8 不超过 4096 字节，不记录原始消息。此诊断不自动启用轮询、重放或账户切换；只有实际取得内层码后才判断相应条件。参考 [Qoder 官方队列状态说明](https://docs.qoder.com/cli/sdk/references-typescript#sdkmodelqueuestatusmessage)。
 
-Qoder 在已接纳请求收到结构化 `10605` 且尚未交付任何正文或 usage 时，按原生队列状态等待，并最多恢复一次同模型、同签名内容的原请求。等待不延长原总截止，取消和目标配置变更会终止恢复；仅队列等待期间暂停供应 idle 计时，出队后恢复。客户端仍只发一次请求，实际供应 POST、队列 GET、恢复次数和等待时间分别记账，不把排队当回复，也不自动切换账户。
+Qoder 在已接纳请求收到结构化 `10605` 且尚未交付任何正文或 usage 时，按原生队列状态等待，并最多恢复一次相同模型与语义内容的请求；按原生规则刷新 request_id/chat_record_id 并重新签名，保持原 request_set_id、session_id、消息、工具、预算和凭据。等待不延长原总截止，取消和目标配置变更会终止恢复；仅队列等待期间暂停供应 idle 计时，出队后恢复。客户端仍只发一次请求，实际供应 POST、队列 GET、恢复次数和等待时间分别记账，不把排队当回复，也不自动切换账户。
 
 Lobster 的 `glm-5v-turbo` 缺省容量另采用 Hermes 精确客户端 registry 的 `202752`，标记 `client_model_registry`，不将其称为厂家或 Lobster 通道声明；既有 Qwen 制造商来源及六项 native 来源保持独立。见 [来源说明](docs/lobster-glm5v-client-registry-context.md)。
 

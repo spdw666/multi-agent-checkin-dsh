@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
 import https from 'node:https';
 import http from 'node:http';
+import {runInNewContext} from 'node:vm';
+import {createHash} from 'node:crypto';
 
 // Baseline Platforms has no options forwarding. Fail closed here instead of
 // allowing a missing injection seam to turn a counterfactual into real I/O.
@@ -28,6 +30,17 @@ const deferred=()=>{let resolve,reject;const promise=new Promise((r,j)=>{resolve
 async function settle(){for(let i=0;i<80;i++)await Promise.resolve()}
 async function until(predicate){for(let i=0;i<500&&!predicate();i++)await Promise.resolve();assert.ok(predicate(),'offline operation reached the expected state')}
 function decode(encoded){const std='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=',custom='_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!$',n=Math.floor(encoded.length/3),b=encoded.slice(encoded.length-n)+encoded.slice(n,encoded.length-n)+encoded.slice(0,n);return JSON.parse(Buffer.from([...b].map(c=>std[custom.indexOf(c)]).join(''),'base64').toString('utf8'))}
+// Exact current worker8f7869 pure pho at UTF8 byte23946143. Queue-ready caller
+// runs this before the next j$l/BYi/nYi/prepareInferRequest, not is_retry=true.
+const nativePho=nextId=>runInNewContext('(function pho(A){let e=nWe();A.request_id=e,A.chat_record_id=e})',{nWe:()=>nextId});
+const authPayload=post=>JSON.parse(Buffer.from(post.init.headers.Authorization.slice('Bearer COSY.'.length).split('.')[0],'base64').toString('utf8'));
+function nativeReplayContract(posts){
+ const first=decode(posts[0].init.body),second=decode(posts[1].init.body),expected=structuredClone(first);nativePho(second.request_id)(expected);
+ assert.notEqual(second.request_id,first.request_id);assert.match(second.request_id,/^[0-9a-f-]{36}$/);assert.equal(second.chat_record_id,second.request_id);assert.deepEqual(second,expected);assert.equal(second.request_set_id,first.request_set_id);assert.equal(second.session_id,first.session_id);assert.equal(second.is_retry,false);
+ assert.notEqual(posts[1].init.body,posts[0].init.body);assert.notEqual(authPayload(posts[1]).requestId,authPayload(posts[0]).requestId);assert.notEqual(posts[1].init.headers['Cosy-Key'],posts[0].init.headers['Cosy-Key']);
+ for(const post of posts){const headers=post.init.headers,payload=headers.Authorization.slice('Bearer COSY.'.length).split('.')[0],actual=headers.Authorization.split('.').at(-1),path=new URL(post.url).pathname.replace(/^\/algo/,'');assert.equal(actual,createHash('md5').update([payload,headers['Cosy-Key'],headers['Cosy-Date'],post.init.body,path].join('\n')).digest('hex'));}
+ for(const key of Object.keys(posts[0].init.headers))if(!['Authorization','Cosy-Key','Cosy-Date'].includes(key))assert.equal(posts[1].init.headers[key],posts[0].init.headers[key]);return{first,second};
+}
 const input=()=>({model,messages:[{role:'user',content:[{type:'text',text:'SAMPLE'},{type:'image_url',image_url:{url:'data:image/png;base64,U0FNUExF'}}]},{role:'assistant',content:null,tool_calls:[{id:'call-original',type:'function',function:{name:'read',arguments:'{"path":"SAMPLE"}'}}]},{role:'tool',tool_call_id:'call-original',content:'SAMPLE result'}],tools:[{type:'function',function:{name:'read',parameters:{type:'object'}}}],tool_choice:'auto',max_tokens:800,temperature:0});
 function fixture(t,settings={}){
  let now=1000,result;const posts=[],gets=[],states=[],waits=[],sources=[],credential={edition:'cn',accessToken:'SAMPLE',uid:'queue-offline-'+serial++,principal:'SAMPLE',machineId:'SAMPLE',identity:{machineToken:'SAMPLE',machineCode:'SAMPLE',machineType:'SAMPLE'}};
@@ -42,11 +55,11 @@ function fixture(t,settings={}){
 }
 const consume=async f=>{const r=await f.start();return r.response.text()};
 
-test('Qoder queue: genuine nested10605 polls immediately, waits native hint, and replays identical signed request once',async t=>{
+test('Qoder queue: genuine nested10605 waits native hint and preserves semantics with fresh native attempt IDs/signature once',async t=>{
  let checks=0;const f=fixture(t,{poll:n=>Response.json({data:n===1?{...queueInfo,retryAfterSeconds:30}:{isQueued:false,retryAfterSeconds:0}}),options:{beforeQueueReplay:()=>checks++}});
  const request=input(),before=structuredClone(request),text=await(await f.start(undefined,request)).response.text();
  assert.equal(f.posts.length,2);assert.equal(f.gets.length,2);assert.equal(checks,1);assert.deepEqual(f.states,[true,false]);assert.deepEqual(f.waits,[30000]);assert.equal((text.match(/ONE_REPLY/g)??[]).length,1);assert.equal((text.match(/prompt_tokens/g)??[]).length,1);assert.equal((text.match(/\[DONE\]/g)??[]).length,1);
- assert.equal(f.posts[0].init.body,f.posts[1].init.body);assert.deepEqual(f.posts[0].init.headers,f.posts[1].init.headers);assert.equal(f.posts[0].url,f.posts[1].url);
+ nativeReplayContract(f.posts);assert.equal(f.posts[0].url,f.posts[1].url);
  const body=decode(f.posts[0].init.body);assert.equal(body.model,model);assert.equal(body.model_config.key,model);assert.equal(body.max_tokens,800);assert.equal(body.parameters.max_tokens,800);assert.deepEqual(body.tools,request.tools);assert.deepEqual(body.messages[0],request.messages[0]);assert.equal(body.messages[1].tool_calls[0].id,'call-original');assert.equal(body.messages[2].tool_call_id,'call-original');assert.deepEqual(request,before);
  for(const get of f.gets){const url=new URL(get.url);assert.equal(url.pathname,'/algo/api/v2/service/ask/queue/status');assert.equal(url.searchParams.get('requestSetId'),body.request_set_id);assert.equal(url.searchParams.get('modelKey'),model);assert.equal(url.searchParams.get('queueType'),'p3');assert.equal(get.init.headers['X-Request-ID'],body.request_id);assert.equal(get.init.headers['X-Session-ID'],body.session_id);assert.match(get.init.headers.Authorization,/^Bearer COSY\./);}
  assert.deepEqual(f.result.qoderQueueTelemetry,{inferencePosts:2,replayPosts:1,queueStatusGets:2,queueWaitMs:30000,state:'finished',outcome:'completed'});assert.ok(Object.isFrozen(f.result.qoderQueueTelemetry));for(const source of f.sources)assert.equal(source.locked,false);
@@ -55,7 +68,7 @@ test('Qoder queue: ready positive native hint waits before replay without changi
  const f=fixture(t,{poll:()=>Response.json({result:JSON.stringify({isQueued:false,retryAfterSeconds:1})})});await consume(f);assert.deepEqual(f.waits,[1000]);assert.equal(f.posts.length,2);
 });
 test('Qoder queue: auto polls the private server queue key, while replay body keeps original auto',async t=>{
- const privateKey='SAMPLE-SERVER-QUEUE-KEY',f=fixture(t,{model:'auto',first:()=>new Response(frame(packet('10605',{...queueInfo,modelKey:privateKey}))),poll:n=>Response.json(n===1?{isQueued:true,modelKey:'SAMPLE-NEXT-QUEUE-KEY',retryAfterSeconds:0}:{isQueued:false})});await consume(f);assert.equal(new URL(f.gets[0].url).searchParams.get('modelKey'),privateKey);assert.equal(new URL(f.gets[1].url).searchParams.get('modelKey'),'SAMPLE-NEXT-QUEUE-KEY');assert.equal(decode(f.posts[0].init.body).model_config.key,'auto');assert.equal(f.posts[0].init.body,f.posts[1].init.body);assert.doesNotMatch(JSON.stringify(f.result.qoderQueueTelemetry),/SAMPLE-(SERVER|NEXT)-QUEUE-KEY/);
+ const privateKey='SAMPLE-SERVER-QUEUE-KEY',f=fixture(t,{model:'auto',first:()=>new Response(frame(packet('10605',{...queueInfo,modelKey:privateKey}))),poll:n=>Response.json(n===1?{isQueued:true,modelKey:'SAMPLE-NEXT-QUEUE-KEY',retryAfterSeconds:0}:{isQueued:false})});await consume(f);assert.equal(new URL(f.gets[0].url).searchParams.get('modelKey'),privateKey);assert.equal(new URL(f.gets[1].url).searchParams.get('modelKey'),'SAMPLE-NEXT-QUEUE-KEY');assert.equal(decode(f.posts[0].init.body).model_config.key,'auto');nativeReplayContract(f.posts);assert.doesNotMatch(JSON.stringify(f.result.qoderQueueTelemetry),/SAMPLE-(SERVER|NEXT)-QUEUE-KEY/);
 });
 test('Qoder queue: auto without a verified server queue key is terminal, never polls its alias',async t=>{
  const f=fixture(t,{model:'auto'});await assert.rejects(consume(f),e=>e.qoderQueueRecoveryReason==='queue_model_key_unverified');assert.equal(f.gets.length,0);assert.equal(f.posts.length,1);
@@ -64,7 +77,7 @@ test('Qoder queue: private model key never becomes an enumerable public error di
  const f=fixture(t,{first:()=>new Response(frame(packet('10605',{...queueInfo,modelKey:'SAMPLE-PRIVATE-KEY'}))),poll:()=>new Response('',{status:403})});await assert.rejects(consume(f),e=>{assert.doesNotMatch(e.message+JSON.stringify(e),/SAMPLE-PRIVATE-KEY/);assert.equal(e.qoderQueueRecoveryReason,'status_http_403');return true});
 });
 test('Qoder queue: polling and replay retain the original credential snapshot during queue wait',async t=>{
- let uid;const f=fixture(t,{poll:n=>Response.json(n===1?{isQueued:true,retryAfterSeconds:1}:{isQueued:false}),options:{queueDelayImpl:async()=>{f.credential.uid='SAMPLE-CHANGED';f.credential.accessToken='SAMPLE-CHANGED'}}});uid=f.credential.uid;await consume(f);assert.equal(f.gets[1].init.headers['Cosy-User'],uid);assert.equal(f.posts[1].init.headers['Cosy-User'],uid);assert.deepEqual(f.posts[0].init.headers,f.posts[1].init.headers);
+ let uid;const f=fixture(t,{poll:n=>Response.json(n===1?{isQueued:true,retryAfterSeconds:1}:{isQueued:false}),options:{queueDelayImpl:async()=>{f.credential.uid='SAMPLE-CHANGED';f.credential.accessToken='SAMPLE-CHANGED'}}});uid=f.credential.uid;await consume(f);assert.equal(f.gets[1].init.headers['Cosy-User'],uid);assert.equal(f.posts[1].init.headers['Cosy-User'],uid);nativeReplayContract(f.posts);
 });
 test('Qoder queue: native serviceAvailable=false without isQueued remains queued, not ready',async t=>{
  const f=fixture(t,{poll:n=>Response.json(n===1?{serviceAvailable:false,retryAfterSeconds:1}:{isQueued:false})});await consume(f);assert.deepEqual(f.waits,[1000]);assert.equal(f.posts.length,2);
@@ -177,4 +190,18 @@ test('Qoder queue: non-relay Router still supplies total deadline and target fen
 });
 test('Qoder queue: queue completion is not an empty answer success and ledger freezes failed outcome',async t=>{
  const f=routing(t,{poll:()=>Response.json({isQueued:false}),replay:()=>new Response(frame({choices:[],usage:{prompt_tokens:5}})+'data: [DONE]\n\n')});await assert.rejects(f.start(),e=>e.code==='empty_stream');assert.equal(f.posts.length,2);assert.equal(f.usages[0].status,'failed');assert.equal(f.usages[0].qoderQueueTelemetry.outcome,'failed');assert.ok(Object.isFrozen(f.usages[0].qoderQueueTelemetry));
+});
+test('Qoder queue: source-derived native pho changes exactly the two per-attempt IDs, not set/session/retry or unknown fields',()=>{
+ const ask={request_id:'OLD',chat_record_id:'OLD',request_set_id:'SET',session_id:'SESSION',is_retry:false,model_config:{key:'auto'},parameters:{max_tokens:800},unknown:{value:7}},before=structuredClone(ask);nativePho('NEW')(ask);assert.deepEqual(ask,{...before,request_id:'NEW',chat_record_id:'NEW'});
+});
+test('Qoder queue: native nYi invokes fresh prepareInferRequest for each new opening instead of caching signed bytes',()=>{
+ // Current8f7869 nYi byte19430102. The signer is a recording stub; this
+ // proves the JS call boundary, not execution of the native authentication WASM.
+ let calls=0;const argumentsSeen=[],factory={prepareInferRequest(...args){argumentsSeen.push(args);return{url:'https://example.invalid',headers:{Sample:String(++calls)},body:args[1],free(){}}}},nYi=runInNewContext('(function nYi(A,e,t,i,r){if(r.isServiceAccount())return rYi(r,"text/event-stream",r=>r.prepareInferRequest(A,e,t,i));let n=eit(),o=Zf(r=>r.prepareInferRequest(A,e,t,i)),s=kg(o.headers);for(let A of Object.keys(s))["cosy-machinetoken","cosy-machinetype"].includes(A.toLowerCase())&&delete s[A];return Object.assign(s,n),{url:o.url,headers:s,body:o.body,free:()=>o.free()}})',{eit:()=>({}),Zf:fn=>fn(factory),kg:value=>({...value})}),auth={isServiceAccount:()=>false};const first=nYi('URL','OLD-BODY','auto','system',auth),second=nYi('URL','NEW-BODY','auto','system',auth);assert.equal(calls,2);assert.equal(argumentsSeen[0][1],'OLD-BODY');assert.equal(argumentsSeen[1][1],'NEW-BODY');assert.equal(first.body,'OLD-BODY');assert.equal(second.body,'NEW-BODY');
+});
+test('Qoder queue: 32s queue wait refreshes Cosy-Date and auth nonce while only native attempt IDs change in body',async t=>{
+ t.mock.timers.enable({apis:['Date','setTimeout'],now:1000000});const f=fixture(t,{poll:n=>Response.json(n===1?{isQueued:true,retryAfterSeconds:30}:{isQueued:false,retryAfterSeconds:2}),options:{requestDeadlineAt:1100000,queueNow:()=>Date.now(),queueDelayImpl:async ms=>t.mock.timers.tick(ms)}});await consume(f);nativeReplayContract(f.posts);assert.equal(f.posts[0].init.headers['Cosy-Date'],'1000');assert.equal(f.posts[1].init.headers['Cosy-Date'],'1032');assert.equal(f.result.qoderQueueTelemetry.queueWaitMs,32000);assert.equal(f.result.qoderQueueTelemetry.inferencePosts,2);assert.equal(f.result.qoderQueueTelemetry.queueStatusGets,2);
+});
+test('Qoder queue: packet103 on the one resumed attempt remains typed terminal and never expands replay count',async t=>{
+ const f=fixture(t,{replay:()=>new Response(frame({statusCodeValue:403,body:JSON.stringify({code:'103',message:'Duplicate request'})}))});await assert.rejects(consume(f),e=>e.upstreamCode==='103'&&e.upstreamStatus===403&&e.qoderQueueRecoveryTerminal===true);assert.equal(f.posts.length,2);assert.equal(f.gets.length,1);nativeReplayContract(f.posts);assert.equal(f.result.qoderQueueTelemetry.replayPosts,1);assert.ok(Object.isFrozen(f.result.qoderQueueTelemetry));
 });

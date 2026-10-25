@@ -74,4 +74,4 @@ node --test tests/model-directory-large-selection.test.mjs
 
 外层 `403` 不单独说明拒绝原因。适配器只沿显式 `message` 对象或 JSON 字符串读取最多四层，每段不超过 4096 UTF-8 字节，保留安全内层 `innerBusinessCode`；排队字段只接受有界整数、布尔值及已观察到的有限机器标签。自由文本、模型键、请求标识和原始响应不进入错误诊断。
 
-官方 SDK 提供 `model_queue_status`，同一查询可经历等待、就绪后继续请求；公开 [同型案例](https://github.com/decolua/9router/issues/3510) 的内层码为 `10605`，但其他 `403` 不据此推定为排队。诊断仍保持原 HTTP/code；恢复层仅在真实结构化10605、未交付任何payload、原请求剩余总截止和目标资格栅栏均成立时，使用原请求队列状态等待并至多恢复一次。队列期间暂停供应idle而非总截止，取消/晚回包/配置变化均阻止新派发；不换账户。队列GET、供应POST、恢复次数与等待时间独立记录，不与客户端wire或gateway dispatch混算。
+官方 SDK 提供 `model_queue_status`，同一查询可经历等待、就绪后继续请求；公开 [同型案例](https://github.com/decolua/9router/issues/3510) 的内层码为 `10605`，但其他 `403` 不据此推定为排队。诊断仍保持原 HTTP/code；恢复层仅在真实结构化10605、未交付任何payload、原请求剩余总截止和目标资格栅栏均成立时，使用原请求组队列状态等待并至多恢复一次。ready后按原生pho刷新同值request_id/chat_record_id并重新签名；request_set_id/session_id、is_retry=false和其余语义内容保持。103是Duplicate request，不把冻结旧请求ID当恢复合同。队列期间暂停供应idle而非总截止，取消/晚回包/配置变化均阻止新派发；不换账户。队列GET、供应POST、恢复次数与等待时间独立记录，不与客户端wire或gateway dispatch混算。
