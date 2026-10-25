@@ -5,10 +5,11 @@ export function gatewayRequestPolicy(runtime={},models=[]){
   const configuredMaxTokens=new Map();let streamIdleTimeoutMs=180000;
   for(const m of models){
     // piProvider profiles do not infer ModelInfo.defaultMaxTokens from model.maxTokens.
-    // Publish only a provider-declared default (currently verified native ZCode),
-    // so companion middleware does not replace it with a generic registry cap.
-    // This never clamps an explicit per-request GenerateOptions.maxTokens.
-    const declaredDefault=Number.isSafeInteger(m.defaultMaxTokens)&&m.defaultMaxTokens>0?m.defaultMaxTokens:undefined;
+    // Prefer a provider-declared default; otherwise use this route's own live
+    // catalog ceiling as its adapter default, not an unrelated registry model.
+    // Explicit null/invalid defaults remain unknown. Request budgets are intact.
+    const advertisedDefault=m.defaultMaxTokens===undefined?m.maxTokens:m.defaultMaxTokens;
+    const declaredDefault=Number.isSafeInteger(advertisedDefault)&&advertisedDefault>0?advertisedDefault:undefined;
     const requestedDefault=max??declaredDefault;
     if(requestedDefault!==undefined&&Number.isSafeInteger(m.maxTokens)&&m.maxTokens>0)configuredMaxTokens.set(m.id,Math.min(requestedDefault,m.maxTokens));
     const declared=m.requestTimeoutMs;

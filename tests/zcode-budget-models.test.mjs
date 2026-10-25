@@ -17,8 +17,8 @@ async function rows(){
 for(const index of [0,1])test(ids[index]+' exports a formal provider default through exact and arbitrary route aliases',async()=>{
   const m=(await rows())[index];assert.equal(m.maxTokens,128000);assert.equal(m.defaultMaxTokens,128000);assert.equal(m.defaultMaxTokensSource,'official_docs_snapshot_2026-10-23');assert.equal(gatewayRequestPolicy({},[m]).configuredMaxTokens.get(m.id),128000);
 });
-test('unrelated model ceilings alone still do not introduce deployment defaults',()=>{
-  assert.equal(gatewayRequestPolicy({},[{id:'other',maxTokens:131072}]).configuredMaxTokens.size,0);
+test('other live model ceilings provide only their own route default',()=>{
+  assert.equal(gatewayRequestPolicy({},[{id:'other',maxTokens:131072}]).configuredMaxTokens.get('other'),131072);
 });
 test('a declared default is bounded by its positive catalog ceiling without mutating metadata',()=>{
   const m={id:'sample',maxTokens:1000,defaultMaxTokens:2000},before=JSON.stringify(m);assert.equal(gatewayRequestPolicy({},[m]).configuredMaxTokens.get('sample'),1000);assert.equal(JSON.stringify(m),before);
@@ -43,9 +43,9 @@ test('refresh swaps independent profile/provider snapshots and preserves already
   assert.equal((await g.adapter.resolveModel('ai-credit',id)).defaultMaxTokens,64000);assert.equal(old.piProvider.getModels().find(m=>m.id===id).maxTokens,128000);
   assert.equal(g.update(models.map(m=>({...m,maxTokens:64000,defaultMaxTokens:64000}))),false);
 });
-test('unknown and removed models do not retain a prior negotiated default after refresh',async t=>{
+test('refresh uses each remaining live ceiling and removes a deleted model default',async t=>{
   const models=await rows(),g=await adapter(t,models);if(!g)return;const id=models[1].id;
-  g.update(models.map(m=>{const n={...m};delete n.defaultMaxTokens;delete n.defaultMaxTokensSource;return n}));assert.equal((await g.adapter.resolveModel('ai-credit',id)).defaultMaxTokens,undefined);
+  g.update(models.map(m=>{const n={...m};delete n.defaultMaxTokens;delete n.defaultMaxTokensSource;return n}));assert.equal((await g.adapter.resolveModel('ai-credit',id)).defaultMaxTokens,128000);
   g.update(models.slice(0,1));await assert.rejects(g.adapter.resolveModel('ai-credit',id));
 });
 async function wireFixture(t){
@@ -71,8 +71,8 @@ test('cold first SDK request carries authoritative model-specific default before
   const f=await wireFixture(t);if(!f)return;const body=await f.invoke(options=>f.g.adapter.stream(options));assert.equal(body.max_completion_tokens,128000);
   const headers=f.capturedHeaders[0];assert.equal(headers['x-bili-plugin-max-output'],'128000');assert.equal(headers['x-bili-plugin-model'],f.id);assert.equal(headers['x-ai-credit-source'],'dsh');
 });
-test('declared context negotiates without a guessed output default; explicit output uses the same formal map',async t=>{
+test('declared context and live ceiling negotiate a default; explicit runtime uses the same formal map',async t=>{
   const m={id:'SAMPLE-unknown',name:'SAMPLE',contextWindow:1000000,maxTokens:128000,capabilities:{multimodal:false}},g=await adapter(t,[m]);if(!g)return;
-  const headers=g.adapter.config.profiles().get('ai-credit').piProvider.getModels()[0].headers;assert.equal(headers['x-bili-plugin-max-output'],undefined);assert.equal(headers['x-bili-plugin-model'],m.id);assert.equal(headers['x-bili-plugin-context-window'],String(m.contextWindow));
+  const headers=g.adapter.config.profiles().get('ai-credit').piProvider.getModels()[0].headers;assert.equal(headers['x-bili-plugin-max-output'],'128000');assert.equal(headers['x-bili-plugin-model'],m.id);assert.equal(headers['x-bili-plugin-context-window'],String(m.contextWindow));
   const explicit=await adapter(t,[m],{maxOutputTokens:4096});const profile=explicit.adapter.config.profiles().get('ai-credit');assert.equal(profile.piProvider.getModels()[0].headers['x-bili-plugin-max-output'],String(profile.configuredMaxTokens.get(m.id)));
 });
