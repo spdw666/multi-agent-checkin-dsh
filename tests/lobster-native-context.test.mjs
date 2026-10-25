@@ -48,6 +48,12 @@ for(const id of ['qwen3.5-plus-2026-04-20','glm-5v-turbo','doubao-seed-2-0-code-
     assert.equal(m.contextWindow,1000000);assert.equal(m.officialContextWindow,null);
     assert.equal(m.contextWindowSource,'manufacturer_documentation');assert.equal(m.callable,true);
     assert.equal(m.callableReason,null);assert.equal(m.contextWindowEvidence.declaredContextWindow,1000000);
+  } else if (id === 'glm-5v-turbo') {
+    // Exact independent Hermes registry, never the generic selector/preset.
+    assert.equal(m.contextWindow,202752);assert.equal(m.officialContextWindow,null);
+    assert.equal(m.contextWindowSource,'client_model_registry');assert.equal(m.callable,true);
+    assert.equal(m.callableReason,null);assert.equal(m.contextWindowEvidence.declaredContextWindow,202752);
+    assert.equal(m.contextWindowEvidence.client,'Hermes');
   } else {
     assert.equal(m.contextWindow,null);assert.equal(m.officialContextWindow,null);
     assert.equal(m.contextWindowSource,null);assert.equal(m.callable,false);

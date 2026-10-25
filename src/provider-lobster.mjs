@@ -331,6 +331,19 @@ const MANUFACTURER_CONTEXT_EVIDENCE = Object.freeze({
   capturedAt: '2026-10-25T12:59:42.876Z',
   declaredContextWindow: 1000000,
 });
+// Exact third-party client registry declaration. This is neither a Lobster
+// service capacity nor a model-manufacturer declaration; retain its own source.
+const CLIENT_MODEL_CONTEXT_EVIDENCE = Object.freeze({
+  source: 'client_model_registry',
+  client: 'Hermes',
+  modelId: 'glm-5v-turbo',
+  sourceUrl: 'https://github.com/NousResearch/hermes-agent/blob/4bc2efbeb37ac459ee502a76c4e73e1829a033ea/agent/model_metadata.py#L335',
+  sourceCommit: '4bc2efbeb37ac459ee502a76c4e73e1829a033ea',
+  sourceFile: 'agent/model_metadata.py',
+  sourceSha256: '497f2342915b0c7f23e56c2ec7e191a122d6255a6d12e660e570a4013895ab3d',
+  registryConstant: 'DEFAULT_CONTEXT_LENGTHS',
+  declaredContextWindow: 202752,
+});
 export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signal, timeoutMs = 30000} = {}) {
   if (typeof fetchImpl !== 'function') throw new AppError('LobsterAI 网络请求需要显式注入 fetchImpl', 400, 'lobster_fetch_not_injected');
   if (!secret?.accessToken) throw new AppError('LobsterAI 凭据不可用', 401, 'lobster_credential_missing');
@@ -346,8 +359,9 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
     // An explicit malformed/zero/negative value stays unknown, not a fallback.
     const nativeContextWindow = entry.contextWindow == null && Object.hasOwn(NATIVE_CONTEXT_WINDOWS, id) ? NATIVE_CONTEXT_WINDOWS[id] : null;
     const manufacturerContextWindow = entry.contextWindow == null && id === MANUFACTURER_CONTEXT_EVIDENCE.modelId ? MANUFACTURER_CONTEXT_EVIDENCE.declaredContextWindow : null;
-    const contextWindow = officialContextWindow ?? nativeContextWindow ?? manufacturerContextWindow;
-    const contextWindowSource = officialContextWindow !== null ? 'official_catalog' : nativeContextWindow !== null ? 'native_client_registry' : manufacturerContextWindow !== null ? 'manufacturer_documentation' : null;
+    const clientModelContextWindow = entry.contextWindow == null && id === CLIENT_MODEL_CONTEXT_EVIDENCE.modelId ? CLIENT_MODEL_CONTEXT_EVIDENCE.declaredContextWindow : null;
+    const contextWindow = officialContextWindow ?? nativeContextWindow ?? manufacturerContextWindow ?? clientModelContextWindow;
+    const contextWindowSource = officialContextWindow !== null ? 'official_catalog' : nativeContextWindow !== null ? 'native_client_registry' : manufacturerContextWindow !== null ? 'manufacturer_documentation' : clientModelContextWindow !== null ? 'client_model_registry' : null;
     const thinkingOptions = Array.isArray(entry?.thinkingConfig?.options) ? entry.thinkingConfig.options.map(o => o?.level).filter(v => typeof v === 'string') : [];
     thinkingProfiles.set(id,thinkingOptions);
     const accessible = entry?.accessible !== false;
@@ -357,7 +371,7 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
       contextWindow,
       officialContextWindow,
       contextWindowSource,
-      ...(nativeContextWindow !== null ? {contextWindowEvidence: NATIVE_CONTEXT_EVIDENCE} : manufacturerContextWindow !== null ? {contextWindowEvidence: MANUFACTURER_CONTEXT_EVIDENCE} : {}),
+      ...(nativeContextWindow !== null ? {contextWindowEvidence: NATIVE_CONTEXT_EVIDENCE} : manufacturerContextWindow !== null ? {contextWindowEvidence: MANUFACTURER_CONTEXT_EVIDENCE} : clientModelContextWindow !== null ? {contextWindowEvidence: CLIENT_MODEL_CONTEXT_EVIDENCE} : {}),
       maxTokens: CONFIGURED_OUTPUT_TOKENS,
       maxTokensSource: 'configured_default',
       officialMaxTokens: null,

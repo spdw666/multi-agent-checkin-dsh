@@ -224,10 +224,10 @@ export class Platforms {
     if(custom?.enabled&&custom.kind==='http'&&custom.claimUrl)return jsonFetch(custom.claimUrl,{headers:{Authorization:`Bearer ${c.accessToken}`},body:custom.body??{}});
     throw new AppError('No verified claim adapter for this task',501,'task_protocol_pending');
   }
-  async chat(target,request,signal) {
+  async chat(target,request,signal,providerOptions={}) {
     const u=this.upstream(target.upstreamId);const input={...request,model:target.model,stream:true};
     if(u.kind==='freeapi')return freeProviderChat(u,await this.credentials.resolve(u.accountId),input,signal);
-    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');const c=await this.credentials.resolve(u.accountId);try{return await p.chat(u,c,input,signal);}catch(error){if(error.status!==401)throw error;const newer=await this.credentials.resolve(u.accountId,{force:true});if(newer.accessToken===c.accessToken)throw error;return p.chat(u,newer,input,signal);}}
+    if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');const c=await this.credentials.resolve(u.accountId),chat=credential=>u.kind==='qoder'?p.chat(u,credential,input,signal,providerOptions):p.chat(u,credential,input,signal);try{return await chat(c);}catch(error){if(error.status!==401)throw error;const newer=await this.credentials.resolve(u.accountId,{force:true});if(newer.accessToken===c.accessToken)throw error;return chat(newer);}}
     if(u.kind==='workbuddy') {
       const ensureInference=async()=>{if(typeof this.config.workBuddyInferenceAllowed==='function'&&!await this.config.workBuddyInferenceAllowed(u.accountId))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');const accounts=this.config.value.accounts;if(accounts===undefined&&typeof this.config.workBuddyInferenceAllowed!=='function')return;const a=Array.isArray(accounts)?accounts.find(a=>a.id===u.accountId&&a.platform==='workbuddy'):undefined;if(!a||a.enabled===false||a.inferenceEnabled===false)throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');};
       await ensureInference();

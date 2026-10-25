@@ -160,7 +160,7 @@ export class Router {
       const ordered=this.controls.orderTargets(route,targets,{clientId,sessionId,sameModel:relayActive,eligible:target=>eligible.has(targetKey(target))});targets.splice(0,targets.length,...ordered);
     }
     for(let i=0;i<targets.length;i++) {
-      const target=targets[i];let started=false,completed=false,failure,response,blockedByCircuit=false,skipped=false;
+      const target=targets[i];let started=false,completed=false,failure,response,blockedByCircuit=false,skipped=false,queueRecoveryFinalizer;
       plan.candidate();
       if(signal?.aborted)throw interrupted(signal);
       // A long prefill is one all-or-nothing attempt: halving the remaining
@@ -171,7 +171,7 @@ export class Router {
       const remaining=Math.max(1,requestBudget-(Date.now()-requestStarted)-1000),prefillBudget=longPrefill?Math.max(this.relayAttemptTimeoutMs,this.relayPrefillTimeoutMs):this.relayAttemptTimeoutMs,attemptBudget=Math.max(1,Math.min(prefillBudget,longPrefill?remaining:Math.floor(remaining/Math.min(2,targets.length-i))));
       let semanticProgress=false;
       const targetController=relayActive?new AbortController():null,targetSignal=relayActive?(signal?AbortSignal.any([signal,targetController.signal]):targetController.signal):signal;
-      const timeoutError=new AppError('Same-model supplier made no progress within its relay idle budget',504,'relay_target_timeout');let targetTimer,targetExpired=false,rejectTarget;
+      const timeoutError=new AppError('Same-model supplier made no progress within its relay idle budget',504,'relay_target_timeout');let targetTimer,targetExpired=false,rejectTarget,queueDeadlineError;
       const targetDeadline=relayActive?new Promise((_,reject)=>{rejectTarget=reject;}):null;
       const progress=()=>{if(!relayActive||targetExpired)return;clearTimeout(targetTimer);const remainingWhole=Math.max(1,requestBudget-(Date.now()-requestStarted)-1000);targetTimer=setTimeout(()=>{targetExpired=true;rejectTarget(timeoutError);targetController.abort(timeoutError);},Math.min(semanticProgress?this.relayAttemptTimeoutMs:attemptBudget,remainingWhole));};
       progress();
@@ -201,15 +201,17 @@ export class Router {
           if(planned.error.code==='relay_context_incompatible'){const blocked=this.relay.candidates(route,route.targets,{ignoreCooldown:true}).map(t=>this.relay.cooldown(t)).filter(Boolean);if(blocked.length)planned.error.retryAfterSeconds=Math.max(1,Math.ceil((Math.min(...blocked.map(r=>r.until))-Date.now())/1000));}
           throw planned.error;
         }
+        const qoderTarget=kind==='qoder',qoderSourceKey=qoderTarget?this.catalogKey(target.upstreamId):null,qoderRouteKey=qoderTarget?JSON.stringify(route):null;
+        const qoderOptions=qoderTarget?{requestDeadlineAt:requestStarted+requestBudget-1000,onQueueState:waiting=>{if(!relayActive||targetExpired||usage.finishedRow)return;if(!waiting){progress();return}clearTimeout(targetTimer);targetTimer=setTimeout(()=>{queueDeadlineError=Object.assign(new AppError('Qoder request deadline exceeded while queued',504,'request_timeout'),{qoderQueueRecoveryTerminal:true});targetExpired=true;rejectTarget(queueDeadlineError);targetController.abort(queueDeadlineError);},Math.max(1,requestBudget-(Date.now()-requestStarted)-1000));},beforeQueueReplay:()=>{if(targetSignal?.aborted)throw interrupted(targetSignal);if(!this.relay.enabled(target)||qoderSourceKey!==this.catalogKey(target.upstreamId)||qoderRouteKey!==JSON.stringify(this.config.value.routes.find(r=>r.id===route.id))||controlVersion&&controlVersion!==this.controls.targetVersion(target))throw new AppError('Qoder queue target changed before recovery; no replay sent',503,'control_target_ineligible');controlLease?.checkTarget?.(target);}}:undefined;
         let result;for(let transportAttempt=1;transportAttempt<=2;transportAttempt++){
           try{let restriction=recoveryRestriction(target);if(restriction){blockedByCircuit=true;throw restriction;}
             if(recoveryCircuits.has(targetKey(target))){const balance=await waitTarget(this.relay.balance(target,targetSignal));restriction=recoveryRestriction(target);if(restriction){blockedByCircuit=true;throw restriction;}if(this.relay.exhaustedBalance(balance)){blockedByCircuit=true;throw new AppError('原供应在恢复派发前已确认剩余额度为零；本次未重复生成，模型与上下文保持不变',402,'same_model_credits_exhausted');}}
             if(controlVersion&&(!this.relay.enabled(target)||controlVersion!==this.controls.targetVersion(target)))throw new AppError('Routing policy candidate source changed before dispatch; refresh eligibility',503,'control_target_ineligible');
             controlLease?.checkTarget?.(target);
-            if((this.config.value.upstreams??[]).find(u=>u.id===target.upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(target))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');plan.dispatched(!usage.row.dispatched);usage.dispatched();result=await waitTarget(this.platforms.chat(target,adapted.request,targetSignal));break;}
+            if((this.config.value.upstreams??[]).find(u=>u.id===target.upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(target))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');plan.dispatched(!usage.row.dispatched);usage.dispatched();result=await waitTarget(this.platforms.chat(target,adapted.request,targetSignal,qoderOptions));break;}
           catch(e){const retryBase=this.relayNetworkRetryDelayMs,retryDelay=retryBase+Math.floor(Math.random()*retryBase/2);if(!relayActive||(!isRelayTransportFailure(e)||e.code==='relay_target_timeout')||transportAttempt===2||targetSignal?.aborted||attemptBudget<=retryDelay+100||requestBudget-(Date.now()-requestStarted)<=retryDelay+1000)throw e;
             usage.row.transportAttempts=2;usage.row.transportRetryReason=e.code;usage.row.transportRetryDelayMs=retryDelay;progress();await waitTarget(sleep(retryDelay,undefined,{signal:targetSignal}));progress();}
-        }response=result.response;
+        }response=result.response;if(qoderTarget&&result.qoderQueueTelemetry){usage.row.qoderQueueTelemetry=result.qoderQueueTelemetry;queueRecoveryFinalizer=result.finalizeQoderQueue;}
         const nativeAttempts=Number(response.headers?.get('x-ai-credit-trae-attempts'));if(Number.isInteger(nativeAttempts)&&nativeAttempts>0&&nativeAttempts<=2)usage.row.nativeAttempts=nativeAttempts;const nativeRetry=response.headers?.get('x-ai-credit-trae-retry-reason');if(nativeRetry==='reasoning_only_stop')usage.row.nativeRetryReason=nativeRetry;
         // During automatic handoff, no answer or proposed tool call is exposed
         // until this attempt is complete. Failed partial streams can then be
@@ -224,10 +226,11 @@ export class Router {
       }catch(e){
         // An adapter-local block is definitively before fetch, not a new send.
         if(e.code==='zcode_upstream_blocked'&&e.upstreamRequestSent===false&&usage.retractUnsentDispatch())plan.retractUnsentDispatch();
-        if(signal?.aborted)e=interrupted(signal);else if(targetExpired)e=timeoutError;failure=e;last=e;
+        if(signal?.aborted)e=interrupted(signal);else if(targetExpired)e=queueDeadlineError??timeoutError;failure=e;last=e;
         skipped=!usage.row.dispatched&&(['control_target_ineligible','client_credit_budget_exceeded'].includes(e.code)||relayActive&&['relay_capacity_incompatible','relay_context_incompatible','tools_not_supported','images_not_supported','reasoning_effort_not_supported','reasoning_parameter_not_supported','wb_inference_disabled'].includes(e.code));
         if(skipped)usage.row.candidatePlan={...usage.row.candidatePlan,state:'skipped',reasonCode:e.code};
         plan.failure(e,target,{skipped});
+        if(this.config.value.upstreams?.find(u=>u.id===target.upstreamId)?.kind==='qoder'&&e.qoderQueueRecoveryTerminal===true)throw e;
         const depleted=!blockedByCircuit&&!signal?.aborted&&!isContextWindowError(e)&&this.pool.exhausted(route,target,e),poolModelAbsent=route.accountPool?.enabled&&e.code==='model_not_found',relayReason=signal?.aborted||['control_target_ineligible','client_credit_budget_exceeded'].includes(e.code)?null:blockedByCircuit?(e.status===429?'rate_limited':null):this.relay.failure(route,target,e,{source});
         if(relayReason&&relayReason!=='capability_unavailable'){lastSupplierFailure=e;firstSupplierFailure??=e;}
         if(relayReason==='rate_limited')rememberRateLimit(target);
@@ -276,7 +279,7 @@ export class Router {
         if(e.code==='zcode_upstream_blocked'||started||signal?.aborted||i===targets.length-1||(!relayReason&&!depleted&&!poolModelAbsent&&e.code!=='wb_inference_disabled'&&!(route.fallbackStatuses??[408,429,500,502,503,504]).includes(e.status??502)))throw e;
         previousTarget=target;relayTrigger=relayReason??'upstream_unavailable';
       }
-      finally{clearTimeout(targetTimer);if(response?.body&&!response.body.locked)await response.body.cancel().catch(()=>{});usage.row.requestOutcome=plan.summary(completed?'completed':'ongoing');usage.finish(completed?'completed':skipped?'skipped':signal?.aborted&&signal.reason?.name!=='TimeoutError'||!failure?'cancelled':'failed',failure);controlLease?.observe(usage.finishedRow);}
+      finally{const outcome=completed?'completed':skipped?'skipped':signal?.aborted&&signal.reason?.name!=='TimeoutError'||!failure?'cancelled':'failed';queueRecoveryFinalizer?.(outcome);clearTimeout(targetTimer);if(response?.body&&!response.body.locked)await response.body.cancel().catch(()=>{});if(usage.row.qoderQueueTelemetry)usage.row.qoderQueueTelemetry=Object.freeze({...usage.row.qoderQueueTelemetry,outcome});usage.row.requestOutcome=plan.summary(completed?'completed':'ongoing');usage.finish(outcome,failure);controlLease?.observe(usage.finishedRow);}
     }
     throw last??new AppError('Route has no targets',503,'no_upstream');
     }catch(error){plan??=new RequestPlan({model:null,messages:[]},this.config.value??{});requestError=plan.attach(error);throw requestError;}

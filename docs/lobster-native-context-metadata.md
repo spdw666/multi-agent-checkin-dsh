@@ -31,7 +31,7 @@ This is a client metadata declaration, not a generation or agent acceptance.
 No options, arbitrary local config values, model aliases, case folding, or generic
 200000/400000 selectors extend the six-entry table. Explicit invalid numeric or
 wrong-type service fields stay unknown. Future valid official declarations win.
-The dated Qwen3.5 ID, GLM5V and Doubao Code preview remain unknown. Tools,
+The six-entry Lobster native registry gives no capacity to the dated Qwen3.5 ID, GLM5V or Doubao Code preview. The exact Qwen snapshot has a separate manufacturer declaration; exact GLM5V has a separate [Hermes client-registry declaration](lobster-glm5v-client-registry-context.md). Neither is relabeled as Lobster native evidence. Tools,
 accessible flags, disabled settings and output budgets are not changed.
 
 Validation: `node --test tests/lobster-native-context.test.mjs`.
