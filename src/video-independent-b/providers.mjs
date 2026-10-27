@@ -26,6 +26,20 @@ export function hailuoRequest({path,method='GET',body,query={},now,token,deviceC
 export function decodeXyq(body){if(body?.ret!=='0'||typeof body.response!=='string')fail('upstream_business_or_schema_error');let d;try{d=JSON.parse(body.response);}catch{fail('upstream_schema_error');}if(!d||typeof d!=='object')fail('upstream_schema_error');return d;}
 function business(body,kind){if(kind==='hailuo'){if(body?.statusInfo?.code!==0||!body.data||typeof body.data!=='object')fail('upstream_business_or_schema_error');return body.data;}if(body?.code!==0||!body.data||typeof body.data!=='object')fail('upstream_business_or_schema_error');return body.data;}
 
+// The official Art header reads attr.usablePower, with totalPower-usedPower
+// as its legacy fallback. LibTV and model-card balances are independent buckets.
+export function normalizeLiblibArtBalance(account){
+ const attr=account?.attr;
+ if(!attr||typeof attr!=='object'||Array.isArray(attr))fail('balance_schema_error');
+ const nonnegative=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
+ let value;
+ if(attr.usablePower!==undefined&&attr.usablePower!==null){if(!nonnegative(attr.usablePower))fail('balance_schema_error');value=attr.usablePower;}
+ else if(nonnegative(attr.totalPower)&&nonnegative(attr.usedPower))value=Math.max(0,attr.totalPower-attr.usedPower);
+ else fail('balance_schema_error');
+ const parts=[];for(const [key,name]of [['freeUsablePower','免费积分'],['rechargeUsablePower','充值积分']])if(nonnegative(attr[key]))parts.push({name,value:attr[key],unit:'积分'});
+ return {value,unit:'积分',parts,source:'/api/www/member/account',balanceContract:'liblib_art_member_account',note:'Liblib Art 官网可用积分；LibTV 与模型卡积分独立计量'};
+}
+
 export function createProvider(input,deps={}){
  let credential=clone(input);const platform=credential.platform,origin=credential.origin;
  if(!origins[platform]?.includes(origin))fail('origin_not_allowed');
@@ -137,7 +151,27 @@ export function createProvider(input,deps={}){
   const i=await needIdentity();
   if(platform==='xiaoyunque'){const d=decodeXyq(await request('/commerce/v1/benefits/user_credit','POST',{}));const credit={};for(const k of ['vip_credit','gift_credit','purchase_credit','free_credits'])if(Number.isFinite(d.credit?.[k]))credit[k]=d.credit[k];return {...i,status:'authenticated',balanceContract:'user_credit',credit,actualAward:0};}
   if(platform==='hailuo'){const d=business(await request('/v1/api/billing/credit'),'hailuo');if(!Array.isArray(d.sub_credits))fail('balance_schema_error');return {...i,status:'authenticated',totalCredit:d.total_credit,loginGiftCredit:d.sub_credits.filter(x=>x.credit_type===3).reduce((s,x)=>s+(Number.isFinite(x.credit)?x.credit:0),0),actualAward:0};}
-  const h=await liblibHistory();return {...i,status:'authenticated',todayObtainedRows:h.rows.length,historyComplete:h.complete,actualAward:0,accountGetReservedForClaim:true};
+  // The official wallet GET also performs daily login initialization. Observe it
+  // only after a complete, same-owner daily receipt proves today's initialization
+  // is already settled. A balance refresh must never become an unleased claim.
+  const day=dayAt(now()),owner=liblibOwnerId,h=await liblibHistory();
+  const base={...i,status:'authenticated',todayObtainedRows:h.rows.length,historyComplete:h.complete,actualAward:0,accountGetReservedForClaim:true};
+  const pending=reason=>({...base,balanceKnown:false,balanceReason:reason});
+  if(origin!=='https://www.liblib.art'||!owner)return pending('liblib_art_wallet_source_unverified');
+  if(!h.complete)return pending('liblib_balance_history_incomplete');
+  if(!liblibDailyRows(h,day,owner).length)return pending('liblib_balance_requires_settled_daily_receipt');
+  const end=(dayRange(now()).end+1)*1000;
+  if(end-now()<120000)return pending('liblib_balance_daily_boundary_pending');
+  const before=await needIdentity();
+  if(before.principalHash!==i.principalHash||owner!==liblibOwnerId||dayAt(now())!==day)fail('observation_subject_or_day_changed');
+  if(end-now()<120000)return pending('liblib_balance_daily_boundary_pending');
+  const checksum=rows=>sha(JSON.stringify(rows.map(r=>({id:r.id,status:r.status,opTypeCode:r.opTypeCode,sourceCode:r.sourceCode,sourceName:r.sourceName,transAmount:r.transAmount,userId:r.userId,transTime:r.transTime,effectStartTime:r.effectStartTime,effectEndTime:r.effectEndTime})).sort((a,b)=>String(a.id).localeCompare(String(b.id)))));
+  const beforeChecksum=checksum(h.rows);
+  const account=business(await request('/api/www/member/account','GET',undefined,{isApp:false}),'liblib');
+  if(String(account.userId)!==owner||account.ownerUuid!==principalExpected())fail('liblib_balance_owner_mismatch');
+  const after=await liblibHistory(),identityAfter=await needIdentity();
+  if(!after.complete||identityAfter.principalHash!==i.principalHash||owner!==liblibOwnerId||dayAt(now())!==day||!liblibDailyRows(after,day,owner).length||beforeChecksum!==checksum(after.rows))fail('liblib_balance_snapshot_changed');
+  return {...base,balanceKnown:true,balance:normalizeLiblibArtBalance(account),balanceProof:{day,sourceCode:10,receiptAlreadySettled:true,historyChecksum:beforeChecksum,historyUnchanged:true,observedAt:new Date(now()).toISOString()}};
  };
  const refresh=async()=>{
   if(platform!=='hailuo'){const i=await needIdentity();return {...i,status:'session_revalidated',rotated:false,refreshGrant:'no separate refresh endpoint verified'};}

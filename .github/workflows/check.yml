@@ -52,6 +52,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./desktop/tests/Run-VideoCardsFixture.ps1 -SourceFile "./desktop/AiCreditDesktop.cs" -OutputDirectory "$env:RUNNER_TEMP/VideoCardsTests"
+      - name: Verify native window recovery across monitor changes
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/tests/Run-WindowPlacementFixture.ps1 -SourceFile "./desktop/AiCreditDesktop.cs" -OutputDirectory "$env:RUNNER_TEMP/WindowPlacementTests"
       - name: Verify virtual model directory and asynchronous loading lifecycle
         if: runner.os == 'Windows'
         shell: pwsh

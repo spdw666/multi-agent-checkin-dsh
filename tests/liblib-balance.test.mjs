@@ -1,0 +1,15 @@
+import test from'node:test';import assert from'node:assert/strict';import{pathToFileURL}from'node:url';import{resolve}from'node:path';
+const root=process.env.LIBLIB_BALANCE_TEST_ROOT?resolve(process.env.LIBLIB_BALANCE_TEST_ROOT):resolve(import.meta.dirname,'..');
+const {normalizeLiblibArtBalance:balance}=await import(pathToFileURL(resolve(root,'src/video-independent-b/providers.mjs')));
+test('official current attr.usablePower is the Art available balance',()=>{assert.equal(typeof balance,'function');assert.equal(balance({attr:{usablePower:84}}).value,84);});
+test('zero available balance is preserved instead of treated missing',()=>assert.equal(balance({attr:{usablePower:0,totalPower:100,usedPower:1}}).value,0));
+test('legacy total and used fields use subtraction, not total capacity',()=>assert.equal(balance({attr:{totalPower:150,usedPower:43}}).value,107));
+test('legacy consumed beyond total matches official zero lower bound',()=>assert.equal(balance({attr:{totalPower:10,usedPower:12}}).value,0));
+test('LibTV balance is never added into Art balance',()=>assert.equal(balance({attr:{usablePower:20,libtvUsablePower:80}}).value,20));
+test('model-card independent balance is not added twice',()=>assert.equal(balance({attr:{usablePower:20,exPowerSummary:{usablePower:1000}}}).value,20));
+test('free and recharge buckets are descriptive parts, not re-added',()=>{const r=balance({attr:{usablePower:37,freeUsablePower:20,rechargeUsablePower:17}});assert.equal(r.value,37);assert.equal(r.parts.length,2);assert.equal(r.unit,'积分');});
+for(const value of ['20',NaN,Infinity,-1])test('invalid available value is not silently converted '+String(value),()=>assert.throws(()=>balance({attr:{usablePower:value,totalPower:50,usedPower:0}}),{code:'balance_schema_error'}));
+test('missing all balance fields remains a schema error, not fabricated zero',()=>assert.throws(()=>balance({attr:{libtvUsablePower:80}}),{code:'balance_schema_error'}));
+test('null current field may use explicit complete legacy pair',()=>assert.equal(balance({attr:{usablePower:null,totalPower:10,usedPower:0}}).value,10));
+test('missing used field is not silently assumed zero',()=>assert.throws(()=>balance({attr:{totalPower:100}}),{code:'balance_schema_error'}));
+test('wallet source and contract are explicit',()=>{const {value,unit,source,balanceContract}=balance({attr:{usablePower:4}});assert.deepEqual({value,unit,source,balanceContract},{value:4,unit:'积分',source:'/api/www/member/account',balanceContract:'liblib_art_member_account'});});

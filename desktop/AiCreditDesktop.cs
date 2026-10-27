@@ -724,7 +724,35 @@ namespace AiCreditDesktop {
             MotionClock.Suspended = !active;
             refreshTimer.Enabled = active;
         }
-        internal async void Restore() { Show(); WindowState = FormWindowState.Normal; Activate(); ApplyMotionState(); await Run(async () => { await Backend.Connect(false); await LoadAll(); }); }
+        // WS_VISIBLE / a taskbar entry does not prove that a window is on a monitor.
+        // RestoreBounds may retain the minimized sentinel (-32000,-32000), a
+        // disconnected monitor, or a previous DPI/work-area size.
+        internal static Rectangle RecoverWindowBounds(Rectangle bounds, Rectangle[] workingAreas, Rectangle preferredArea) {
+            var areas=(workingAreas??new Rectangle[0]).Where(a=>a.Width>0&&a.Height>0).ToArray();
+            if(areas.Length==0)areas=new[]{preferredArea.Width>0&&preferredArea.Height>0?preferredArea:new Rectangle(0,0,1320,900)};
+            Rectangle area=areas.Contains(preferredArea)?preferredArea:areas[0];long overlap=0;
+            foreach(var candidate in areas){var intersection=Rectangle.Intersect(bounds,candidate);long pixels=(long)Math.Max(0,intersection.Width)*Math.Max(0,intersection.Height);if(pixels>overlap){overlap=pixels;area=candidate;}}
+            bool offscreen=overlap==0;
+            int width=Math.Min(area.Width,Math.Max(offscreen?1320:780,bounds.Width>0?bounds.Width:1320));
+            int height=Math.Min(area.Height,Math.Max(offscreen?900:700,bounds.Height>0?bounds.Height:900));
+            int x=offscreen?area.Left+(area.Width-width)/2:Math.Max(area.Left,Math.Min(bounds.Left,area.Right-width));
+            int y=offscreen?area.Top+(area.Height-height)/2:Math.Max(area.Top,Math.Min(bounds.Top,area.Bottom-height));
+            return new Rectangle(x,y,width,height);
+        }
+        internal void RestoreVisibleWindow() {
+            if(IsDisposed||Disposing)return;
+            var prior=WindowState;
+            var normal=prior==FormWindowState.Normal?Bounds:RestoreBounds;
+            var areas=Screen.AllScreens.Select(screen=>screen.WorkingArea).ToArray();
+            var preferred=Screen.PrimaryScreen==null?new Rectangle(0,0,1320,900):Screen.PrimaryScreen.WorkingArea;
+            var recovered=RecoverWindowBounds(normal,areas,preferred);
+            if(prior==FormWindowState.Minimized||recovered!=normal)WindowState=FormWindowState.Normal;
+            if(recovered!=normal){StartPosition=FormStartPosition.Manual;Bounds=recovered;}
+            Opacity=1;ShowInTaskbar=true;Show();
+            if(prior==FormWindowState.Maximized)WindowState=FormWindowState.Maximized;
+            BringToFront();Activate();ApplyMotionState();
+        }
+        internal async void Restore() { RestoreVisibleWindow(); await Run(async () => { await Backend.Connect(false); await LoadAll(); }); }
         internal void FinishSelfTest() { if(balanceTransition!=null)balanceTransition.Dispose();if(routesTransition!=null)routesTransition.Dispose();quit = true; Close(); }
         private Panel Page(string title) { var p = new Panel { Text=title, BackColor = Theme.Background, Padding = new Padding(Theme.Padding) }; tabs.AddPage(p); return p; }
         private FlowLayoutPanel Toolbar(Panel p, int height = 56, bool adaptive = false) { var b = new FlowLayoutPanel { Dock = DockStyle.Top, Height = height,BackColor=Theme.Background }; if(adaptive){b.AutoSize=true;b.AutoSizeMode=AutoSizeMode.GrowAndShrink;b.MinimumSize=new Size(0,height);b.Padding=new Padding(0,0,0,8);} p.Controls.Add(b); return b; }

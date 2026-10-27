@@ -94,6 +94,24 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
   const wafOnly=(before,after,names)=>kind==='liblib'&&names.length>0&&names.every(n=>n==='acw_tc')&&
    JSON.stringify({...before,cookies:before.cookies.filter(c=>c.name!=='acw_tc')})===JSON.stringify({...after,cookies:after.cookies.filter(c=>c.name!=='acw_tc')})&&
    after.cookies.filter(c=>c.name==='acw_tc').every(c=>c.domain==='api2.liblib.art'&&c.path==='/'&&c.httpOnly===true);
+  // The global site rotates these two observed traffic cookies on every GET.
+  // Retain them in this request context, not as a new login/vault generation.
+  // Every auth field, subject, source and non-traffic cookie remains byte-equal.
+  const hailuoTrafficOnly=(before,after,names)=>{
+   if(kind!=='hailuo'||cert.origin!=='https://hailuoai.video'||names.length===0||!names.every(n=>n==='_abck'||n==='ak_bmsc'))return false;
+   const traffic=c=>c.name==='_abck'||c.name==='ak_bmsc';
+   const strip=value=>({...value,cookies:value.cookies.filter(c=>!traffic(c))});
+   if(JSON.stringify(strip(before))!==JSON.stringify(strip(after)))return false;
+   for(const name of names){
+    const old=before.cookies.filter(c=>c.name===name),next=after.cookies.filter(c=>c.name===name);
+    if(old.length!==1||next.length!==1)return false; // additions/deletions still recertify
+    const valid=c=>c.domain==='.hailuoai.video'&&c.path==='/'&&c.secure===true&&c.sameSite==='no_restriction'&&c.httpOnly===(name==='ak_bmsc');
+    if(!valid(old[0])||!valid(next[0])||!next[0].value||!Number.isFinite(next[0].expirationDate)||next[0].expirationDate*1000<=now().getTime())return false;
+    const stable=c=>{const {value,expirationDate,...rest}=c;return rest;};
+    if(JSON.stringify(stable(old[0]))!==JSON.stringify(stable(next[0])))return false;
+   }
+   return true;
+  };
   const verifyCandidate=async candidate=>{
    // Every newly issued auth value must itself authenticate as the bound user.
    // A server that rotates forever is not silently certified from a predecessor.
@@ -105,7 +123,7 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
     let identityError;try{assertIdentity(isA?await verifier.verifyIdentity(candidate):await verifier.verifyIdentity());}catch(e){identityError=e;}
     let result=candidate,names=[];for(const item of issued){const merged=applyOfficialSetCookies(result,item.headers,item.url,{now:now().getTime()});if(merged.logout)return invalidate(merged.session);names.push(...merged.changedNames);result=merged.session;}
     if(identityError)throw identityError;
-    cleanOf(result);if(JSON.stringify(result)===JSON.stringify(candidate)||wafOnly(candidate,result,names))return result;candidate=result;
+    cleanOf(result);if(JSON.stringify(result)===JSON.stringify(candidate)||wafOnly(candidate,result,names)||hailuoTrafficOnly(candidate,result,names))return result;candidate=result;
    }
    throw failure('video_session_rotation_unstable',true,409);
   };
@@ -124,11 +142,20 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
    // traffic cookie does not change authentication and must not churn the shared
    // credential file across consumers. All auth/non-WAF changes remain strict.
    if(!merged.changed||wafOnly(current,merged.session,merged.changedNames))return null;
+   if(hailuoTrafficOnly(current,merged.session,merged.changedNames)){
+    cert.currentSession=frozen(merged.session);
+    return structuredClone(cert.currentSession);
+   }
    return structuredClone(await writeCurrent(await verifyCandidate(merged.session)));
   });
   const saveCredential=async next=>serial(async()=>{
    live();const clean=cleanOf(next);
    if(JSON.stringify(clean)===JSON.stringify(cleanOf(cert.currentSession))){if(!await unchanged())throw failure('video_session_source_changed',true,409);return;}
+   // Parallel B readers may try to persist an older traffic-only response after
+   // another reader advanced the in-memory jar. Keep the latest jar, never
+   // roll traffic back or turn that benign race into an authentication error.
+   const trafficNames=['_abck','ak_bmsc'].filter(name=>JSON.stringify(next.cookies.filter(c=>c.name===name))!==JSON.stringify(cert.currentSession.cookies.filter(c=>c.name===name)));
+   if(hailuoTrafficOnly(next,cert.currentSession,trafficNames)){if(!await unchanged())throw failure('video_session_source_changed',true,409);return;}
    // A stale B instance may not roll newer cookies back while renewing a token.
    if(JSON.stringify(next.cookies)!==JSON.stringify(cert.currentSession.cookies))throw failure('video_session_snapshot_changed',true,409);
    await writeCurrent(await verifyCandidate(next));
@@ -197,7 +224,13 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
    return {submitted:true,mutation:true,automaticPerformed:true,claimed:amount>0,observed:amount===0,credit:amount,officialDailyReceipt:receipt};
   }catch(e){if(mayHaveSubmitted)e.beforeSubmission=false;if(e.beforeSubmission===true)attempts.delete(key);else e.beforeSubmission=false;throw e;}
  }
- return Object.freeze({supportsCheckin:true,descriptor:{id:kind,checkinSupported:true,claimOnly:true,inference:false},resolve,models:async()=>[],status,claim,async health(c){const x=await context(c);await x.identity();let h;if(['jimeng','kling'].includes(kind))h=await x.provider.health(x.s);else{const r=await x.provider.status();let value=null;if(kind==='xiaoyunque'){const values=Object.values(r.credit??{});if(values.length&&values.every(finite))value=values.reduce((a,b)=>a+b,0);}else if(kind==='hailuo'&&finite(r.totalCredit))value=r.totalCredit;h={status:'authenticated',balance:{value,unit:'积分'}};}const checkin=await status(c);return {status:h.status,credentialStatus:'authenticated',websiteUrl:x.cert.origin,balance:h.balance,checkin,capabilities:{checkin:true,inference:false,models:false,claimOnly:true}};}});
+ return Object.freeze({supportsCheckin:true,descriptor:{id:kind,checkinSupported:true,claimOnly:true,inference:false},resolve,models:async()=>[],status,claim,async health(c){const x=await context(c);await x.identity();let h;if(['jimeng','kling'].includes(kind))h=await x.provider.health(x.s);else{const r=await x.provider.status();let value=null;if(kind==='xiaoyunque'){const values=Object.values(r.credit??{});if(values.length&&values.every(finite))value=values.reduce((a,b)=>a+b,0);}else if(kind==='hailuo'&&finite(r.totalCredit))value=r.totalCredit;
+    let balance={value,unit:'积分'};
+    if(kind==='liblib'){
+     if(r.balanceKnown===true){if(!r.balance||!finite(r.balance.value))throw new AppError('Liblib 官网余额返回格式待核验',502,'video_balance_schema_error');balance={...r.balance,value:r.balance.value,unit:'积分'};}
+     else {const notes={liblib_balance_requires_settled_daily_receipt:'今日领取回执未核实，核实后同步官网余额',liblib_balance_daily_boundary_pending:'接近积分日切换，稍后重新核验官网余额',liblib_balance_history_incomplete:'官方账单尚未完整返回，暂不触发钱包初始化',liblib_art_wallet_source_unverified:'当前站点尚未核实官网余额来源'};balance={value:null,unit:'积分',note:notes[r.balanceReason]??'官网余额尚未满足只读核验条件'};}
+    }
+    h={status:'authenticated',balance};}const checkin=await status(c);return {status:h.status,credentialStatus:'authenticated',websiteUrl:x.cert.origin,balance:h.balance,checkin,capabilities:{checkin:true,inference:false,models:false,claimOnly:true}};}});
 }
 export const jimengDailyProvider=createGatewayVideoProvider('jimeng');
 export const klingDailyProvider=createGatewayVideoProvider('kling');
