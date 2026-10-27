@@ -7,12 +7,12 @@ import {ClaimService} from '../src/claims.mjs';
 import {Scheduler} from '../src/scheduler.mjs';
 import {Ledger} from '../src/store.mjs';
 import {validateConfig} from '../src/config.mjs';
-import {desktopProviderKinds,desktopBalance,providerCapabilities} from '../src/provider-registry.mjs';
+import {desktopProviderKinds,desktopBalance,providerCapabilities,videoDailyProviderKinds} from '../src/provider-registry.mjs';
 import {importModels} from '../src/model-directory.mjs';
 const schedule={enabled:true,startup:false,timezone:'Asia/Shanghai',hour:0,minute:0,jitterSeconds:0,retryMinutes:60};
 test('all desktop kinds validate without changing existing account switches',async()=>{
  const c=JSON.parse(await readFile(new URL('../config.example.json',import.meta.url)));c.accounts=[];c.upstreams=[];c.routes=[];
- for(const kind of desktopProviderKinds){c.accounts.push({id:kind,platform:kind,enabled:false,credentials:{kind:'desktop',file:'auto'}});c.upstreams.push({id:kind,kind,accountId:kind,enabled:false})}
+ for(const kind of desktopProviderKinds){const claimOnly=videoDailyProviderKinds.has(kind);c.accounts.push({id:kind,platform:kind,enabled:false,credentials:claimOnly?{kind:'file',file:'./private-'+kind+'.json'}:{kind:'desktop',file:'auto'}});if(!claimOnly)c.upstreams.push({id:kind,kind,accountId:kind,enabled:false})}
  assert.equal(validateConfig(c),c);assert.ok(c.accounts.every(a=>!a.enabled));
  c.accounts[0].credentials.apiKey='fixture';assert.throws(()=>validateConfig(c),e=>e.code==='inline_credentials');
 });

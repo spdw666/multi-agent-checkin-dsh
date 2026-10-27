@@ -48,6 +48,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./desktop/tests/Run-WbRefreshFixture.ps1 -OutputDirectory "$env:RUNNER_TEMP/WbRefreshTests"
+      - name: Verify seven-platform cards, logos, state and Edge entry contract
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/tests/Run-VideoCardsFixture.ps1 -SourceFile "./desktop/AiCreditDesktop.cs" -OutputDirectory "$env:RUNNER_TEMP/VideoCardsTests"
       - name: Verify virtual model directory and asynchronous loading lifecycle
         if: runner.os == 'Windows'
         shell: pwsh

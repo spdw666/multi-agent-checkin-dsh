@@ -215,7 +215,7 @@ export class Platforms {
   }
   async claim(accountId,taskId,options={}) {
     const a=this.account(accountId);const c=await this.credentials.resolve(accountId);
-    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.claim!=='function')throw new AppError('该应用未声明领取接口',400,'checkin_not_supported');return p.claim(c,taskId,{account:a,...(a.platform==='codearts'&&options?.confirmOnly===true?{confirmOnly:true}:{})});}
+    if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.claim!=='function')throw new AppError('该应用未声明领取接口',400,'checkin_not_supported');return p.claim(c,taskId,{account:a,...(a.platform==='codearts'?{...(options?.confirmOnly===true?{confirmOnly:true}:{}),...(Number.isSafeInteger(options?.expectedCampaignId)&&options.expectedCampaignId>0?{expectedCampaignId:options.expectedCampaignId}:{})}:{})});}
     if(a.platform==='workbuddy'&&taskId==='daily-checkin')return this.wb.claimDailyCheckin(c);
     if(a.platform==='minimax'&&taskId==='daily-checkin')return miniMaxClaim(c);
     if(a.platform==='zcode'&&taskId==='free-plan-claim')return zcodeClaim(c,{ledger:this.credentials.ledger,accountId,profileDir:this.config.path(`./data/accounts/${accountId}/captcha-browser`)});

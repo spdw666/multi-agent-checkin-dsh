@@ -1,6 +1,9 @@
 import {AppError} from './util.mjs';
-export const desktopProviderKinds=new Set(['qoder','codebuddy','workbuddyai','cline','codearts','lobster','raccoon','loomy','opencode']);
-const definitions={qoder:['provider-qoder.mjs','qoderProvider'],codebuddy:['provider-buddy.mjs','codeBuddyProvider'],workbuddyai:['provider-buddy.mjs','workBuddyAIProvider'],cline:['provider-cline.mjs','clineProvider'],codearts:['provider-codearts.mjs','codeartsProvider'],lobster:['provider-lobster.mjs','lobsterProvider'],raccoon:['provider-raccoon.mjs','raccoonProvider'],loomy:['provider-loomy.mjs','loomyProvider'],opencode:['provider-opencode.mjs','openCodeProvider']};
+export const independentVideoProviderKinds=new Set(['jimeng','kling','xiaoyunque','hailuo','liblib']);
+export const videoDailyProviderKinds=new Set(['vidu','pixverse',...independentVideoProviderKinds]);
+export const desktopProviderKinds=new Set(['qoder','codebuddy','workbuddyai','cline','codearts','lobster','raccoon','loomy','opencode',...videoDailyProviderKinds]);
+const definitions={qoder:['provider-qoder.mjs','qoderProvider'],codebuddy:['provider-buddy.mjs','codeBuddyProvider'],workbuddyai:['provider-buddy.mjs','workBuddyAIProvider'],cline:['provider-cline.mjs','clineProvider'],codearts:['provider-codearts.mjs','codeartsProvider'],lobster:['provider-lobster.mjs','lobsterProvider'],raccoon:['provider-raccoon.mjs','raccoonProvider'],loomy:['provider-loomy.mjs','loomyProvider'],opencode:['provider-opencode.mjs','openCodeProvider'],vidu:['provider-video-daily.mjs','viduDailyProvider'],pixverse:['provider-video-daily.mjs','pixVerseDailyProvider']};
+Object.assign(definitions,{jimeng:['provider-video-independent.mjs','jimengDailyProvider'],kling:['provider-video-independent.mjs','klingDailyProvider'],xiaoyunque:['provider-video-independent.mjs','xiaoyunqueDailyProvider'],hailuo:['provider-video-independent.mjs','hailuoDailyProvider'],liblib:['provider-video-independent.mjs','liblibDailyProvider']});
 const loaded=new Map();
 export async function desktopProvider(kind){
  if(!desktopProviderKinds.has(kind))return null;

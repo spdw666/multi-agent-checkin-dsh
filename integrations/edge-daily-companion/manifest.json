@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "AI积分网关 · 一次性本机会话导入",
+  "version": "0.2.0",
+  "minimum_chrome_version": "120",
+  "description": "单次明确授权后，7站会话仅导入127.0.0.1本机加密vault；不运行日常任务。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArYm7G5C37riP0SeiI50P8v7XJhnr+LXJbR3gPMbasQagKs9Fcwh5yY21ytZkvpsccQR6ToBzQj1Of2M7R3UJBSf0hsvc2HN6YjGq5KX7NCt3lWTP8MMAvW/0PeDDpgPj5JWC2J9llx1Qh5JSsS6SeVLivlgdINaofTSilt6mlILhPzM1SK1ED6QW0DWkhan5J5lL7q8J9zoGmytLVytk1r1IVTQu3YLdw4dgWg4v7iWEXC+fosY7oNLL3TvXwpMvBQPH3GU4CbT3CU87UOURllXEgXDjVpCZRH5xRwyD/aJveM0CzFQVwPD4MrqbWKYH1zc2ig5iYbGlGx0vct1dfQIDAQAB",
+  "permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.vidu.cn/*",
+    "https://service.vidu.cn/*",
+    "https://app.pixverse.ai/*",
+    "https://app-api.pixverse.ai/*",
+    "https://jimeng.jianying.com/*",
+    "https://klingai.kuaishou.com/*",
+    "https://*.klingai.com/*",
+    "https://xyq.jianying.com/*",
+    "https://www.xiaoyunque.com/*",
+    "https://*.hailuoai.video/*",
+    "https://*.hailuoai.com/*",
+    "https://*.liblib.tv/*",
+    "https://*.liblib.art/*",
+    "http://127.0.0.1:19422/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "仅本机加密保存7站会话"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "optional_permissions": [
+    "cookies",
+    "scripting"
+  ]
+}

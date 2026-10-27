@@ -25,7 +25,8 @@ const SESSION_KEY = 'huaweicloud.codearts-snap';
 const NATIVE_AUTH_KEY = 'secret://' + JSON.stringify({extensionId:'huaweicloud.authentication',key:'HuaweiCloudSession'});
 const AGENT_TYPE = 'PromptCenter';
 const OPS_CHANNEL = 'IDE';
-// 「每日签到领1000 积分」的活动 ID；delivery 同时返回推荐码(3)/新用户(4)/学生认证(2)。
+// Legacy daily ID. Current delivery is authoritative: campaigns and amounts can
+// rotate (e.g. USER_LOGIN 34 / 100 CREDIT replaced 1 / 1000 CREDIT).
 const DAILY_CAMPAIGN_ID = 1;
 
 // Route table: the ONLY method+path(+exact query) pairs this adapter will sign. The query
@@ -557,19 +558,38 @@ export async function codeartsCampaigns(credential, options = {}) {
   return {items: Array.isArray(items) ? items : [], serverTime: firstNumber(data?.data, 'serverTime'), ended: Array.isArray(data?.data?.endedCampaigns) ? data.data.endedCampaigns.length : 0};
 }
 
-export const findDailyCampaign = items => (Array.isArray(items) ? items.find(item => item?.campaignId === DAILY_CAMPAIGN_ID) ?? null : null);
+export function findDailyCampaign(items, {now = Date.now()} = {}) {
+  const inPeriod = item => {
+    for (const [field, lower] of [['startTime', true], ['endTime', false]]) {
+      const value = item?.extra?.[field];
+      if (value === undefined || value === null) continue;
+      const at = typeof value === 'string' ? Date.parse(value) : NaN;
+      if (!Number.isFinite(at) || (lower ? at > now : at <= now)) return false;
+    }
+    return true;
+  };
+  const rows = (Array.isArray(items) ? items : []).filter(item => Number.isSafeInteger(item?.campaignId) && item.campaignId > 0 && inPeriod(item));
+  // Select the actual official manual daily-login contract, never another
+  // campaign merely because it is claimable or advertises a familiar amount.
+  const daily = rows.filter(item => item.type === 'USER_LOGIN' && item.extra?.triggerEvent === 'user.login' && item.extra?.triggerMode === 'MANUAL_CLAIM' && item.benefitUnit === 'CREDIT' && /每日(?:签到|登录)|daily\s*(?:check.?in|login)/i.test(item.title ?? ''));
+  if (daily.length) return daily.length === 1 ? daily[0] : null;
+  // Old delivery fixtures/servers did not include the type/trigger contract.
+  // The historical known ID remains usable only without contradictory metadata.
+  const legacy = rows.filter(item => item.campaignId === DAILY_CAMPAIGN_ID && item.type === undefined && item.extra?.triggerEvent === undefined && item.extra?.triggerMode === undefined);
+  return legacy.length === 1 ? legacy[0] : null;
+}
 
 /** Contract `status`: real service state, never inferred from HTTP status alone. */
 export async function codeartsStatus(credential, task = 'daily-checkin', options = {}) {
   if (task !== 'daily-checkin') throw new AppError('CodeArts 任务未登记', 400, 'codearts_task_unknown');
   const {items} = await codeartsCampaigns(credential, options);
-  const campaign = findDailyCampaign(items);
+  const campaign = findDailyCampaign(items, {now: options.now ?? Date.now()});
   const status = typeof campaign?.status === 'string' ? campaign.status : null;
   const claimable = campaign?.claimable === true;
   const claimed = status === 'CONFIRMED' || status === 'CONSUMED';
   return {
     known: campaign !== null,
-    task, campaignId: DAILY_CAMPAIGN_ID,
+    task, campaignId: campaign?.campaignId ?? null,
     title: typeof campaign?.title === 'string' ? campaign.title : null,
     status, claimable, claimed, pendingConfirmation:status==='CLAIMED', active:claimable||status==='CLAIMED', credits:firstNumber(campaign,'benefitAmount'), confirmed:status === "CONFIRMED" || status === "CONSUMED",
     pendingAmount: firstNumber(campaign, 'pendingTotalAmount'),
@@ -584,22 +604,26 @@ export async function codeartsStatus(credential, task = 'daily-checkin', options
 /** Contract `claim`: submit, then re-read delivery and require the server to have moved the state. */
 export async function codeartsClaim(credential, task = 'daily-checkin', options = {}) {
   const before = await codeartsStatus(credential, task, options);
+  if (Number.isSafeInteger(options.expectedCampaignId) && before.campaignId !== options.expectedCampaignId)
+    return {...before, submitted: false, newClaimSubmitted: false, reason: 'daily_campaign_changed'};
   if (options.confirmOnly === true && !before.claimed && !(before.known && before.pendingConfirmation))
-    return {...before, submitted: false, reason: 'pending_confirmation_changed'};
-  if (!before.known) return {...before, submitted: false, reason: 'campaign_absent'};
-  if (before.claimed) return {...before, submitted: false, alreadyClaimed: true};
-  if (!before.claimable && !before.pendingConfirmation) return {...before, submitted: false, reason: 'not_claimable'};
-  const body = {campaignId: DAILY_CAMPAIGN_ID, idempotentKey: `claim_${DAILY_CAMPAIGN_ID}_${Date.now()}`, channel: OPS_CHANNEL};
-  if(!before.pendingConfirmation)await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/claim', body, ...options});
+    return {...before, submitted: false, newClaimSubmitted: false, reason: 'pending_confirmation_changed'};
+  if (!before.known) return {...before, submitted: false, newClaimSubmitted: false, reason: 'campaign_absent'};
+  if (before.claimed) return {...before, submitted: false, newClaimSubmitted: false, alreadyClaimed: true};
+  if (!before.claimable && !before.pendingConfirmation) return {...before, submitted: false, newClaimSubmitted: false, reason: 'not_claimable'};
+  const campaignId = before.campaignId;
+  const body = {campaignId, idempotentKey: `claim_${campaignId}_${Date.now()}`, channel: OPS_CHANNEL};
+  let newClaimSubmitted = false;
+  if(!before.pendingConfirmation){await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/claim', body, ...options});newClaimSubmitted = true;}
   // claim alone is not a receipt: the upstream has a CLAIMED (claimed-but-unconfirmed) state,
   // and only /v1/ops/confirm pushes it to CONFIRMED.
   let confirmed = false;
-  try { await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/confirm', body: {campaignId: DAILY_CAMPAIGN_ID}, ...options}); confirmed = true; }
+  try { await codeartsRequest(credential, {method: 'POST', path: '/v1/ops/confirm', body: {campaignId}, ...options}); confirmed = true; }
   catch { confirmed = false; }
   const after = await codeartsStatus(credential, task, options);
-  const settled = after.status === 'CONFIRMED' || after.status === 'CONSUMED';
+  const settled = after.campaignId === campaignId && (after.status === 'CONFIRMED' || after.status === 'CONSUMED');
   if (!settled) throw new AppError('CodeArts 领取结果尚未得到服务端确认', 502, 'codearts_claim_unconfirmed');
-  return {...after, submitted: true, confirmed:confirmed && after.confirmed === true, rechecked: true};
+  return {...after, submitted: true, newClaimSubmitted, confirmed:confirmed && after.confirmed === true, rechecked: true};
 }
 
 /** Contract `health`: live identity + real credit balance + real campaign state (all read-only). */

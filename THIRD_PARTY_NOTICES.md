@@ -113,3 +113,9 @@ WB 两个参考项目的完整 MIT 声明与固定提交记录保留在 [src/wor
 ## CodeArts 传输会话协议参照
 
 [2951461586/CodeArts2API](https://github.com/2951461586/CodeArts2API/tree/c11aa7bba77d148ed04dec2c6a67b74cb8732293) 固定提交 c11aa7bba77d148ed04dec2c6a67b74cb8732293：仅对照 client.go 的会话/型号请求头与 UPSTREAM.md 的限制说明，未复制其程序、旧客户端版本头或整套网关。本网关保留独立签名、认证、聊天隔离、工具执行与测试。
+
+## 七平台每日积分与官网识别资源
+
+- 七平台 HTTP 适配、DPAPI 会话围栏、账本与一次性 Edge 导入扩展为本项目集成代码。Vidu/PixVerse 官方 CLI、即梦/小云雀公开协议及各官网第一方接口仅用于协议核对；未分发第三方账号或私有数据。
+- `src/video-independent-a/bdms-1.0.1.20.js` 与 `official-kling-node/vendor-*.js` 是即梦/可灵公开网页签名运行时的固定快照，不属于本网关 MIT 原创实现声明。适配器在隔离 Node Worker 中加载，禁用其网络，只允许宿主固定的身份、余额、每日权益与账本请求；SHA-256 在加载前验证。SDK 内原有第三方说明保持原样。
+- `desktop/platform-icons/{vidu,pixverse,jimeng,kling,xiaoyunque,hailuo,liblib}.png` 来源于各自官网 favicon/apple-touch-icon，只用于识别对应平台，不表示厂商背书。来源与转换说明见 [平台图标来源](docs/platform-icon-sources.md)。

@@ -1,4 +1,4 @@
-import {desktopProviderKinds} from './provider-registry.mjs';
+import {desktopProviderKinds,videoDailyProviderKinds,independentVideoProviderKinds} from './provider-registry.mjs';
 import {relayDefaults,validateRelay} from './model-relay.mjs';
 import {validateWorkBuddyRotation} from './workbuddy-rotation-policy.mjs';
 import {getFreeProvider} from './free-providers.mjs';
@@ -17,6 +17,8 @@ const allowedPlatforms=['workbuddy','trae','qwenwork','zcode','minimax','bigmode
 // saving stays strict so a broken edit can never be written back.
 function accountProblem(a){
   if(!allowedPlatforms.includes(a.platform)||!a.credentials)return new AppError(`Account ${a.id}: invalid platform/credentials`,400,'invalid_config');
+  if(videoDailyProviderKinds.has(a.platform)&&(a.credentials.kind!=='file'||typeof a.credentials.file!=='string'||!a.credentials.file||a.credentials.file==='auto'))return new AppError('Video daily-credit accounts require a private session JSON file reference',400,'video_daily_credentials_invalid');
+  if(independentVideoProviderKinds.has(a.platform)&&(a.inferenceEnabled===true||(a.tasks??[]).some(t=>t.enabled&&(t.id!=='daily-checkin'||t.kind==='http'||t.claimUrl||t.statusUrl))))return new AppError('Independent video accounts accept only the fixed daily-checkin task and no inference',400,'video_daily_task_contract_invalid');
   if(a.platform==='workbuddy'&&a.inferenceEnabled!==undefined&&typeof a.inferenceEnabled!=='boolean')return new AppError(`Account ${a.id}: inferenceEnabled must be boolean`,400,'invalid_config');
   if(a.platform==='freeapi'){try{getFreeProvider(a.freeProviderId)}catch(e){return e instanceof AppError?e:new AppError(`Account ${a.id}: unknown free provider`,400,'invalid_config')}}
   return null;
@@ -41,6 +43,7 @@ export function validateConfig(c,{lenient=false}={}) {
   for(const u of c.upstreams){
     const problem=(()=>{
       if(!allowedPlatforms.includes(u.kind))return new AppError(`Unknown upstream kind: ${u.kind}`,400,'invalid_config');
+      if(videoDailyProviderKinds.has(u.kind))return new AppError('Video daily-credit accounts do not provide model upstreams',400,'video_daily_no_inference');
       if(u.kind==='freeapi'&&['baseUrl','url','endpoint','proxyUrl'].some(k=>u[k]!==undefined))return new AppError('Free providers use registered fixed endpoints',400,'invalid_free_provider_endpoint');
       if(u.kind==='antigravity'){try{antigravityBase(u)}catch(e){return e instanceof AppError?e:new AppError(`Upstream ${u.id}: invalid bridge URL`,400,'invalid_antigravity_bridge')}}
       if(u.kind==='nvidia'&&['baseUrl','sidecarBaseUrl','url','endpoint','proxyUrl'].some(k=>u[k]!==undefined))return new AppError('NVIDIA uses its dedicated official endpoint; keep local proxy settings in its credential file',400,'invalid_nvidia_endpoint');

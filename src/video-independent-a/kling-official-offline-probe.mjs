@@ -1,0 +1,33 @@
+import { createHash, webcrypto } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { parentPort, workerData } from 'node:worker_threads';
+import {NATIVE_USER_AGENT} from './native-signers.mjs';
+let blockedNetwork = 0;
+const set = (key,value) => Object.defineProperty(globalThis,key,{value,writable:true,configurable:true});
+const storage=()=>({getItem(){return null;},setItem(){},removeItem(){},clear(){}});
+const element=(tag='div')=>({tagName:tag.toUpperCase(),style:{},children:[],setAttribute(){},getAttribute(){return null;},appendChild(){},removeChild(){},addEventListener(){},removeEventListener(){},getBoundingClientRect(){return {x:0,y:0,width:0,height:0};},getContext(){return null;}});
+set('window',globalThis);set('self',globalThis);set('crypto',webcrypto);
+if(workerData?.userAgent!==undefined&&workerData.userAgent!==NATIVE_USER_AGENT)throw new Error('user_agent_mismatch');
+set('navigator',{userAgent:NATIVE_USER_AGENT,language:'zh-CN',languages:['zh-CN'],platform:'Win32',hardwareConcurrency:8,sendBeacon(){blockedNetwork++;return false;}});
+set('document',{cookie:'',createElement:element,createElementNS:(_ns,t)=>element(t),querySelector(){return null;},querySelectorAll(){return [];},getElementsByTagName(){return [];},addEventListener(){},removeEventListener(){},body:element('body'),documentElement:element('html'),visibilityState:'visible',hidden:false});
+const selectedOrigin=workerData?.origin||'https://klingai.com';
+if(!['https://klingai.com','https://klingai.kuaishou.com'].includes(selectedOrigin))throw new Error('origin_denied');
+set('localStorage',storage());set('sessionStorage',storage());set('location',{href:selectedOrigin+'/',origin:selectedOrigin,hostname:new URL(selectedOrigin).hostname,pathname:'/'});
+set('screen',{width:1920,height:1080,availWidth:1920,availHeight:1080,colorDepth:24});
+set('addEventListener',()=>{});set('removeEventListener',()=>{});set('matchMedia',()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}}));
+set('fetch',async()=>{blockedNetwork++;throw new Error('offline_network_denied');});
+set('XMLHttpRequest',class {open(){blockedNetwork++;throw new Error('offline_network_denied');}});
+const timer=setTimeout(()=>{process.stdout.write(JSON.stringify({ok:false,code:'offline_probe_timeout',blockedNetwork})+'\n');process.exit(2);},8000);timer.unref();
+try{
+ for(const [file,hash] of Object.entries({'vendor--kUVOohzB.js':'867036c16c019980aa928877ba3609ca9da5a00c87b3113a704eebbf9f175a56','vendor-axios-D0P8VZOU.js':'75930e1268ee0ac50679ea29379c5d411cf61938918f22352152885353bfca98','vendor-spark-md5-D9r9gH7o.js':'ec6115f08682959eac00164b25b46b7c865a911f209bccd630dfd7fbf6789e57'}))if(createHash('sha256').update(await readFile(new URL('./official-kling-node/'+file,import.meta.url))).digest('hex')!==hash)throw new Error('sdk_hash_changed');
+ const mod=await import('./official-kling-node/vendor--kUVOohzB.js');
+ const Jose=mod.ax?.Jose;
+ if(typeof Jose?.call!=='function')throw new Error('current_Jose_export_missing');
+ const caver=Jose.call('$getCatVersion');
+ const input=workerData||{path:'/api/account/pointAndTicket',query:{scope:'PERSONAL'}};
+ if(!['/api/account/pointAndTicket','/api/account/contract','/api/account/trade','/api/pay/reward/v2'].includes(input.path))throw new Error('path_denied');
+ const payload={url:input.path,query:{...input.query,caver},form:null,requestBody:input.body??null,projectInfo:{appKey:'8M3oUipD76',radarId:'91e99da176',debug:false}};
+ const signature=await new Promise((resolve,reject)=>Jose.call('$encode',[payload,{suc:resolve,err:reject}]));
+ const result={ok:typeof signature==='string'&&signature.length>0,caver,signatureLength:String(signature).length,signatureSha256:createHash('sha256').update(String(signature)).digest('hex'),blockedNetwork,actualHttpRequests:0,browserProcessesUsed:0,authenticatedServerValidation:false};
+ if(parentPort){const url=new URL(input.path,selectedOrigin);for(const [k,v]of Object.entries({...input.query,caver,__NS_hxfalcon:signature}))if(v!=null)url.searchParams.set(k,String(v));parentPort.postMessage({ok:true,url:url.href,body:input.body,userAgent:navigator.userAgent});}else process.stdout.write(JSON.stringify({...result,userAgent:navigator.userAgent})+'\n');process.exit(result.ok?0:1);
+}catch(error){if(parentPort)parentPort.postMessage({ok:false,code:'native_signer_failed'});else process.stdout.write(JSON.stringify({ok:false,code:String(error?.message||error).slice(0,180),stack:String(error?.stack||'').split('\n').slice(0,4),blockedNetwork,actualHttpRequests:0})+'\n');process.exit(1);}
