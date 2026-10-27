@@ -1,3 +1,8 @@
+import {register as registerSampleVaultLoader} from 'node:module';
+import {mkdtemp as makeSampleVaultDir,writeFile as writeSampleVaultModule} from 'node:fs/promises';
+import {tmpdir as sampleVaultTmpdir} from 'node:os';
+import {join as sampleVaultJoin} from 'node:path';
+import {pathToFileURL as sampleVaultFileURL} from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
@@ -6,6 +11,22 @@ import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 const root=process.env.INDEPENDENT_TEST_ROOT??resolve(new URL('..',import.meta.url).pathname.replace(/^\/(\w:)/,'$1'));
+// SAMPLE-only module injection gives fixture writes and every provider read the
+// same reversible crypt callback. Production DPAPI and its host guard are not
+// changed; the explicit Windows DPAPI test still calls the real exported API.
+const sampleVaultDir=await makeSampleVaultDir(sampleVaultJoin(sampleVaultTmpdir(),'sample-vault-loader-'));
+const sampleVaultTarget=sampleVaultFileURL(sampleVaultJoin(root,'src/video-session-vault.mjs')).href;
+const sampleVaultWrapper=sampleVaultFileURL(sampleVaultJoin(sampleVaultDir,'vault.mjs')).href;
+const sampleVaultLoader=sampleVaultFileURL(sampleVaultJoin(sampleVaultDir,'loader.mjs')).href;
+await writeSampleVaultModule(new URL(sampleVaultWrapper),`import assert from 'node:assert/strict';
+import * as real from ${JSON.stringify(sampleVaultTarget)};
+export * from ${JSON.stringify(sampleVaultTarget)};
+const crypt=async(mode,b,kind)=>{const prefix=Buffer.from('SAMPLE\\0'+kind+'\\0');if(mode==='protect')return Buffer.concat([prefix,Buffer.from(b).map(x=>x^0xa5)]);assert.ok(b.subarray(0,prefix.length).equals(prefix));return Buffer.from(b.subarray(prefix.length)).map(x=>x^0xa5);};
+export const writeVideoSessionVault=(file,session,options={})=>real.writeVideoSessionVault(file,session,{...options,crypt:options.crypt??crypt});
+export const readVideoSessionVault=(file,options={})=>real.readVideoSessionVault(file,{...options,crypt:options.crypt??crypt});
+`);
+await writeSampleVaultModule(new URL(sampleVaultLoader),`let target,wrapper;export function initialize(data){({target,wrapper}=data);}export async function resolve(specifier,context,nextResolve){const result=await nextResolve(specifier,context);return result.url===target&&context.parentURL!==wrapper?{url:wrapper,shortCircuit:true}:result;}`);
+registerSampleVaultLoader(sampleVaultLoader,{parentURL:import.meta.url,data:{target:sampleVaultTarget,wrapper:sampleVaultWrapper}});
 let vault,imports;try{vault=await import(pathToFileURL(join(root,'src/video-session-vault.mjs')));}catch{}
 try{imports=await import(pathToFileURL(join(root,'src/video-session-import-server.mjs')));}catch{}
 const need=()=>{assert.ok(vault,'independent encrypted session vault exists');return vault;};
@@ -36,7 +57,7 @@ test('encrypted pending vault roundtrips but cannot be used as verified',async()
 test('verified vault binds same principal and blocks silent replacement',async()=>temp(async d=>{const p=join(d,'session.json'),s=clean();const ph=hash('vidu\0SAMPLE-user');await need().writeVideoSessionVault(p,s,{crypt,principal:'SAMPLE-user',expectedPrincipalHash:ph});const result=await need().readVideoSessionVault(p,{platform:'vidu',crypt});assert.equal(result.principal,'SAMPLE-user');assert.equal(result.principalHash,ph);const original=await readFile(p);await assert.rejects(()=>need().writeVideoSessionVault(p,s,{crypt,principal:'OTHER'}),e=>e.code==='video_session_principal_changed');assert.deepEqual(await readFile(p),original);}));
 test('vault rejects platform substitution and principal hash tampering',async()=>temp(async d=>{const p=join(d,'session.json');await need().writeVideoSessionVault(p,clean(),{crypt,principal:'SAMPLE-user'});await assert.rejects(()=>need().readVideoSessionVault(p,{platform:'pixverse',crypt}));const raw=JSON.parse(await readFile(p));raw.principalHash=hash('OTHER');await writeFile(p,JSON.stringify(raw));await assert.rejects(()=>need().readVideoSessionVault(p,{platform:'vidu',crypt}),e=>e.code==='video_session_principal_changed');}));
 test('actual Windows current-user DPAPI protects SAMPLE and reopens it',async()=>{
-  const a=need();if(process.platform!=='win32')return;
+  const a=need();if(process.platform!=='win32'){await assert.rejects(()=>a.windowsVideoSessionCrypt('protect',Buffer.from(SAMPLE),'vidu'),e=>e.code==='video_session_host_invalid');return;}
   const plain=Buffer.from(SAMPLE),enc=await a.windowsVideoSessionCrypt('protect',plain,'vidu');assert.ok(!enc.includes(plain));const dec=await a.windowsVideoSessionCrypt('unprotect',enc,'vidu');assert.equal(dec.toString(),SAMPLE);await assert.rejects(()=>a.windowsVideoSessionCrypt('unprotect',enc,'pixverse'));dec.fill(0);
 });
 test('Vidu identity verifies only root official id and never calls grant',async()=>{const seen=[];const id=await need().verifyVideoSessionIdentity(clean(),{fetchImpl:async(u,o)=>{seen.push([u,o]);return json({id:'SAMPLE-user'});}});assert.equal(id.principal,'SAMPLE-user');assert.equal(seen[0][0],'https://service.vidu.cn/iam/v1/users/me');assert.equal(seen[0][1].redirect,'error');assert.ok(seen[0][1].headers.Cookie.includes(SAMPLE));assert.equal(seen.length,1);});

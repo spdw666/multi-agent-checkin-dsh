@@ -1,5 +1,26 @@
+import {register as registerSampleVaultLoader} from 'node:module';
+import {mkdtemp as makeSampleVaultDir,writeFile as writeSampleVaultModule} from 'node:fs/promises';
+import {tmpdir as sampleVaultTmpdir} from 'node:os';
+import {join as sampleVaultJoin} from 'node:path';
+import {pathToFileURL as sampleVaultFileURL} from 'node:url';
 import {pathToFileURL} from 'node:url';import {mkdtemp} from 'node:fs/promises';import {tmpdir} from 'node:os';
 const MODULE_ROOT=process.env.VIDEO_GATEWAY_TEST_ROOT??new URL('../',import.meta.url).pathname.replace(/^\/(\w:)/,'$1');
+// SAMPLE-only module injection gives fixture writes and every provider read the
+// same reversible crypt callback. Production DPAPI and its host guard are not
+// changed; the explicit Windows DPAPI test still calls the real exported API.
+const sampleVaultDir=await makeSampleVaultDir(sampleVaultJoin(sampleVaultTmpdir(),'sample-vault-loader-'));
+const sampleVaultTarget=sampleVaultFileURL(sampleVaultJoin(MODULE_ROOT,'src/video-session-vault.mjs')).href;
+const sampleVaultWrapper=sampleVaultFileURL(sampleVaultJoin(sampleVaultDir,'vault.mjs')).href;
+const sampleVaultLoader=sampleVaultFileURL(sampleVaultJoin(sampleVaultDir,'loader.mjs')).href;
+await writeSampleVaultModule(new URL(sampleVaultWrapper),`import assert from 'node:assert/strict';
+import * as real from ${JSON.stringify(sampleVaultTarget)};
+export * from ${JSON.stringify(sampleVaultTarget)};
+const crypt=async(mode,b,kind)=>{const prefix=Buffer.from('SAMPLE\\0'+kind+'\\0');if(mode==='protect')return Buffer.concat([prefix,Buffer.from(b).map(x=>x^0xa5)]);assert.ok(b.subarray(0,prefix.length).equals(prefix));return Buffer.from(b.subarray(prefix.length)).map(x=>x^0xa5);};
+export const writeVideoSessionVault=(file,session,options={})=>real.writeVideoSessionVault(file,session,{...options,crypt:options.crypt??crypt});
+export const readVideoSessionVault=(file,options={})=>real.readVideoSessionVault(file,{...options,crypt:options.crypt??crypt});
+`);
+await writeSampleVaultModule(new URL(sampleVaultLoader),`let target,wrapper;export function initialize(data){({target,wrapper}=data);}export async function resolve(specifier,context,nextResolve){const result=await nextResolve(specifier,context);return result.url===target&&context.parentURL!==wrapper?{url:wrapper,shortCircuit:true}:result;}`);
+registerSampleVaultLoader(sampleVaultLoader,{parentURL:import.meta.url,data:{target:sampleVaultTarget,wrapper:sampleVaultWrapper}});
 import assert from 'node:assert/strict';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -127,4 +148,4 @@ await test('HTTP401 auth deletion also persists logout instead of silently retai
  await assert.rejects(p.status(c),e=>e.code==='video_session_expired');const s=await readVideoSessionVault(file,{platform:'hailuo'});assert.equal(s.expiresAtMs,1);assert.equal(s.accessToken,undefined);await assert.rejects(p.status(c),e=>e.code==='video_session_expired');assert.equal(reads,1);
 });
 
-const out={passed:results.length,failed:0,officialAccountRequests:0,browserProcesses:0,dpapi:'real-windows-current-user-SAMPLE-only',results};await writeFile(path.join(root,'REFRESH_TEST_RESULT.json'),JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify({...out,results:undefined}));
+const out={passed:results.length,failed:0,officialAccountRequests:0,browserProcesses:0,dpapi:'SAMPLE-crypt-injected; production DPAPI unchanged',results};await writeFile(path.join(root,'REFRESH_TEST_RESULT.json'),JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify({...out,results:undefined}));

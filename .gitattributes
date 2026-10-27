@@ -1,2 +1,8 @@
 # Unified diffs contain required blank context markers.
 *.patch -whitespace
+
+# Official signing SDKs are pinned by raw SHA-256. Never rewrite their bytes.
+src/video-independent-a/bdms-1.0.1.20.js -text
+src/video-independent-a/official-kling-node/vendor--kUVOohzB.js -text
+src/video-independent-a/official-kling-node/vendor-axios-D0P8VZOU.js -text
+src/video-independent-a/official-kling-node/vendor-spark-md5-D9r9gH7o.js -text

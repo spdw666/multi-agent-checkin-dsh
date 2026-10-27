@@ -1,5 +1,26 @@
+import {register as registerSampleVaultLoader} from 'node:module';
+import {mkdtemp as makeSampleVaultDir,writeFile as writeSampleVaultModule} from 'node:fs/promises';
+import {tmpdir as sampleVaultTmpdir} from 'node:os';
+import {join as sampleVaultJoin} from 'node:path';
+import {pathToFileURL as sampleVaultFileURL} from 'node:url';
 import {pathToFileURL} from 'node:url';import {mkdtemp} from 'node:fs/promises';import {tmpdir} from 'node:os';
 const MODULE_ROOT=process.env.VIDEO_GATEWAY_TEST_ROOT??new URL('../',import.meta.url).pathname.replace(/^\/(\w:)/,'$1');
+// SAMPLE-only module injection gives fixture writes and every provider read the
+// same reversible crypt callback. Production DPAPI and its host guard are not
+// changed; the explicit Windows DPAPI test still calls the real exported API.
+const sampleVaultDir=await makeSampleVaultDir(sampleVaultJoin(sampleVaultTmpdir(),'sample-vault-loader-'));
+const sampleVaultTarget=sampleVaultFileURL(sampleVaultJoin(MODULE_ROOT,'src/video-session-vault.mjs')).href;
+const sampleVaultWrapper=sampleVaultFileURL(sampleVaultJoin(sampleVaultDir,'vault.mjs')).href;
+const sampleVaultLoader=sampleVaultFileURL(sampleVaultJoin(sampleVaultDir,'loader.mjs')).href;
+await writeSampleVaultModule(new URL(sampleVaultWrapper),`import assert from 'node:assert/strict';
+import * as real from ${JSON.stringify(sampleVaultTarget)};
+export * from ${JSON.stringify(sampleVaultTarget)};
+const crypt=async(mode,b,kind)=>{const prefix=Buffer.from('SAMPLE\\0'+kind+'\\0');if(mode==='protect')return Buffer.concat([prefix,Buffer.from(b).map(x=>x^0xa5)]);assert.ok(b.subarray(0,prefix.length).equals(prefix));return Buffer.from(b.subarray(prefix.length)).map(x=>x^0xa5);};
+export const writeVideoSessionVault=(file,session,options={})=>real.writeVideoSessionVault(file,session,{...options,crypt:options.crypt??crypt});
+export const readVideoSessionVault=(file,options={})=>real.readVideoSessionVault(file,{...options,crypt:options.crypt??crypt});
+`);
+await writeSampleVaultModule(new URL(sampleVaultLoader),`let target,wrapper;export function initialize(data){({target,wrapper}=data);}export async function resolve(specifier,context,nextResolve){const result=await nextResolve(specifier,context);return result.url===target&&context.parentURL!==wrapper?{url:wrapper,shortCircuit:true}:result;}`);
+registerSampleVaultLoader(sampleVaultLoader,{parentURL:import.meta.url,data:{target:sampleVaultTarget,wrapper:sampleVaultWrapper}});
 import assert from 'node:assert/strict';import {mkdir,readFile,writeFile,copyFile} from 'node:fs/promises';import {createHash} from 'node:crypto';import path from 'node:path';import {fileURLToPath} from 'node:url';
 const {writeVideoSessionVault,readVideoSessionVault}=await import(pathToFileURL(path.join(MODULE_ROOT,'src',"video-session-vault.mjs")).href);
 const {desktopProvider,desktopProviderKinds,videoDailyProviderKinds}=await import(pathToFileURL(path.join(MODULE_ROOT,'src',"provider-registry.mjs")).href);
@@ -36,5 +57,5 @@ try{
  await test('unknown post-submit history persists uncertain across real service recreation, no replay',async()=>{const f=path.join(dir,'unknown.json'),oldId=ids.jimeng;ids.jimeng='SAMPLE_CANONICAL_UNKNOWN_JIMENG';await writeVideoSessionVault(f,session('jimeng'),{principal:ids.jimeng});config.value.accounts.push({...account('jimeng'),id:'fixture-unknown',credentials:{kind:'file',file:f}});badJimeng=true;const before=actions.jimeng,r=await claims.run('fixture-unknown','daily-checkin',{trigger:'automatic',source:'unknown-fixture'});assert.equal(r.status,'uncertain');assert.equal(r.automaticRewardConfirmed,false);assert.equal(actions.jimeng,before+1);const db2=new Ledger(dir);try{const cm2=new CredentialManager(config,db2),cs2=new ClaimService(config,cm2,new Platforms(config,cm2),db2),again=await cs2.run('fixture-unknown','daily-checkin',{trigger:'automatic',source:'restart-fixture'});assert.equal(again.status,'uncertain');assert.equal(actions.jimeng,before+1);}finally{db2.close();badJimeng=false;ids.jimeng=oldId;}});
  await test('ClaimService never upgrades a fake raw amount/serialized receipt through generic status',async()=>{const fakeDir=path.join(dir,'forgery');await mkdir(fakeDir);const db=new Ledger(fakeDir);try{const conf={value:{accounts:[{id:'forged',platform:'jimeng',enabled:true,tasks:[{id:'daily-checkin',enabled:true}]}],scheduler:{timezone:'Asia/Shanghai'}}};let reads=0;const cm={resolve:async()=>({principalHash:'c'.repeat(64)})},p={status:async()=>({known:true,active:true,claimed:++reads>1}),claim:async()=>({submitted:true,claimed:true,credit:999,officialDailyReceipt:{kind:'jimeng',principalHash:'c'.repeat(64),day:dayIn(new Date()),amount:999,source:'/commerce/v1/benefits/credit_receive',recordIds:['SAMPLE_FAKE']}})},r=await new ClaimService(conf,cm,p,db).run('forged','daily-checkin',{trigger:'automatic'});assert.equal(r.status,'uncertain');assert.equal(r.automaticRewardConfirmed,false);assert.equal(reads,1);assert.equal(r.credits,undefined);}finally{db.close();}});
  await test('health and ledger public outputs contain no raw auth or xmst fixture data',async()=>{const text=JSON.stringify(ledger.records({limit:100}));assert.ok(!text.includes('SAMPLE_AUTH_'));assert.ok(!text.includes('SAMPLE_AUTHORIZED_RUNTIME_STATE'));});
- const output={passed:results.length,failed:0,fixturesOnly:true,dpapi:'real-windows-current-user-SAMPLE-only',realCredentialsManager:true,realPlatforms:true,realClaimService:true,realSQLite:true,officialAccountRequests:0,browserProcesses:0,actions,results};await writeFile(path.join(root,'TEST_RESULT.json'),JSON.stringify(output,null,2)+'\n');console.log(JSON.stringify({passed:results.length,failed:0,officialAccountRequests:0,browserProcesses:0,actions}));
+ const output={passed:results.length,failed:0,fixturesOnly:true,dpapi:'SAMPLE-crypt-injected; production DPAPI unchanged',realCredentialsManager:true,realPlatforms:true,realClaimService:true,realSQLite:true,officialAccountRequests:0,browserProcesses:0,actions,results};await writeFile(path.join(root,'TEST_RESULT.json'),JSON.stringify(output,null,2)+'\n');console.log(JSON.stringify({passed:results.length,failed:0,officialAccountRequests:0,browserProcesses:0,actions}));
 }finally{globalThis.fetch=originalFetch;ledger.close();}
