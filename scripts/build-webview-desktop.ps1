@@ -29,7 +29,7 @@ if ($BundleCore) {
 $parameters = @{
     OutputDirectory = $output
     DependencyDirectory = $cache
-    NativeSourceFile = (Join-Path $repo 'desktop/AiCreditDesktop.cs')
+    NativeSourceFile = (Join-Path $source 'host/NativeDesktop.cs')
     BrandDirectory = (Join-Path $repo 'desktop')
     CoreDirectory = $repo
     NodeExecutable = $node

@@ -36,7 +36,7 @@ $node = (Get-Command node.exe).Source
 & .\artifacts\webview-desktop\AI积分网关.exe --contract-test "$env:TEMP\webview-contract.json"
 ```
 
-构建结果位于 `artifacts/webview-desktop`，与原生构建输出分开。`-BundleCore` 必需，后端从当前干净源码树的 `bin/src/web/vendor` 固定清单打包，不读取作者桌面安装。WinForms 的品牌资源和公共管理实现来自当前仓库 `desktop`，不是作者机器上的文件。
+构建结果位于 `artifacts/webview-desktop`，与原生构建输出分开。`-BundleCore` 必需，后端从当前干净源码树的 `bin/src/web/vendor` 固定清单打包，不读取作者桌面安装。品牌资源来自当前仓库 `desktop`；可选宿主共享实现固定为 `desktop/webview-shell/host/NativeDesktop.cs`，不是作者机器上的文件。该可选副本保留早期管理工具的内部帮助实现，Web 管理入口仍使用 Web 页；原生默认 `desktop/AiCreditDesktop.cs` 与 `desktop/build.ps1` 保持原字节。
 
 构建会校验固定 SDK、Node 和 bootstrapper 哈希。若官方 bootstrapper 的移动下载链接返回新字节，构建会明确失败；维护者应单独审查更新来源、签名与 pin，不应跳过校验。可复现是指来源和依赖可核对、功能合同可重跑，不承诺 C# 编译时间戳或 ZIP 时间戳逐字节相同。
 
