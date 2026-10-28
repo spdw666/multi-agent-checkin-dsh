@@ -10,6 +10,8 @@ on:
       - 'desktop/webview-shell/**'
       - 'scripts/build-webview-desktop.ps1'
       - 'scripts/prepare-webview-prerequisites.ps1'
+      - 'scripts/audit-webview-release.mjs'
+      - 'tests/webview-release-audit.test.mjs'
       - 'tests/webview-distribution.test.mjs'
       - 'tests/webview-import-selection.test.mjs'
       - 'src/model-audit.mjs'
@@ -21,6 +23,8 @@ on:
       - 'desktop/webview-shell/**'
       - 'scripts/build-webview-desktop.ps1'
       - 'scripts/prepare-webview-prerequisites.ps1'
+      - 'scripts/audit-webview-release.mjs'
+      - 'tests/webview-release-audit.test.mjs'
       - 'tests/webview-distribution.test.mjs'
       - 'tests/webview-import-selection.test.mjs'
 
@@ -42,6 +46,8 @@ jobs:
         run: node --test tests/portable-path-defaults.test.mjs tests/webview-distribution.test.mjs tests/webview-import-selection.test.mjs
       - name: Verify typed management and mutation boundaries with HTTP mocks
         run: node --test --test-concurrency=1 desktop/webview-shell/adapter/tests/management.test.mjs
+      - name: Reject private state, disguised databases and unapproved payloads
+        run: node --test tests/webview-release-audit.test.mjs
       - name: Build optional portable WebView2 desktop from clean sources
         shell: pwsh
         run: ./scripts/build-webview-desktop.ps1 -BundleCore -NodeExecutable (Get-Command node.exe).Source -OutputDirectory "$env:RUNNER_TEMP/AiCreditWebView2"
@@ -50,6 +56,11 @@ jobs:
         run: |
           & "$env:RUNNER_TEMP/AiCreditWebView2/AI积分网关.exe" --contract-test "$env:RUNNER_TEMP/webview-contract.json" | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'WebView2 native contract failed.' }
+      - name: Audit final build contents before publishing the CI artifact
+        shell: pwsh
+        run: |
+          node scripts/audit-webview-release.mjs --directory "$env:RUNNER_TEMP/AiCreditWebView2" --allow-missing-checksums --report "$env:RUNNER_TEMP/webview-release-audit.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Release content audit rejected the build.' }
       - uses: actions/upload-artifact@v4
         with:
           name: AiCreditGateway-WebView2-win-x64
