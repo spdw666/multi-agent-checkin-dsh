@@ -29,7 +29,7 @@ Set-Location multi-agent-checkin-dsh
 git checkout v0.8.1-desktop-webview2.1
 npm ci
 npm run build
-node --test tests/portable-path-defaults.test.mjs tests/webview-distribution.test.mjs
+node --test tests/portable-path-defaults.test.mjs tests/webview-distribution.test.mjs tests/webview-import-selection.test.mjs
 node --test --test-concurrency=1 desktop/webview-shell/adapter/tests/management.test.mjs
 $node = (Get-Command node.exe).Source
 .\scripts\build-webview-desktop.ps1 -BundleCore -NodeExecutable $node
