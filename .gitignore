@@ -14,3 +14,13 @@ vendor/trae-core.mjs
 
 # Generated authenticated loopback route, never publish local bridge credentials.
 /src/zcode-standard-proxy.runtime.json
+
+# Optional WebView2 desktop build outputs and private portable state.
+/artifacts/
+/.cache/
+/desktop/webview-shell/dist/
+/desktop/webview-shell/dependencies/
+/desktop/webview-shell/user-data/
+/desktop/webview-shell/prerequisites/*.exe
+/proof/
+*.zip

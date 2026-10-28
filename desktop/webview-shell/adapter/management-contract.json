@@ -1,0 +1,453 @@
+{
+  "version": 1,
+  "request": {
+    "read": {
+      "method": "read",
+      "section": "accounts|routes|records|preferences|diagnostics|workbuddy|updates|operations",
+      "view": "optional enum per section",
+      "accountId": "optional configured id",
+      "limit": "1..1000",
+      "query": "optional text <=200",
+      "jobId": "optional UUID",
+      "requestId": "optional id <=120"
+    },
+    "action": {
+      "method": "action",
+      "action": "enum below",
+      "confirmed": "must be true, otherwise cancelled with zero HTTP",
+      "revision": "configuration revision from read for local config writes",
+      "accountId": "when applicable",
+      "values": "typed fields below",
+      "items": "model selections when applicable",
+      "accountIds": "WB export or merge/pool members",
+      "routeIds": "models.export or model tests",
+      "content": "WB import JSON or base64 ZIP; passed by stdin, never echoed"
+    }
+  },
+  "response": {
+    "read": "{section,data,revision}",
+    "action": "{operation:{kind,status:completed|failed|cancelled|uncertain,message},data?}",
+    "hostOnly": "export:{suggestedName,content,encoding:base64|utf8} and external:{kind:workbuddy-login,url}; host intercepts, never forwards those fields to page"
+  },
+  "reads": {
+    "accounts": {
+      "views": [
+        "list"
+      ],
+      "data": "{accounts:[{id,label,platform,edition,enabled,inferenceEnabled,notes,tasks:[{id,enabled}],credentialConfigured}],upstreams:[{id,kind,accountId,enabled}]}"
+    },
+    "routes": {
+      "views": [
+        "config",
+        "directory",
+        "audit",
+        "relay",
+        "freeProviders"
+      ],
+      "data": "default:{routes:[{id,name,enabled,targets:[{upstreamId,model}],accountPool?}],upstreams:[{id,kind,accountId,enabled}],relay}; directory:{providers:[...sanitized model directory...]}; audit:{status,total,completed,results:[...]}; relay:typed sanitized backend report; freeProviders:{providers:[...]}"
+    },
+    "records": {
+      "views": [
+        "claims",
+        "usage"
+      ],
+      "data": "{records:[sanitized record],...counts}; claims default; accountId optional"
+    },
+    "preferences": {
+      "views": [
+        "config"
+      ],
+      "data": "{scheduler:{enabled,startup,timezone,hour,minute,jitterSeconds,retryMinutes},server:{host,port},modelRelay,workbuddy:{autoMigrateSessions,autoTasks},accounts:[public metadata]}"
+    },
+    "diagnostics": {
+      "views": [
+        "context",
+        "requests",
+        "activation",
+        "audit"
+      ],
+      "data": "sanitized corresponding report; query maps search, requestId only for requests"
+    },
+    "workbuddy": {
+      "views": [
+        "summary",
+        "details",
+        "rotation",
+        "tasks",
+        "taskJob",
+        "pools"
+      ],
+      "data": "summary:{accounts:[{id,accountId,label,notes,edition,enabled,inferenceEnabled,current,remaining,total,consumed,checkedAt,lastSuccessAt,lastFailureAt,stale,usageStatus,credentialStatus,balance,tasks,dailyCheckin,ban}],currentAccountId,totals,models,settings,sessionCapabilities}; details:{account:<same DTO>,refreshed}; tasks/taskJob:{job/snapshot/tasks...}; rotation:{settings,state,preview}; pools:{routes}"
+    },
+    "updates": {
+      "views": [
+        "report"
+      ],
+      "data": "sanitized client-updates report"
+    },
+    "operations": {
+      "views": [
+        "report",
+        "keys"
+      ],
+      "data": "{settings,health,expiry,notifications,keys,sessions,routes,...}; keys metadata only, never secret key"
+    }
+  },
+  "actions": {
+    "account.add": {
+      "values": {
+        "id": "required id",
+        "label": "required text128",
+        "platform": "required platform",
+        "edition": "cn|ai|global|intl optional",
+        "enabled": "bool",
+        "inferenceEnabled": "bool",
+        "notes": "text2000",
+        "credentialFile": "text2048",
+        "credentialSource": "desktop|file optional",
+        "tasks": "array<{id,enabled}>"
+      },
+      "revisionRequired": true
+    },
+    "account.update": {
+      "accountId": "required",
+      "values": {
+        "label": "text128",
+        "notes": "text2000",
+        "edition": "cn|ai|global|intl",
+        "credentialFile": "text2048",
+        "credentialSource": "desktop|file"
+      },
+      "revisionRequired": true
+    },
+    "account.enable": {
+      "accountId": "required",
+      "values": {
+        "enabled": "required bool"
+      },
+      "revisionRequired": true
+    },
+    "account.delete": {
+      "accountId": "required",
+      "values": {}
+    },
+    "account.tasks": {
+      "accountId": "required",
+      "values": {
+        "tasks": "required array<{id,enabled}>"
+      },
+      "revisionRequired": true
+    },
+    "route.save": {
+      "values": {
+        "id": "required id",
+        "name": "text200",
+        "enabled": "bool",
+        "targets": "array<{upstreamId,model}>",
+        "fallbackStatuses": "array<int100..599>"
+      },
+      "revisionRequired": true
+    },
+    "route.enable": {
+      "values": {
+        "id": "required id",
+        "enabled": "required bool"
+      },
+      "revisionRequired": true
+    },
+    "route.delete": {
+      "values": {
+        "id": "required id"
+      },
+      "revisionRequired": true
+    },
+    "route.reorder": {
+      "values": {
+        "routeId": "required id",
+        "expectedTargets": "required array<{upstreamId,model}>",
+        "targets": "required array<{upstreamId,model}>"
+      }
+    },
+    "scheduler.save": {
+      "values": {
+        "enabled": "bool",
+        "startup": "bool",
+        "timezone": "text80",
+        "hour": "int0..23",
+        "minute": "int0..59",
+        "jitterSeconds": "int0..3600",
+        "retryMinutes": "int1..1440"
+      },
+      "revisionRequired": true
+    },
+    "server.save": {
+      "values": {
+        "host": "localhost|loopback|0.0.0.0",
+        "port": "int1..65535"
+      },
+      "revisionRequired": true
+    },
+    "relay.save": {
+      "values": {
+        "enabled": "bool",
+        "reservePercent": "number0..50",
+        "reserveCredits": "number0..100000",
+        "partitions": "{workbuddy?:bool,other?:bool}"
+      }
+    },
+    "models.directory": {
+      "values": {}
+    },
+    "models.test": {
+      "values": {
+        "scope": "all|selected|models",
+        "routeIds": "array<id>",
+        "items": "array<{upstreamId,model}>"
+      }
+    },
+    "models.import": {
+      "items": "required array<{upstreamId,model,enabled?,importedRouteIds?}>",
+      "values": {
+        "enabled": "bool"
+      }
+    },
+    "models.export": {
+      "routeIds": "required array<id>",
+      "values": {},
+      "note": "REMOVES imported models by disabling selected routes; this endpoint does not download a file"
+    },
+    "diagnostics.doctor": {
+      "values": {}
+    },
+    "diagnostics.health": {
+      "accountId": "required",
+      "values": {}
+    },
+    "diagnostics.rebind": {
+      "accountId": "required",
+      "values": {}
+    },
+    "diagnostics.routePreview": {
+      "values": {
+        "routeId": "required id",
+        "inputChars": "int0..10000000",
+        "outputBudget": "int0..1000000",
+        "requiresTools": "bool",
+        "hasImages": "bool",
+        "hasToolHistory": "bool",
+        "messageCount": "int1..10000",
+        "toolCount": "int0..1000",
+        "stream": "bool",
+        "multiRole": "bool",
+        "explicitParameters": "array<id>"
+      }
+    },
+    "wb.settings": {
+      "values": {
+        "autoMigrateSessions": "bool",
+        "autoTasks": "bool"
+      }
+    },
+    "wb.profile": {
+      "accountId": "required",
+      "values": {
+        "label": "text128",
+        "notes": "text2000"
+      }
+    },
+    "wb.inference": {
+      "accountId": "required",
+      "values": {
+        "enabled": "required bool"
+      }
+    },
+    "wb.refresh": {
+      "accountId": "optional",
+      "values": {}
+    },
+    "wb.switch": {
+      "accountId": "required",
+      "values": {
+        "migrate": "bool",
+        "switchClient": "bool"
+      }
+    },
+    "wb.markStatus": {
+      "accountId": "required",
+      "values": {
+        "status": "banned|clear",
+        "reason": "text180",
+        "confirm": "bool"
+      }
+    },
+    "wb.tasks": {
+      "accountId": "optional",
+      "values": {
+        "action": "run|accept|claim|query",
+        "taskCode": "text256",
+        "taskCodes": "array<text256>"
+      }
+    },
+    "wb.tasksCancel": {
+      "jobId": "required UUID",
+      "values": {}
+    },
+    "wb.rotation": {
+      "values": {
+        "enabled": "bool",
+        "target": "gateway|codebuddy-cli|both",
+        "strategy": "expiry|round_robin",
+        "intervalMinutes": "int1..1440",
+        "cooldownMinutes": "int0..10080",
+        "minUrgencyHours": "int0..8760",
+        "minRemainingCredits": "number0..1000000",
+        "minGapHours": "int0..8760",
+        "edition": "cn|ai"
+      }
+    },
+    "wb.rotationEvaluate": {
+      "values": {
+        "dryRun": "bool"
+      }
+    },
+    "wb.importPreview": {
+      "content": "required text <=6MiB",
+      "values": {
+        "format": "json|zip"
+      }
+    },
+    "wb.importCommit": {
+      "content": "required text <=6MiB",
+      "values": {
+        "format": "json|zip",
+        "duplicatePolicy": "skip|replace",
+        "selectedIndexes": "array<int0..999>"
+      }
+    },
+    "wb.export": {
+      "accountIds": "required array<configured WB id>",
+      "values": {
+        "format": "json|zip|switch-json"
+      },
+      "hostFileSave": true
+    },
+    "wb.capture": {
+      "values": {
+        "id": "required id",
+        "label": "text128"
+      }
+    },
+    "wb.loginStart": {
+      "values": {
+        "edition": "cn|ai|global|intl",
+        "label": "text100"
+      },
+      "hostOfficialBrowser": true
+    },
+    "wb.loginPoll": {
+      "values": {
+        "loginId": "required UUID"
+      }
+    },
+    "wb.loginCancel": {
+      "values": {
+        "loginId": "required UUID"
+      }
+    },
+    "wb.merge": {
+      "accountIds": "required array<WB id>",
+      "values": {
+        "targetAccountId": "required WB id"
+      }
+    },
+    "wb.pool": {
+      "accountIds": "required array<WB id>",
+      "values": {
+        "routeId": "required id",
+        "enabled": "bool",
+        "cooldownSeconds": "int0..86400"
+      }
+    },
+    "wb.poolSelect": {
+      "accountId": "required",
+      "values": {
+        "routeId": "required id"
+      }
+    },
+    "updates.check": {
+      "values": {
+        "failedOnly": "bool",
+        "targetIds": "array<id>"
+      }
+    },
+    "operations.settings": {
+      "values": {
+        "notificationsEnabled": "bool",
+        "strategy": "configured|stable|fast|expiry",
+        "affinityEnabled": "bool",
+        "affinityTtlMinutes": "int1..1440"
+      }
+    },
+    "operations.keyCreate": {
+      "values": {
+        "name": "required text80",
+        "allowedModels": "array<existing route id>",
+        "dailyRequestLimit": "int0..1000000000",
+        "dailyTokenLimit": "int0..1000000000",
+        "dailyKnownCreditLimit": "number0..1000000000",
+        "maxConcurrency": "int0..1000"
+      },
+      "hostFileSave": true
+    },
+    "operations.keyRevoke": {
+      "values": {
+        "id": "required id"
+      }
+    },
+    "operations.notificationRead": {
+      "values": {
+        "id": "required hex24"
+      }
+    },
+    "updates.settings": {
+      "values": {
+        "enabled": "bool",
+        "intervalHours": "number1..720",
+        "timeoutMs": "int1000..120000"
+      },
+      "revisionRequired": true
+    },
+    "freeProvider.add": {
+      "values": {
+        "models": "array<text256>",
+        "accountId": "text32",
+        "providerId": "required id",
+        "id": "required id",
+        "apiKey": "text16384",
+        "credentialFile": "text2048"
+      }
+    },
+    "upstream.save": {
+      "values": {
+        "credentialFile": "text2048",
+        "timeoutMs": "int1000..600000",
+        "id": "required id",
+        "accountId": "text120",
+        "kind": "text50",
+        "enabled": "bool",
+        "baseUrl": "text2048",
+        "maxOutputTokens": "int1..1000000"
+      },
+      "revisionRequired": true
+    },
+    "upstream.delete": {
+      "values": {
+        "id": "required id"
+      },
+      "revisionRequired": true
+    },
+    "diagnostics.restartDsh": {
+      "values": {}
+    }
+  }
+}

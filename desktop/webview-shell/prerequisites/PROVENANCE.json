@@ -1,0 +1,9 @@
+{
+  "signatureStatus": "Valid",
+  "invocation": "user-click only; no automatic reinstall",
+  "signer": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+  "downloadedAtUtc": "2026-10-28T12:03:29.4680710+00:00",
+  "role": "Microsoft Evergreen WebView2 Runtime bootstrapper",
+  "downloadUrl": "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+  "sha256": "13f6d9cdc8c3e7186e4b180db7f48e199ee97d631480e8391fb3106f338fb21a"
+}

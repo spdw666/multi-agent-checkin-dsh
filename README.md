@@ -5,7 +5,7 @@
 请求诊断、路由预演与接入生效检查：见[原生操作与状态说明](docs/diagnostics-and-readiness.md)。默认只读本机保存状态，真实体检另行确认；WB 账号卡顶部直接显示今日签到状态。
 <p align="center">
   <b>桌面账号、每日权益、详细 WB 帐号池与统一模型入口</b><br>
-  Windows 原生桌面 · Node.js 本机服务 · OpenAI 兼容 API · DSH · Hermes
+  WinForms / WebView2 桌面 · Node.js 本机服务 · OpenAI 兼容 API · DSH · Hermes
 </p>
 
 <p align="center">
@@ -15,11 +15,26 @@
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
 </p>
 
-**AI积分网关**把本机桌面客户端账号的登录态、每日领取、余额与模型调用收拢到一个入口。可以在 Windows 原生界面管理账号，也可以只运行 Node.js 服务，通过 CLI、管理 API 或 OpenAI 兼容客户端使用同一后端。
+**AI积分网关**把本机桌面客户端账号的登录态、每日领取、余额与模型调用收拢到一个入口。可以选择 WinForms 原生界面或独立 WebView2 工作台，也可以只运行 Node.js 服务，通过 CLI、管理 API 或 OpenAI 兼容客户端使用同一后端。
+
+## Windows 桌面选择
+
+| 界面 | 获取与启动 | 数据与默认行为 |
+|---|---|---|
+| **WebView2 工作台（便携预览版）** | [下载 Windows x64 ZIP](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.1-desktop-webview2.1/AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip)；解压后双击 **启动新版工作台.cmd** | 自带 Node.js 与网关后端；首次启动创建自己的空账号配置和私有数据目录，不携带开发者登录态，不接管其他已安装实例 |
+| **WinForms 原生界面** | [原生构建与启动](#windows-原生桌面)；下载附件以 [Releases 的实际文件](https://github.com/spdw666/multi-agent-checkin-dsh/releases)为准 | 现有 `desktop/build.ps1` 默认仍构建 WinForms，原生安装和同步入口不因新增 Web 版而改变 |
+
+WebView2 桌面包与旧版后端 `.tgz` 是不同附件，`.tgz` 不是 Windows 桌面 EXE。Web 版使用独立预览标签 `v0.8.1-desktop-webview2.1`，不覆盖已有 `v0.8.1` 后端发布资产。后端产品版本仍为 **0.8.1**，附带便携路径适配。
+
+**首次打开没有账号，需要自己在官方平台登录或导入自己的账号。** 自动签到初始关闭，先完成账号配置与核验，再按需启用。便携包不包含账号、Cookie、Token、数据库或个人模型调用历史。
+
+WebView2 版需要 Windows 10/11 x64、.NET Framework 4.8+ 与 **Microsoft Edge WebView2 Evergreen Runtime**。它不是普通浏览器标签页；仅装 Edge 浏览器不能代替 Runtime 检测。缺少 Runtime 时按启动提示安装[微软官方 WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section)。[微软运行时分发说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)
+
+便携包的来源、首次启动、源码构建、打包与验证见 [WebView2 桌面分发](docs/webview-desktop.md)。
 
 WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封禁依据、积分包、任务内容与任务状态；顶部突出显示 **积分剩余 / 总额**。其他平台继续使用“积分总览”，其中不重复展示 WorkBuddy 积分。
 
-> 兼容名称：npm 包仍为 `dsh-ai-credit-gateway`，CLI 与 DSH Provider 仍为 `ai-credit`，历史仓库地址保持不变。Windows 正式入口为 **`AI积分网关.exe`**。
+> 兼容名称：npm 包仍为 `dsh-ai-credit-gateway`，CLI 与 DSH Provider 仍为 `ai-credit`，历史仓库地址保持不变。WinForms 入口为 **`AI积分网关.exe`**，WebView2 便携包入口为 **`启动新版工作台.cmd`**。
 
 真实功能自动任务的执行链、官方组件、状态和防重复机制见 [WB 自动执行器说明](docs/WB_TASK_EXECUTORS.md)。
 
@@ -45,6 +60,7 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 
 ## 目录
 
+- [Windows 桌面选择](#windows-桌面选择)
 - [先找到你要做的事](#先找到你要做的事)
 - [第一次使用：从登录到模型回答](#第一次使用从登录到模型回答)
 - [几个容易混淆的词](#几个容易混淆的词)
@@ -161,6 +177,8 @@ DSH / Hermes / 其他客户端 ─ apiKey ─ /v1
 |---|---|
 | `desktop/AiCreditDesktop.cs` | Windows WinForms 桌面源码、八页导航与 WB 详情 |
 | `desktop/build.ps1` | Windows 本机编译入口 |
+| `desktop/webview-shell/` | 独立 WebView2 宿主、Web 工作台与 typed 管理适配器 |
+| `scripts/build-webview-desktop.ps1` | 可选 WebView2 构建与后端/Node 打包入口，不改变默认 WinForms 构建 |
 | `bin/ai-credit.mjs` | CLI 与前台/后台服务入口 |
 | `src/` | 服务、路由、适配器、任务、账号池与会话迁移 |
 | `vendor/` | 保留来源、版权与许可证的复用模块 |

@@ -1,0 +1,32 @@
+{
+  "dataDir": "./data",
+  "server": {
+    "port": 0,
+    "allowRemote": false,
+    "bodyLimitBytes": 67108864,
+    "host": "127.0.0.1",
+    "requestTimeoutMs": 180000
+  },
+  "upstreams": [],
+  "workbuddy": {
+    "autoMigrateSessions": false,
+    "autoTasks": false
+  },
+  "scheduler": {
+    "jitterSeconds": 600,
+    "minute": 0,
+    "timezone": "Asia/Shanghai",
+    "startup": false,
+    "retryMinutes": 60,
+    "hour": 10,
+    "enabled": false
+  },
+  "clientUpdates": {
+    "intervalHours": 24,
+    "enabled": false,
+    "timeoutMs": 15000
+  },
+  "accounts": [],
+  "routes": [],
+  "schemaVersion": 1
+}

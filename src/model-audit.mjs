@@ -3,7 +3,8 @@ import {collectChat} from './openai.mjs';
 import {errorView,atomicJson,AppError} from './util.mjs';
 import {mkdir,writeFile,appendFile} from 'node:fs/promises';
 import {join} from 'node:path';
-export const memoryRoot=process.env.AI_CREDIT_MEMORY??'D:/AI Memory/AI积分网关-多平台签到与DSH反代';
+import {homedir} from 'node:os';
+export const memoryRoot=process.env.AI_CREDIT_MEMORY||join(homedir(),'.ai-credit-gateway','memory');
 const names={passed:'全部通过',failed:'未通过',partial:'仅聊天 / 工具未通过',uncertain:'待复测',unavailable:'当前通道未提供',running:'检测中'};
 export function auditLabel(row){return row?.capabilityStatus==='chat_only'?'聊天通过 / 工具未声明':row?names[row.status]??row.status:'未测试';}
 export async function saveAudit(service,report){

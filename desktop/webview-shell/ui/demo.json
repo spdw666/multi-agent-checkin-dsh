@@ -1,0 +1,28 @@
+{
+  "mode": "demo",
+  "generatedAt": "2026-10-28T08:30:00.000Z",
+  "service": {"online": true, "version": "0.8.1", "baseUrl": "http://127.0.0.1:19421", "pid": null},
+  "accounts": [
+    {"id": "demo-workbuddy", "platform": "workbuddy", "label": "WorkBuddy · 日常工作", "enabled": true, "balance": {"value": 1280, "unit": "积分", "stale": false, "updatedAt": "2026-10-28T08:28:00.000Z"}, "status": {"kind": "ok", "label": "认证有效", "detail": "演示状态：账号认证有效"}, "checkin": {"status": "already", "label": "今日已领取", "amount": 100, "automaticRewardConfirmed": false}},
+    {"id": "demo-codearts", "platform": "codearts", "label": "CodeArts · 开发账号", "enabled": true, "balance": {"value": 860, "unit": "积分", "stale": false, "updatedAt": "2026-10-28T08:27:00.000Z"}, "status": {"kind": "ok", "label": "登录状态正常", "detail": "演示状态：仅用于展示与布局验收"}, "checkin": {"status": "already", "label": "今日已领取", "amount": 100, "automaticRewardConfirmed": false}},
+    {"id": "demo-liblib", "platform": "liblib", "label": "Liblib · 创作账号", "enabled": true, "balance": {"value": 20, "unit": "算力", "stale": false, "updatedAt": "2026-10-28T08:25:00.000Z"}, "status": {"kind": "ok", "label": "余额已读取", "detail": "演示值，不来自真实账号"}, "checkin": {"status": "already", "label": "今日已签到", "amount": 20, "automaticRewardConfirmed": false}},
+    {"id": "demo-hailuo", "platform": "hailuo", "label": "海螺 · 视频创作", "enabled": true, "balance": {"value": 150, "unit": "积分", "stale": false, "updatedAt": "2026-10-28T08:23:00.000Z"}, "status": {"kind": "ok", "label": "当前权益已核对", "detail": "演示状态：免费试用不是每日签到"}, "checkin": {"status": "ineligible", "label": "无每日签到", "amount": null, "automaticRewardConfirmed": false}},
+    {"id": "demo-trae", "platform": "trae", "label": "Trae · 需要重新登录的开发账号", "enabled": true, "balance": {"value": 0, "unit": "积分", "stale": true, "updatedAt": "2026-10-27T08:20:00.000Z"}, "status": {"kind": "warning", "label": "登录需要更新", "detail": "演示状态：请在原界面更新平台登录，零余额保留为零"}, "checkin": {"status": "login_required", "label": "待更新登录", "amount": null, "automaticRewardConfirmed": false}},
+    {"id": "demo-jimeng", "platform": "jimeng", "label": "即梦 · 认证待核对", "enabled": true, "balance": {"value": null, "unit": "积分", "stale": false, "updatedAt": null}, "status": {"kind": "unknown", "label": "等待认证核对", "detail": "演示状态：未知余额不显示为零"}, "checkin": {"status": "unknown", "label": "每日权益待核对", "amount": null, "automaticRewardConfirmed": false}}
+  ],
+  "records": [
+    {"id": "D106", "time": "2026-10-28T08:29:00.000Z", "platform": "liblib", "accountLabel": "Liblib · 创作账号", "status": "already", "summary": "今日回执已存在，未再次领取", "trigger": "automatic", "amount": 20, "newReward": false},
+    {"id": "D105", "time": "2026-10-28T08:25:00.000Z", "platform": "codearts", "accountLabel": "CodeArts · 开发账号", "status": "already", "summary": "确认此前已领取", "trigger": "manual", "amount": 100, "newReward": false},
+    {"id": "D104", "time": "2026-10-28T08:20:00.000Z", "platform": "trae", "accountLabel": "Trae · 开发账号", "status": "failed", "summary": "登录状态过期，等待原界面更新", "trigger": "automatic", "amount": null, "newReward": false},
+    {"id": "D103", "time": "2026-10-28T08:10:00.000Z", "platform": "hailuo", "accountLabel": "海螺 · 视频创作", "status": "ineligible", "summary": "当前权益不包含每日签到", "trigger": "automatic", "amount": null, "newReward": false},
+    {"id": "D102", "time": "2026-10-27T00:05:00.000Z", "platform": "workbuddy", "accountLabel": "WorkBuddy · 日常工作", "status": "success", "summary": "演示历史：服务端确认当次奖励", "trigger": "automatic", "amount": 100, "newReward": true}
+  ],
+  "routes": [
+    {"id": "demo-route-1", "model": "glm-5.3", "enabled": true},
+    {"id": "demo-route-2", "model": "deepseek-v4.1", "enabled": true},
+    {"id": "demo-route-3", "model": "qwen3-coder", "enabled": true},
+    {"id": "demo-route-4", "model": "未启用模型示例", "enabled": false}
+  ],
+  "schedule": {"enabled": true, "nextRunAt": "2026-10-28T16:00:00.000Z", "label": "演示计划"},
+  "warnings": []
+}

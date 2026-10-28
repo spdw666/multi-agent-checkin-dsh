@@ -1,0 +1,56 @@
+name: Optional WebView2 desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, release/webview-desktop]
+    tags: ['v*-desktop-webview2.*']
+    paths:
+      - '.github/workflows/webview-desktop.yml'
+      - 'desktop/webview-shell/**'
+      - 'scripts/build-webview-desktop.ps1'
+      - 'scripts/prepare-webview-prerequisites.ps1'
+      - 'tests/webview-distribution.test.mjs'
+      - 'src/model-audit.mjs'
+      - 'src/transcript-memory.mjs'
+      - 'tests/portable-path-defaults.test.mjs'
+  pull_request:
+    paths:
+      - '.github/workflows/webview-desktop.yml'
+      - 'desktop/webview-shell/**'
+      - 'scripts/build-webview-desktop.ps1'
+      - 'scripts/prepare-webview-prerequisites.ps1'
+      - 'tests/webview-distribution.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-webview:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify portable path defaults and source distribution
+        run: node --test tests/portable-path-defaults.test.mjs tests/webview-distribution.test.mjs
+      - name: Verify typed management and mutation boundaries with HTTP mocks
+        run: node --test --test-concurrency=1 desktop/webview-shell/adapter/tests/management.test.mjs
+      - name: Build optional portable WebView2 desktop from clean sources
+        shell: pwsh
+        run: ./scripts/build-webview-desktop.ps1 -BundleCore -NodeExecutable (Get-Command node.exe).Source -OutputDirectory "$env:RUNNER_TEMP/AiCreditWebView2"
+      - name: Verify native bridge contract without opening a desktop window
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/AiCreditWebView2/AI积分网关.exe" --contract-test "$env:RUNNER_TEMP/webview-contract.json" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'WebView2 native contract failed.' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AiCreditGateway-WebView2-win-x64
+          path: ${{ runner.temp }}/AiCreditWebView2
+          if-no-files-found: error
+          retention-days: 14

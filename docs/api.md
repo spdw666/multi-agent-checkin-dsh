@@ -163,7 +163,7 @@
 - OpenCode 体检使用桥接支持的单条用户纯文本，不带 `max_tokens`；这只调整体检探针形状，真实客户端的历史、工具、采样或显式输出预算不会被静默删除。桥接契约见 [OpenCode](opencode.md)。
 - 并发上限 2；同一 NVIDIA 账号的体检串行执行（按账号分道），避免互相挤占限流窗口。
 - 仅支持自动选工具的上游会在记录中标明 `auditToolChoice`，仍要求结构化工具与回传成功。
-- 报告同时写入服务账本的 `model-audit` 状态，并落盘到 `AI_CREDIT_MEMORY`（默认 `D:/AI Memory/AI积分网关-多平台签到与DSH反代`）下 `测试记录/模型全量体检.json`、`模型全量体检.md`；每个本轮完成结果追加到 `体检事件.jsonl`。相同 `upstreamId+model` 的当前记录更新时，通过 `previousAttempts` 保留最多 5 条先前尝试，失败阶段与原因不以新一次成功抹去。定向测试之外的模型记录保持原样。
+- 报告同时写入服务账本的 `model-audit` 状态，并落盘到 `AI_CREDIT_MEMORY`（未设置时为当前用户主目录下 `.ai-credit-gateway/memory`）下 `测试记录/模型全量体检.json`、`模型全量体检.md`；每个本轮完成结果追加到 `体检事件.jsonl`。WebView2 便携实例显式设置自己的 `user-data/memory`，不采用开发者机器路径。相同 `upstreamId+model` 的当前记录更新时，通过 `previousAttempts` 保留最多 5 条先前尝试，失败阶段与原因不以新一次成功抹去。定向测试之外的模型记录保持原样。
 - API 和原生目录读取同一服务保存的最新体检状态；重开目录可读取新结果，不把外部一次探针未写入该来源的成功冒充界面已验证。体检不修改导入选择、不改变路由启用开关、不改变账号池偏好。
 
 ## 8. 余额（`GET /admin/balances`）
