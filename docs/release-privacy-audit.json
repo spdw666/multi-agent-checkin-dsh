@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "conclusion": "当前Web ZIP未发现与本机已收集真实凭据或不透明身份标识重合的数据；旧源码历史和旧后端包保留历史状态截图，不作整个仓库无本机状态数据的结论。",
+  "objects": {
+    "webReleaseVersion": "0.8.1-web.1",
+    "webReleaseFile": "AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip",
+    "webReleaseSHA256": "a2693c8492622689962bdef87787e74560fa6ea1911090f8d66acd0b702cf81d",
+    "webReleaseFileEntries": 225,
+    "currentReleaseAttachments": 4,
+    "anonymousSourceArchives": 2,
+    "sourceTag": "v0.8.1-desktop-webview2.1",
+    "sourceCommit": "a0191b0e3e057ef0c3c7c62ed191c0cb7dcea715",
+    "gitHistoryShallow": false,
+    "reachableCommits": 57,
+    "reachableUniqueBlobs": 1052,
+    "historicalUniquePaths": 620,
+    "oldBackendAsset": "dsh-ai-credit-gateway-0.8.1.tgz",
+    "oldBackendFileEntries": 543
+  },
+  "comparison": {
+    "realCredentialsMatched": 0,
+    "realCookiesMatched": 0,
+    "encryptedPrivateVaultBlobsMatched": 0,
+    "opaqueAccountOrDeviceIdentifiersMatched": 0,
+    "collectedEmailOrPhoneMatched": 0,
+    "sharedLogicalAliasesModelNamesAndImplementationLabels": "人工按公共模板、模型/平台逻辑别名、固定界面文字分级，未把字符串重合直接当成真实账号泄露。",
+    "runtimeStateOrAccountDatabaseFilesFound": 0,
+    "binaryEXEAndDLLBytesIncluded": true,
+    "encodings": [
+      "UTF-8",
+      "UTF-16LE",
+      "UTF-16BE",
+      "JSON escaping",
+      "URL encoding",
+      "base64",
+      "base64url"
+    ],
+    "realValuesOrDerivedPatternsPersisted": false,
+    "positiveControl": {
+      "sampleCookieTokenAccountIdEncodingCases": "30/30",
+      "nestedZipCategoriesDetected": "3/3",
+      "cleanNegativeControlMatches": 0
+    }
+  },
+  "explicitExceptions": {
+    "historicalAccountStateScreenshot": "docs/images/platform-balances.png",
+    "historicalScreenshotBlobVersions": 3,
+    "historicalScreenshotContains": "历史余额、账号计数与签到日期等本机状态；不是SAMPLE展示图。",
+    "screenshotInCurrentWebRelease": false,
+    "screenshotOrIdenticalSHAInCurrentWebRelease": false,
+    "screenshotInTaggedSourceArchives": true,
+    "screenshotInOldBackendTgz": true,
+    "historyRewritten": false,
+    "legacyClientInstallDiscoveryConstants": "二进制及实现中存在旧客户端安装发现默认常量；已与账户目录、凭据路径、用户身份区分，不声称所有机器路径信息均不存在。",
+    "historicalHomePathFixture": "旧提交中的路径大小写测试保留过作者用户名示例；当前主干改用SAMPLE，历史标签未改写。"
+  },
+  "currentMainChangeReview": {
+    "basis": "本轮文档、guard、CI及fixture工作树复核；审计基线、历史快照与后续主干提交分开记录。",
+    "filesReviewed": 7,
+    "credentialOrOpaqueIdentityMatches": 0,
+    "realHomePathFixtureMatches": 0,
+    "historicalScreenshotRemovedFromCurrentWorkingTree": true,
+    "localValuesInReport": false
+  },
+  "boundaries": [
+    "精确交叉比对覆盖本次收集的真实值与所列编码；不是对所有未知或所有变形信息的数学证明。",
+    "图片OCR仅作补充，历史截图仍保留状态数据例外。",
+    "未执行模型、领取、登录、导入等生产写操作。"
+  ],
+  "releaseContentAudit": {
+    "windowsZipFiles": 225,
+    "internalChecksumMatches": 224,
+    "actionsArtifactFiles": 224,
+    "issues": 0,
+    "pngBrandAndPlatformResources": 35,
+    "peFilesReviewed": 7,
+    "syntheticNegativeTestsPassed": 42,
+    "privateDiagnosticsRedacted": true
+  },
+  "sourceProvenance": {
+    "declaredBuildInputs": 18,
+    "rawGitBlobByteMatches": 10,
+    "normalizedTagTextMatches": 18,
+    "mappedArchiveSources": 212,
+    "normalizedMappedMatches": 212,
+    "externalSdkLicenseFiles": 2,
+    "sha256Meaning": "Actual Windows checkout/compiler input bytes; text compares to tag after LF/BOM normalization, not a raw Git-blob or bit-reproducible-build claim."
+  }
+}
