@@ -13,6 +13,7 @@ import {miniMaxModels,miniMaxChat} from './minimax-models.mjs';
 import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor/workbuddy-core.mjs';
 import {fetchWorkBuddyCreditDetails} from './workbuddy-resources.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
+import {workBuddyChannelError,workBuddyChannelSkipped,workBuddyTransportChannel} from './workbuddy-channel.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
 import {AppError,jsonFetch,dayIn,errorView} from './util.mjs';
 import {restoreLoomyDailyQuota} from './daily-quota-receipt.mjs';
@@ -224,6 +225,10 @@ export class Platforms {
     if(custom?.enabled&&custom.kind==='http'&&custom.claimUrl)return jsonFetch(custom.claimUrl,{headers:{Authorization:`Bearer ${c.accessToken}`},body:custom.body??{}});
     throw new AppError('No verified claim adapter for this task',501,'task_protocol_pending');
   }
+  async workBuddyChannel(target) {
+    const u=this.upstream(target.upstreamId);
+    return u.kind==='workbuddy'?workBuddyTransportChannel(await this.credentials.resolve(u.accountId)):undefined;
+  }
   async chat(target,request,signal,providerOptions={}) {
     const u=this.upstream(target.upstreamId);const input={...request,model:target.model,stream:true};
     if(u.kind==='freeapi')return freeProviderChat(u,await this.credentials.resolve(u.accountId),input,signal);
@@ -232,10 +237,13 @@ export class Platforms {
       const ensureInference=async()=>{if(typeof this.config.workBuddyInferenceAllowed==='function'&&!await this.config.workBuddyInferenceAllowed(u.accountId))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');const accounts=this.config.value.accounts;if(accounts===undefined&&typeof this.config.workBuddyInferenceAllowed!=='function')return;const a=Array.isArray(accounts)?accounts.find(a=>a.id===u.accountId&&a.platform==='workbuddy'):undefined;if(!a||a.enabled===false||a.inferenceEnabled===false)throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');};
       await ensureInference();
       const body=prepareChatBody(JSON.stringify(input));const tools=declaredTools(body);
-      let c=await this.credentials.resolve(u.accountId);await ensureInference();let result=await this.wb.chatStream(c,body,signal);
-      if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken){await ensureInference();result=await this.wb.chatStream(newer,body,signal);}}
-      if(!result.ok)throw new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
-      return {response:result.response,recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
+      // Check again after credential resolution: a concurrently replaced local
+      // credential must not cause a POST into a channel rejected in this request.
+      const ensureChannel=credential=>{const channel=workBuddyTransportChannel(credential);if(channel&&Array.isArray(providerOptions.workBuddyRejectedChannels)&&providerOptions.workBuddyRejectedChannels.includes(channel))throw workBuddyChannelSkipped(channel);};
+      let c=await this.credentials.resolve(u.accountId);await ensureInference();ensureChannel(c);let result=await this.wb.chatStream(c,body,signal);
+      if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken){await ensureInference();ensureChannel(newer);c=newer;result=await this.wb.chatStream(c,body,signal);}}
+      if(!result.ok)throw workBuddyChannelError(result.message,{status:result.status,channel:workBuddyTransportChannel(c)})??new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
+      return {response:result.response,workBuddyChannel:workBuddyTransportChannel(c),recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
     }
     if(u.kind==='trae') {
       if(!this.catalogs.has(u.id))await this.models(u.id,{signal});

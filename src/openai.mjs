@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {DsmlStreamBuffer} from '../vendor/workbuddy-core.mjs';
 import {AppError} from './util.mjs';
+import {workBuddyChannelError} from './workbuddy-channel.mjs';
 // Context pressure is request-specific, not a wallet or authentication failure.
 // Prefer structured codes and exclude explicit rate limits before text matching.
 export function isContextWindowError(error={}) {
@@ -11,8 +12,9 @@ export function isContextWindowError(error={}) {
   if(/rate limit|too many requests|throttl/i.test(message))return false;
   return /context (?:window|length).*(?:exceed|overflow|limit)|(?:exceed|overflow).*(?:context window|context length)|prompt (?:is )?too long|input(?: token count| length)?.*(?:exceed|longer than|too (?:long|large))|maximum (?:context|prompt) length|请求.*上下文.*(?:超|溢)|上下文.*(?:超限|溢出)/i.test(message);
 }
-function upstreamError(source,fallbackCode){
+function upstreamError(source,fallbackCode,provider,upstreamStatus){
   const detail=source.error??source,message=detail.message??source.msg??source.message??`Upstream code ${source.code??'none'}`;
+  if(provider==='workbuddy'){const channel=workBuddyChannelError(source,{status:detail.status??source.status??400,upstreamStatus});if(channel)return channel;}
   const original={message,code:detail.code??detail.type??source.code,status:detail.status??source.status};
   if(isContextWindowError(original))return new AppError(message,400,'context_length_exceeded');
   return new AppError(message,502,fallbackCode);
@@ -49,13 +51,13 @@ export async function* sseEvents(body,{eventLimit=1048576}={}) {
   }finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
 function meaningful(chunk) {return chunk.choices?.some(c=>c.finish_reason||c.delta?.content||c.delta?.reasoning_content||c.delta?.reasoning||c.delta?.tool_calls?.length);}
-export async function* normalizeChat(response,{model,recovery}={}) {
+export async function* normalizeChat(response,{model,recovery,provider}={}) {
   const id='chatcmpl-'+randomUUID(),created=Math.floor(Date.now()/1000);
   const chunk=choices=>({id,object:'chat.completion.chunk',created,model,choices});
   let type=response.headers.get('content-type')??'';
   if(type.includes('application/json')||type.includes('text/event-stream'))({response,type}=await responseFraming(response,type));
   if(type.includes('application/json')) {
-    const json=await response.json();if(json.error||json.code&&json.code!==0||!Array.isArray(json.choices)||!json.choices.length)throw upstreamError(json,'upstream_business_error');
+    const json=await response.json();if(json.error||json.code&&json.code!==0||!Array.isArray(json.choices)||!json.choices.length)throw upstreamError(json,'upstream_business_error',provider,response.status);
     for(const c of json.choices){const msg=c.message??c.delta;if(!msg)throw new AppError('JSON choice lacks message',502,'invalid_upstream_response');yield chunk([{index:c.index??0,delta:msg,finish_reason:null}]);yield chunk([{index:c.index??0,delta:{},finish_reason:c.finish_reason??(msg.tool_calls?.length?'tool_calls':'stop')}]);}
     if(json.usage)yield {...chunk([]),usage:json.usage};return;
   }
@@ -82,7 +84,7 @@ export async function* normalizeChat(response,{model,recovery}={}) {
   for await(const event of sseEvents(response.body)) {
     if(event.data==='[DONE]'){done=true;break;}
     let source;try{source=JSON.parse(event.data)}catch{throw new AppError('Malformed upstream SSE JSON',502,'malformed_sse')}
-    if(event.event==='error'||source.error||source.code!==undefined&&![0,'0'].includes(source.code))throw upstreamError(source,'upstream_stream_error');
+    if(event.event==='error'||source.error||source.code!==undefined&&![0,'0'].includes(source.code))throw upstreamError(source,'upstream_stream_error',provider,response.status);
     if(!Array.isArray(source.choices)) {if(source.usage)source.choices=[];else throw new AppError('SSE event lacks choices',502,'invalid_sse_event');}
     const c=transform(source);seen=true;
     // Do not expose a role-only prelude before the upstream commits a usable result.

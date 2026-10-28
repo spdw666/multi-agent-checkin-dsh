@@ -142,6 +142,9 @@ export class ModelRelay{
   if(previous.upstreamId!==target.upstreamId){const value=this.config.value,row={day:new Date().toISOString().slice(0,10),platform:value.upstreams.find(u=>u.id===target.upstreamId)?.kind??'',accountId:value.upstreams.find(u=>u.id===target.upstreamId)?.accountId??'',task:'model-relay',status:'switched',routeId:route.id,modelFamily:modelFamily(target.model),requestId,fromPlatform:value.upstreams.find(u=>u.id===previous.upstreamId)?.kind??'',toPlatform:value.upstreams.find(u=>u.id===target.upstreamId)?.kind??'',reasonCode:trigger??'available_same_model'};this.ledger?.record?.(row);}
  }
  failure(route,target,error,{source='api'}={}){
+  // A request's rejected channel is neither an account ban nor a persistent
+  // supplier outage. The router owns request-local same-channel deduplication.
+  if(['workbuddy_channel_rejected','workbuddy_channel_skipped'].includes(error.code))return this.active(route,source)?'channel_unavailable':null;
   if(error.code==='zcode_upstream_blocked')return null; // Adapter owns the account-level block; never call it a transient outage.
   if(error.code==='wb_inference_disabled')return null; // A local user switch is not a supplier outage.
   if(error.code==='reasoning_budget_exhausted')return null; // Caller budget too small for the reasoning tier; the supplier is healthy.

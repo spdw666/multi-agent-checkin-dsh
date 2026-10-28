@@ -4,6 +4,7 @@
 import {createHash} from 'node:crypto';
 import {AppError} from './util.mjs';
 import {rateLimitMetadata} from './rate-limit-metadata.mjs';
+import {workBuddyChannelMetadata} from './client-contract.mjs';
 
 const number=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:null;
 const count=v=>Math.floor(number(v)??0);
@@ -54,7 +55,7 @@ export function diagnosticText(value,config={}){
   return textAllowed(value)?prepareDiagnosticContext(config).safeText(value):null;
 }
 const capabilities=raw=>({tools:typeof raw?.tools==='boolean'?raw.tools:null,multimodal:typeof raw?.multimodal==='boolean'?raw.multimodal:null,contextWindow:Number.isSafeInteger(raw?.contextWindow)&&raw.contextWindow>0?raw.contextWindow:null,outputCapacity:Number.isSafeInteger(raw?.outputCapacity)&&raw.outputCapacity>0?raw.outputCapacity:null});
-const reason=(raw,platform,rate,safeCode=code)=>{const value=record(raw)?safeCode(raw.code??raw.reasonCode):null;return value?{code:value,status:http(raw.status),platform:safeCode(platform??raw.platform)??'unknown',...rateLimitMetadata(rate??raw)}:null;};
+const reason=(raw,platform,rate,safeCode=code)=>{const value=record(raw)?safeCode(raw.code??raw.reasonCode):null;return value?{code:value,status:http(raw.status),platform:safeCode(platform??raw.platform)??'unknown',...rateLimitMetadata(rate??raw),...workBuddyChannelMetadata({code:value})}:null;};
 const transport=raw=>({phase:['connect','tls_handshake','response_header','response_body'].includes(raw?.phase)?raw.phase:null,code:['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ECONNRESET','ETIMEDOUT','CERT_HAS_EXPIRED','ERR_TLS_CERT_ALTNAME_INVALID','UNABLE_TO_VERIFY_LEAF_SIGNATURE','DEPTH_ZERO_SELF_SIGNED_CERT','ABORT_ERR'].includes(raw?.code)?raw.code:null,timeoutOrigin:['connect_deadline','header_deadline','body_idle','request_deadline'].includes(raw?.timeoutOrigin)?raw.timeoutOrigin:null});
 // Both counters come from the same UsageAttempt performance clock. This split
 // is a gateway observation, not provider generation or client delivery timing.

@@ -28,6 +28,7 @@ export function requestContract(request){
 export function supplierTerminal(cause){
   const terminal=new AppError('同型号供应未完成本次请求（'+code(cause?.code)+'，HTTP '+status(cause?.status)+'）；其余候选不支持本次完整请求，历史、工具和输出预算均已保留',status(cause?.status),code(cause?.code));
   Object.assign(terminal,rateLimitMetadata(cause));
+  if(cause?.code==='workbuddy_channel_rejected')terminal.upstreamCode=11128;
   if(Number.isInteger(cause?.upstreamStatus)&&cause.upstreamStatus>=400&&cause.upstreamStatus<=599)terminal.upstreamStatus=cause.upstreamStatus;
   for(const [key,allowed]of [
     ['networkPhase',['connect','tls_handshake','response_header','response_body']],

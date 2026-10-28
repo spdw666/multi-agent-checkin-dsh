@@ -7,7 +7,7 @@ import re
 from urllib.parse import urlsplit
 
 _ID = re.compile(r"^aigw-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-_CODES = frozenset({"provider_auth_rejected", "provider_http_error", "provider_network_error", "relay_target_timeout", "opencode_unauthorized", "loomy_session_expired", "same_model_rate_limited", "same_model_timeout", "same_model_cooldown", "same_model_unavailable", "same_model_credits_exhausted", "relay_context_incompatible", "relay_capacity_incompatible", "relay_attempt_timeout", "request_timeout", "request_deadline_exceeded", "request_cancelled", "account_pool_unavailable", "provider_chat_rejected", "provider_rate_limited", "upstream_rate_limited", "reasoning_effort_not_supported", "reasoning_parameter_not_supported", "invalid_upstream_response", "authentication_error", "tools_not_supported", "images_not_supported", "provider_timeout", "empty_response", "reasoning_only_response"})
+_CODES = frozenset({"workbuddy_channel_rejected", "provider_auth_rejected", "provider_http_error", "provider_network_error", "relay_target_timeout", "opencode_unauthorized", "loomy_session_expired", "same_model_rate_limited", "same_model_timeout", "same_model_cooldown", "same_model_unavailable", "same_model_credits_exhausted", "relay_context_incompatible", "relay_capacity_incompatible", "relay_attempt_timeout", "request_timeout", "request_deadline_exceeded", "request_cancelled", "account_pool_unavailable", "provider_chat_rejected", "provider_rate_limited", "upstream_rate_limited", "reasoning_effort_not_supported", "reasoning_parameter_not_supported", "invalid_upstream_response", "authentication_error", "tools_not_supported", "images_not_supported", "provider_timeout", "empty_response", "reasoning_only_response"})
 _PLATFORMS = frozenset({"loomy", "workbuddy", "workbuddyai", "trae", "trae-cn", "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "codearts", "lobster", "nvidia", "bigmodel", "freeapi", "opencode", "openai"})
 
 
@@ -61,11 +61,16 @@ def classify(provider=None, error_body=None, error=None, **kwargs):
         status = root.get("status")
         if isinstance(status, int) and not isinstance(status, bool) and 400 <= status <= 599:
             parts.append(f"主因 {platform}/{root_code} HTTP {status}")
+    channel_rejected = (code == "workbuddy_channel_rejected" or
+                        isinstance(root, dict) and root.get("code") == "workbuddy_channel_rejected")
+    if channel_rejected:
+        parts.append("WorkBuddy 渠道校验未通过（11128）；本次未由客户端重复发送")
     parts.append(f"请求 {identifier}")
     return {"reason": "unknown", "retryable": False, "should_fallback": False,
             "should_compress": False, "should_rotate_credential": False,
             "message": "；".join(parts),
-            "error_context": {"gateway_request_id": identifier, "gateway_retry_owner": "gateway"}}
+            "error_context": {"gateway_request_id": identifier, "gateway_retry_owner": "gateway",
+                              **({"upstream_code": 11128} if channel_rejected else {})}}
 
 
 def register(ctx):

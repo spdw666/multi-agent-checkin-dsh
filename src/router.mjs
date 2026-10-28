@@ -10,6 +10,7 @@ import {ModelRelay,isRelayTransportFailure} from './model-relay.mjs';
 import {adaptRelayReasoning} from './relay-reasoning.mjs';
 import {gatewayRequestTimeout} from './request-timeouts.mjs';
 import {RequestPlan,outputCapacity,supplierTerminal} from './request-plan.mjs';
+import {isWorkBuddyChannel,workBuddyChannelSkipped} from './workbuddy-channel.mjs';
 const interrupted=signal=>new AppError(signal?.reason?.name==='TimeoutError'?'Gateway request deadline exceeded':'Request cancelled',signal?.reason?.name==='TimeoutError'?504:499,signal?.reason?.name==='TimeoutError'?'request_timeout':'request_cancelled');
 export class Router {
   constructor(config,platforms,{ledger,relayAttemptTimeoutMs=30000,catalogTimeoutMs=20000,relayNetworkRetryDelayMs=250,relayPrefillTimeoutMs=240000,relayRateLimitDelay=(ms,signal)=>sleep(ms,undefined,{signal})}={}){if(!Number.isSafeInteger(relayAttemptTimeoutMs)||relayAttemptTimeoutMs<1||relayAttemptTimeoutMs>600000||!Number.isSafeInteger(catalogTimeoutMs)||catalogTimeoutMs<1||catalogTimeoutMs>60000)throw new TypeError('Relay and catalog deadlines must be positive bounded integers');if(!Number.isSafeInteger(relayNetworkRetryDelayMs)||relayNetworkRetryDelayMs<0||relayNetworkRetryDelayMs>5000)throw new TypeError('Network retry delay must be bounded');if(!Number.isSafeInteger(relayPrefillTimeoutMs)||relayPrefillTimeoutMs<1||relayPrefillTimeoutMs>600000)throw new TypeError('Prefill deadline must be bounded');if(typeof relayRateLimitDelay!=='function')throw new TypeError('Rate-limit delay must be a function');Object.assign(this,{config,platforms,ledger,relayAttemptTimeoutMs,catalogTimeoutMs,relayNetworkRetryDelayMs,relayPrefillTimeoutMs,relayRateLimitDelay});this.catalogFlights=new Map();this.pool=new WorkBuddyPool(config,ledger);this.relay=new ModelRelay(config,platforms,ledger);this.relay.pool=this.pool;this.relay.catalogRead=(id,options)=>this.catalog(id,options);}
@@ -91,9 +92,18 @@ export class Router {
     if(signal?.aborted)throw interrupted(signal);
     request=validateChat(raw);requestContext=captureRequestContext(request);plan=new RequestPlan(request,this.config.value);route=this.config.value.routes.find(r=>r.id===request.model&&r.enabled!==false);
     if(!route)throw new AppError(`Unknown route: ${request.model}`,404,'model_not_found');
-    let last,lastSupplierFailure,firstSupplierFailure;const requestBudget=gatewayRequestTimeout(this.config.value.server,route.id);
+    let last,lastSupplierFailure,firstSupplierFailure,firstChannelFailure;const requestBudget=gatewayRequestTimeout(this.config.value.server,route.id);
     const relayActive=this.relay.active(route,source),prepared=await this.relay.prepare(route,this.pool.candidates(route),signal,{source}),targets=prepared.targets,selectionVersion=this.pool.version(route);let previousTarget,relayTrigger;
     plan.catalogs=new Map(prepared.catalogs);plan.seedBlocked(prepared.blocked);
+    // Only this request remembers a rejected WorkBuddy edition. No credential,
+    // request body or account-wide cooldown is retained across invocations.
+    const rejectedChannels=new Set();
+    const workBuddyChannel=async target=>{
+      const u=this.config.value.upstreams?.find(u=>u.id===target.upstreamId);if(u?.kind!=='workbuddy')return;
+      if(typeof this.platforms.workBuddyChannel==='function')return this.platforms.workBuddyChannel(target);
+      // An alternate adapter without actual transport-domain evidence remains
+      // unknown; an account's edition label never proves its actual endpoint.
+    };
     // These snapshots are scoped to one request, not an eager pool pre-read or a
     // permanent capability cache. Discovery's signed catalog is authoritative.
     const catalogReads=new Map(),catalogFor=async(id,signal)=>{if(plan.catalogs.has(id))return plan.catalogs.get(id);if(!catalogReads.has(id))catalogReads.set(id,this.catalog(id,{signal}).then(catalog=>{plan.catalogs.set(id,catalog);return catalog;}));return catalogReads.get(id);};
@@ -160,7 +170,7 @@ export class Router {
       const ordered=this.controls.orderTargets(route,targets,{clientId,sessionId,sameModel:relayActive,eligible:target=>eligible.has(targetKey(target))});targets.splice(0,targets.length,...ordered);
     }
     for(let i=0;i<targets.length;i++) {
-      const target=targets[i];let started=false,completed=false,failure,response,blockedByCircuit=false,skipped=false,queueRecoveryFinalizer;
+      const target=targets[i];let started=false,completed=false,failure,response,blockedByCircuit=false,skipped=false,queueRecoveryFinalizer,actualWorkBuddyChannel;
       plan.candidate();
       if(signal?.aborted)throw interrupted(signal);
       // A long prefill is one all-or-nothing attempt: halving the remaining
@@ -183,6 +193,7 @@ export class Router {
       try {
         if(this.controls?.enabled()&&!this.relay.enabled(target))throw new AppError('Routing policy candidate is no longer enabled; no provider request sent',503,'control_target_ineligible');
         if((this.config.value.upstreams??[]).find(u=>u.id===target.upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(target))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');
+        if(rejectedChannels.size){actualWorkBuddyChannel=await waitTarget(workBuddyChannel(target));if(rejectedChannels.has(actualWorkBuddyChannel))throw workBuddyChannelSkipped(actualWorkBuddyChannel);}
         const catalog=await waitTarget(catalogFor(target.upstreamId,targetSignal));const model=catalog.find(m=>m.id===target.model);
         const queuedRestriction=recoveryRestriction(target);if(queuedRestriction){blockedByCircuit=true;throw queuedRestriction;}
         if(!model||model.callable===false)throw new AppError(`Model absent from live catalog: ${target.model}`,404,'model_not_found');
@@ -208,31 +219,43 @@ export class Router {
             if(recoveryCircuits.has(targetKey(target))){const balance=await waitTarget(this.relay.balance(target,targetSignal));restriction=recoveryRestriction(target);if(restriction){blockedByCircuit=true;throw restriction;}if(this.relay.exhaustedBalance(balance)){blockedByCircuit=true;throw new AppError('原供应在恢复派发前已确认剩余额度为零；本次未重复生成，模型与上下文保持不变',402,'same_model_credits_exhausted');}}
             if(controlVersion&&(!this.relay.enabled(target)||controlVersion!==this.controls.targetVersion(target)))throw new AppError('Routing policy candidate source changed before dispatch; refresh eligibility',503,'control_target_ineligible');
             controlLease?.checkTarget?.(target);
-            if((this.config.value.upstreams??[]).find(u=>u.id===target.upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(target))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');plan.dispatched(!usage.row.dispatched);usage.dispatched();result=await waitTarget(this.platforms.chat(target,adapted.request,targetSignal,qoderOptions));break;}
+            if((this.config.value.upstreams??[]).find(u=>u.id===target.upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(target))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');plan.dispatched(!usage.row.dispatched);usage.dispatched();result=await waitTarget(this.platforms.chat(target,adapted.request,targetSignal,kind==='workbuddy'?{workBuddyRejectedChannels:[...rejectedChannels]}:qoderOptions));break;}
           catch(e){const retryBase=this.relayNetworkRetryDelayMs,retryDelay=retryBase+Math.floor(Math.random()*retryBase/2);if(!relayActive||(!isRelayTransportFailure(e)||e.code==='relay_target_timeout')||transportAttempt===2||targetSignal?.aborted||attemptBudget<=retryDelay+100||requestBudget-(Date.now()-requestStarted)<=retryDelay+1000)throw e;
             usage.row.transportAttempts=2;usage.row.transportRetryReason=e.code;usage.row.transportRetryDelayMs=retryDelay;progress();await waitTarget(sleep(retryDelay,undefined,{signal:targetSignal}));progress();}
-        }response=result.response;if(qoderTarget&&result.qoderQueueTelemetry){usage.row.qoderQueueTelemetry=result.qoderQueueTelemetry;queueRecoveryFinalizer=result.finalizeQoderQueue;}
+        }response=result.response;if(kind==='workbuddy'&&isWorkBuddyChannel(result.workBuddyChannel))actualWorkBuddyChannel=result.workBuddyChannel;if(qoderTarget&&result.qoderQueueTelemetry){usage.row.qoderQueueTelemetry=result.qoderQueueTelemetry;queueRecoveryFinalizer=result.finalizeQoderQueue;}
         const nativeAttempts=Number(response.headers?.get('x-ai-credit-trae-attempts'));if(Number.isInteger(nativeAttempts)&&nativeAttempts>0&&nativeAttempts<=2)usage.row.nativeAttempts=nativeAttempts;const nativeRetry=response.headers?.get('x-ai-credit-trae-retry-reason');if(nativeRetry==='reasoning_only_stop')usage.row.nativeRetryReason=nativeRetry;
         // During automatic handoff, no answer or proposed tool call is exposed
         // until this attempt is complete. Failed partial streams can then be
         // replayed on the same model without duplicated text or executed tools.
         // Reasoning alone does not prove budget exhaustion: only an explicit
         // length finish is caller-budget evidence; an empty stop stays relayable.
-        if(relayActive){let bytes=0,content=false,tools=false,reasoning=false,finish=null;const pending=[];await waitTarget((async()=>{try{for await(const chunk of normalizeChat(result.response,{model:route.id,recovery:result.recovery})){if(targetSignal?.aborted)throw targetExpired?timeoutError:interrupted(signal);usage.chunk(chunk);if(chunk.choices?.some(c=>c.delta?.content||c.delta?.reasoning_content||c.delta?.reasoning||c.delta?.tool_calls?.length)){semanticProgress=true;progress();}bytes+=Buffer.byteLength(JSON.stringify(chunk),'utf8');if(bytes>32*1048576)throw new AppError('Relay response exceeds 32 MiB',502,'response_too_large');pending.push(chunk);for(const c of chunk.choices??[]){content||=typeof c.delta?.content==='string'&&!!c.delta.content.trim();tools||=!!c.delta?.tool_calls?.length;const thought=typeof c.delta?.reasoning_content==='string'?c.delta.reasoning_content:typeof c.delta?.reasoning==='string'?c.delta.reasoning:'';reasoning||=!!thought.trim();if(typeof c.finish_reason==='string'&&c.finish_reason)finish=c.finish_reason;}}}finally{if(targetSignal?.aborted&&response?.body&&!response.body.locked)await response.body.cancel().catch(()=>{});}})());if(!content&&!tools){if(reasoning&&finish==='length')throw new AppError('同型号供应只返回了推理、正文为空（finish='+(finish??'unknown')+'）：推理已占满本次输出预算，提高 max_tokens 或降低推理档位后重试',400,'reasoning_budget_exhausted');throw new AppError('Same-model provider returned no answer or tool call',502,'empty_response');}onTarget?.(target,i);if(!route.accountPool?.enabled||target.accountId&&route.accountPool.accountIds.includes(target.accountId))this.pool.success(route,target,{expectedVersion:selectionVersion});if(!route.accountPool?.enabled||this.pool.version(route)===selectionVersion)this.relay.success(route,target,{requestId,trigger:usage.row.relay.trigger,from:previousTarget});started=true;for(const chunk of pending)yield chunk;}
-        else for await(const chunk of normalizeChat(result.response,{model:route.id,recovery:result.recovery})){usage.chunk(chunk);if(!started){onTarget?.(target,i);if(!route.accountPool?.enabled||target.accountId&&route.accountPool.accountIds.includes(target.accountId))this.pool.success(route,target,{expectedVersion:selectionVersion});started=true;}yield chunk;}
+        if(relayActive){let bytes=0,content=false,tools=false,reasoning=false,finish=null;const pending=[];await waitTarget((async()=>{try{for await(const chunk of normalizeChat(result.response,{model:route.id,recovery:result.recovery,provider:kind})){if(targetSignal?.aborted)throw targetExpired?timeoutError:interrupted(signal);usage.chunk(chunk);if(chunk.choices?.some(c=>c.delta?.content||c.delta?.reasoning_content||c.delta?.reasoning||c.delta?.tool_calls?.length)){semanticProgress=true;progress();}bytes+=Buffer.byteLength(JSON.stringify(chunk),'utf8');if(bytes>32*1048576)throw new AppError('Relay response exceeds 32 MiB',502,'response_too_large');pending.push(chunk);for(const c of chunk.choices??[]){content||=typeof c.delta?.content==='string'&&!!c.delta.content.trim();tools||=!!c.delta?.tool_calls?.length;const thought=typeof c.delta?.reasoning_content==='string'?c.delta.reasoning_content:typeof c.delta?.reasoning==='string'?c.delta.reasoning:'';reasoning||=!!thought.trim();if(typeof c.finish_reason==='string'&&c.finish_reason)finish=c.finish_reason;}}}finally{if(targetSignal?.aborted&&response?.body&&!response.body.locked)await response.body.cancel().catch(()=>{});}})());if(!content&&!tools){if(reasoning&&finish==='length')throw new AppError('同型号供应只返回了推理、正文为空（finish='+(finish??'unknown')+'）：推理已占满本次输出预算，提高 max_tokens 或降低推理档位后重试',400,'reasoning_budget_exhausted');throw new AppError('Same-model provider returned no answer or tool call',502,'empty_response');}onTarget?.(target,i);if(!route.accountPool?.enabled||target.accountId&&route.accountPool.accountIds.includes(target.accountId))this.pool.success(route,target,{expectedVersion:selectionVersion});if(!route.accountPool?.enabled||this.pool.version(route)===selectionVersion)this.relay.success(route,target,{requestId,trigger:usage.row.relay.trigger,from:previousTarget});started=true;for(const chunk of pending)yield chunk;}
+        else for await(const chunk of normalizeChat(result.response,{model:route.id,recovery:result.recovery,provider:kind})){usage.chunk(chunk);if(!started){onTarget?.(target,i);if(!route.accountPool?.enabled||target.accountId&&route.accountPool.accountIds.includes(target.accountId))this.pool.success(route,target,{expectedVersion:selectionVersion});started=true;}yield chunk;}
         if(recoveryCircuits.has(targetKey(target)))this.relay.clearRateLimit(target,recoveryCircuits.get(targetKey(target)).until);
         completed=true;requestCompleted=true;this.controls?.success(route,target,{clientId,sessionId});
         return;
       }catch(e){
         // An adapter-local block is definitively before fetch, not a new send.
-        if(e.code==='zcode_upstream_blocked'&&e.upstreamRequestSent===false&&usage.retractUnsentDispatch())plan.retractUnsentDispatch();
+        if(e.code==='workbuddy_channel_skipped'&&e.upstreamRequestSent===false&&usage.row.dispatchCount>1){
+          // A credential can change after one real transport attempt. Retract
+          // only the unsent retry, retaining that earlier attempt and dispatch.
+          usage.row.dispatchCount--;plan.dispatchCount--;
+        }else if(['zcode_upstream_blocked','workbuddy_channel_skipped'].includes(e.code)&&e.upstreamRequestSent===false&&usage.retractUnsentDispatch())plan.retractUnsentDispatch();
         if(signal?.aborted)e=interrupted(signal);else if(targetExpired)e=queueDeadlineError??timeoutError;failure=e;last=e;
-        skipped=!usage.row.dispatched&&(['control_target_ineligible','client_credit_budget_exceeded'].includes(e.code)||relayActive&&['relay_capacity_incompatible','relay_context_incompatible','tools_not_supported','images_not_supported','reasoning_effort_not_supported','reasoning_parameter_not_supported','wb_inference_disabled'].includes(e.code));
+        skipped=!usage.row.dispatched&&(['control_target_ineligible','client_credit_budget_exceeded'].includes(e.code)||relayActive&&['relay_capacity_incompatible','relay_context_incompatible','tools_not_supported','images_not_supported','reasoning_effort_not_supported','reasoning_parameter_not_supported','wb_inference_disabled','workbuddy_channel_skipped'].includes(e.code));
         if(skipped)usage.row.candidatePlan={...usage.row.candidatePlan,state:'skipped',reasonCode:e.code};
+        if(e.code==='workbuddy_channel_rejected'){
+          if(!isWorkBuddyChannel(e.workBuddyChannel)&&isWorkBuddyChannel(actualWorkBuddyChannel))e.workBuddyChannel=actualWorkBuddyChannel;
+          // A channel rejection after ANY semantic progress is terminal even
+          // when verified buffering has not yielded that progress to a client.
+          if(started||semanticProgress||!relayActive){plan.failure(e,target,{skipped});throw e;}
+          firstChannelFailure??=e;if(isWorkBuddyChannel(e.workBuddyChannel))rejectedChannels.add(e.workBuddyChannel);
+        }
         plan.failure(e,target,{skipped});
         if(this.config.value.upstreams?.find(u=>u.id===target.upstreamId)?.kind==='qoder'&&e.qoderQueueRecoveryTerminal===true)throw e;
         const depleted=!blockedByCircuit&&!signal?.aborted&&!isContextWindowError(e)&&this.pool.exhausted(route,target,e),poolModelAbsent=route.accountPool?.enabled&&e.code==='model_not_found',relayReason=signal?.aborted||['control_target_ineligible','client_credit_budget_exceeded'].includes(e.code)?null:blockedByCircuit?(e.status===429?'rate_limited':null):this.relay.failure(route,target,e,{source});
-        if(relayReason&&relayReason!=='capability_unavailable'){lastSupplierFailure=e;firstSupplierFailure??=e;}
+        if(relayReason&&relayReason!=='capability_unavailable'&&e.code!=='workbuddy_channel_skipped'){lastSupplierFailure=e;firstSupplierFailure??=e;}
+        if(!started&&!signal?.aborted&&i===targets.length-1&&skipped&&firstChannelFailure)throw firstChannelFailure;
         if(relayReason==='rate_limited')rememberRateLimit(target);
         if(!started&&!signal?.aborted&&i===targets.length-1&&['rate_limited','capability_unavailable'].includes(relayReason)&&rateBlocked.size){
           if(await recoverRateLimit()){previousTarget=target;continue;}

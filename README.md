@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="package.json"><img alt="Node.js 22.23.3+" src="https://img.shields.io/badge/Node.js-%3E%3D22.23.3-339933?logo=nodedotjs&logoColor=white"></a>
-  <a href="package.json"><img alt="Gateway 0.8.0" src="https://img.shields.io/badge/Gateway-0.8.0-blue"></a>
+  <a href="package.json"><img alt="Gateway 0.8.1" src="https://img.shields.io/badge/Gateway-0.8.1-blue"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="OpenAI Compatible API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991">
 </p>
@@ -36,6 +36,12 @@ WB 使用独立的 **wb帐号池**：逐账号展示身份、登录状态、封�
 - **原生窗口**：从托盘或再次启动恢复窗口时校验当前显示器工作区，修复最小化哨兵坐标、已断开的显示器和分辨率变化，同时保留有效的负坐标多屏位置。
 
 核验条件、状态含义和复现命令见[积分状态与窗口恢复说明](docs/points-state-and-window-recovery.md)。后台运行和每日领取结果分别记录；既有领取记录不代表本轮自动新增奖励。
+
+## WorkBuddy 渠道校验与更新防回退
+
+0.8.1 将已验证的系统提示词适配固化到 TypeScript 正式源文件，并在构建、打包和回归中检查生成模块，避免更新覆盖临时补丁。明确的上游 `11128` 显示为“WorkBuddy 渠道校验未通过（11128）”，与普通参数错误、登录失效和额度不足分开。
+
+接力沿用已启用的同型号、分区与完整请求约束；本次请求跳过被拒绝的同一渠道，不逐账号重复撞同一规则。收到正文、推理或工具调用后不再重复生成，DSH/Hermes 也不重放整个网关池。详见[渠道校验与接力说明](docs/workbuddy-channel-reliability.md)。
 
 ## 目录
 
