@@ -16,6 +16,13 @@ export const VIDEO_SESSION_RULES=Object.freeze({
 });
 // 认证类 cookie：令牌有效性只由上游决定，本地浏览器 expirationDate 过期不代表失效。
 export const VIDEO_SESSION_AUTH_COOKIES=Object.freeze(['liblibai_usertoken','usertoken','usertoken_online','webid','_token','sessionid','sessionid_ss','_ai_token','xmst','__msuuid__']);
+// 浏览器删除 cookie 时把 expirationDate 写回 epoch 附近（Max-Age=0）。那是一次明确的登出，
+// 仍然权威。普通过期时间只说明浏览器不再发送它，令牌是否还有效只有上游能说了算。
+const TOMBSTONE_EPOCH_MS=1000;
+export const videoSessionCookieAlive=c=>{
+  const raw=typeof c?.expirationDate==='string'?Number(c.expirationDate):c?.expirationDate;
+  return !Number.isFinite(raw)||raw*TOMBSTONE_EPOCH_MS>TOMBSTONE_EPOCH_MS;
+};
 const fail=(code='video_session_invalid',status=400)=>new AppError('本机会话结构或主体核验未通过',status,code);
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const keys=(o,allowed)=>object(o)&&Object.keys(o).every(k=>allowed.includes(k));
@@ -64,13 +71,13 @@ export function videoSessionCookieHeader(session,url,{now=Date.now()}={}){
     const domain=c.domain.replace(/^\./,'').toLowerCase();
     const domainMatch=c.domain.startsWith('.')?(u.hostname===domain||u.hostname.endsWith('.'+domain)):u.hostname===domain;
     const pathMatch=u.pathname===c.path||u.pathname.startsWith(c.path.endsWith('/')?c.path:c.path+'/');
-    return domainMatch&&pathMatch&&(VIDEO_SESSION_AUTH_COOKIES.includes(c.name)||!c.expirationDate||c.expirationDate*1000>now);
+    return domainMatch&&pathMatch&&(VIDEO_SESSION_AUTH_COOKIES.includes(c.name)?videoSessionCookieAlive(c):(!c.expirationDate||c.expirationDate*1000>now));
   }).sort((a,b)=>b.path.length-a.path.length);
   return rows.map(c=>`${c.name}=${c.value}`).join('; ');
 }
 export function videoSessionAuthToken(session,name){
   if(session.accessToken)return session.accessToken;
-  const candidates=session.cookies.filter(c=>c.name===name);
+  const candidates=session.cookies.filter(c=>c.name===name&&videoSessionCookieAlive(c));
   const values=[...new Set(candidates.map(c=>c.value))];
   if(values.length!==1||!values[0])throw fail('video_session_token_missing',401);
   return values[0];

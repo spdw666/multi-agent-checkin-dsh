@@ -1,10 +1,13 @@
 import {createHash} from 'node:crypto';
-import {VIDEO_SESSION_AUTH_COOKIES} from '../video-session-vault.mjs';
+import {VIDEO_SESSION_AUTH_COOKIES,videoSessionCookieAlive} from '../video-session-vault.mjs';
 
 // Original, offline-tested integration candidate. No browser/process/credential-file access.
 // The caller supplies an explicitly authorized credential object and an encrypted-vault writer.
 export class ProviderError extends Error { constructor(code){super(code);this.code=code;} }
 const fail=c=>{throw new ProviderError(c);};
+// 只有这些底层传输码值得重试。AppError 的业务码（video_session_expired 等）必须立刻上抛，
+// 否则一次明确的登出会被当成网络抖动重放三次。
+const TRANSPORT_RETRYABLE=new Set(['ECONNRESET','EPIPE','ETIMEDOUT','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT']);
 const md5=s=>createHash('md5').update(s).digest('hex');
 const sha=s=>createHash('sha256').update(s).digest('hex');
 const positive=n=>typeof n==='number'&&Number.isFinite(n)&&n>0;
@@ -47,7 +50,7 @@ export function createProvider(input,deps={}){
  const now=deps.now??Date.now,transport=deps.transport??jsonTransport;
  let inFlight=null,attempted=false,liblibOwnerId=null;const memoryReceipts=new Map();
  const apiOrigin=platform==='liblib'?'https://api2.liblib.art':origin;
- const cookies=(url)=>{const u=new URL(url);return (credential.cookies??[]).filter(c=>typeof c.name==='string'&&typeof c.value==='string'&&cookieDomainMatches(u.hostname,c.domain)&&(u.pathname===(c.path||'/')||u.pathname.startsWith((c.path||'/').replace(/\/$/,'')+'/'))&&(VIDEO_SESSION_AUTH_COOKIES.includes(c.name)||!c.expirationDate||c.expirationDate*1000>now())&&(!c.secure||u.protocol==='https:'));};
+ const cookies=(url)=>{const u=new URL(url);return (credential.cookies??[]).filter(c=>typeof c.name==='string'&&typeof c.value==='string'&&cookieDomainMatches(u.hostname,c.domain)&&(u.pathname===(c.path||'/')||u.pathname.startsWith((c.path||'/').replace(/\/$/,'')+'/'))&&(VIDEO_SESSION_AUTH_COOKIES.includes(c.name)?videoSessionCookieAlive(c):(!c.expirationDate||c.expirationDate*1000>now()))&&(!c.secure||u.protocol==='https:'));};
  const cookieValue=(names)=>{const c=cookies(origin+'/');for(const n of names){const v=c.find(x=>x.name===n)?.value;if(v){try{return decodeURIComponent(v);}catch{return v;}}}return '';};
  const cookieHeader=url=>cookies(url).map(c=>{if(!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(c.name)||/[\r\n;]/.test(c.value))fail('invalid_cookie');return `${c.name}=${c.value}`;}).join('; ');
  const principalExpected=()=>typeof credential.principal==='string'?credential.principal:credential.principal?.id;
@@ -74,7 +77,7 @@ export function createProvider(input,deps={}){
    }else{const t=token(),webid=cookieValue(['webid']);if(!t)fail('login_required');if(!webid)fail('webid_required');headers={...headers,token:t,webid};}
    req={url:u.href,method,headers,body:method==='GET'?undefined:JSON.stringify(body??null)};
   }
-   try{res=await transport(req);lastError=undefined;break;}catch(e){if(e instanceof ProviderError)throw e;lastError=e;}
+   try{res=await transport(req);lastError=undefined;break;}catch(e){if(e instanceof ProviderError||typeof e?.code==='string'&&!TRANSPORT_RETRYABLE.has(e.code))throw e;lastError=e;}
    if(attempt+1<attempts)await new Promise(resolve=>setTimeout(resolve,300*(attempt+1)));
   }
   // 只重试「未拿到响应」；拿到响应后（含 4xx/5xx）一律按原语义判定。
@@ -84,10 +87,9 @@ export function createProvider(input,deps={}){
   if(res.setCookies?.length&&deps.onSetCookies){const updated=await deps.onSetCookies(clone(credential),res.setCookies,req.url);if(updated){if(updated.platform!==platform||updated.origin!==origin||JSON.stringify(updated.principal)!==JSON.stringify(credential.principal))fail('credential_scope_changed');credential=clone(updated);await persist();}}
   return res.body;
  };
- // 同一 provider 实例内 5s 复用身份查询：一次 health 会调用 3 次 identity，逐个打 api2.liblib.art 成本过高。
- let identityCache=null;const IDENTITY_CACHE_MS=5000;
+ // 身份查询不做缓存：每次重复调用都是为了与上一次比较（身份漂移检测、余额前后一致性），
+ // 复用缓存会把两次不同答案假装成同一个，等于放行伪造的结算快照。health 层的成本在那里单独解决。
  const identity=async({bind=false}={})=>{
-  if(!bind&&identityCache&&now()-identityCache.at<IDENTITY_CACHE_MS)return identityCache.value;
   let id,kind;
   if(platform==='xiaoyunque'){
    const b=await request('/passport/web/account/info/','GET',undefined,{aid:795647,is_from_ttaccountsdk:1,passport_jssdk_type:'normal',passport_jssdk_version:'4.1.5',account_sdk_source:'web'});
@@ -98,7 +100,6 @@ export function createProvider(input,deps={}){
   const expected=principalExpected();if(expected&&String(expected)!==id)fail('principal_mismatch');
   if(!expected&&bind){credential.principal={id,kind};await persist();}
   const value={authenticated:true,principalHash:principalHash(id),bound:!!principalExpected(),kind};
-  if(!bind)identityCache={at:now(),value};
   return value;
  };
  const needIdentity=async()=>{const i=await identity();if(!i.bound)fail('principal_not_bound');return i;};
@@ -118,15 +119,12 @@ export function createProvider(input,deps={}){
    rows.push(...d.transactions);more=d.has_more;if(mode==='cursor'&&more&&(!d.next_cursor||d.next_cursor===cursor))fail('history_cursor_error');cursor=d.next_cursor;
   }return {rows,complete:!more};
  };
- const liblibHistoryUncached=async()=>{
+ const liblibHistory=async()=>{
   const {start,end}=dayRange(now());let rows=[],total;for(let page=1;page<=4;page++){
    const d=business(await request('/api/www/power/translogs/management','POST',{page,pageSize:50,opTypeCode:1,startTime:start,endTime:end}),'liblib');
    if(!Array.isArray(d.data)||!Number.isSafeInteger(d.total)||d.total<0)fail('history_schema_error');rows.push(...d.data);total=d.total;if(rows.length>=total)return {rows,complete:true};
   }return {rows,complete:false};
  };
- // 同日账单在一次 health 里会被读两次（余额证明 + 签到状态），分页往返成本高，5s 内复用。
- let liblibHistoryCache=null;
- const liblibHistory=async()=>{if(liblibHistoryCache&&now()-liblibHistoryCache.at<5000)return liblibHistoryCache.value;const value=await liblibHistoryUncached();liblibHistoryCache={at:now(),value};return value;};
  const liblibDailyRows=(h,day,owner)=>{
   const end=Date.parse(day+'T00:00:00+08:00')/1000+86399;
   if(origin!=='https://www.liblib.art'||!owner)return [];

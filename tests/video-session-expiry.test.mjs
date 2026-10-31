@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {VIDEO_SESSION_AUTH_COOKIES,videoSessionCookieHeader,videoSessionAuthToken} from '../src/video-session-vault.mjs';
 import {createProvider} from '../src/video-independent-b/providers.mjs';
 import {cookieHeaderFor} from '../src/video-independent-a/independent-daily-provider.mjs';
+import {AppError} from '../src/util.mjs';
 
 // 2026-10-31 liblib 线上故障：usertoken/webid 的浏览器 expirationDate 已过期（2026-10-31T05:52:14Z），
 // 但官方 api2.liblib.art 仍返回 200 —— 本地把 expirationDate 当令牌失效证据，导致「已登录却报 login_required」。
@@ -120,6 +121,20 @@ test('an HTTP response is never retried, even when it is an error', async () => 
   });
   await assert.rejects(() => prov.verifyIdentity({bind: false}), e => e.code === 'upstream_http_error');
   assert.equal(calls, 1, '拿到响应就不重试');
+});
+
+// 2026-10-31 回归：rotatingTransport 遇到 4xx 时会用 Set-Cookie 判定登出并抛 AppError。
+// 那不是传输抖动。若按「不是 ProviderError 就重试」放行，一次明确的登出会被重放三次。
+test('a business AppError raised by the transport is surfaced at once instead of retried', async () => {
+  let calls = 0;
+  const prov = createProvider(session('liblib', 'https://www.liblib.art', [
+    {name: 'usertoken', value: 'tok-live', domain: 'www.liblib.art', path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: PAST},
+    {name: 'webid', value: 'web-1', domain: 'www.liblib.art', path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: PAST}
+  ]), {
+    transport: async () => { calls++; throw Object.assign(new AppError('登出已确认', 401, 'video_session_expired'), {beforeSubmission: true}); }
+  });
+  await assert.rejects(() => prov.verifyIdentity({bind: false}), e => e.code === 'video_session_expired');
+  assert.equal(calls, 1, '业务错误必须立刻上抛，不重试');
 });
 
 // 2026-10-31 回归：重试循环把 req 挪进循环体后，循环外 onSetCookies 分支的 req.url 变成未定义，
