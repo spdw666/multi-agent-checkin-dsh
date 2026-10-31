@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {pathToFileURL} from 'node:url';
-const root=process.env.VIDEO_TEST_ROOT??new URL('../',import.meta.url).pathname.replace(/^\/(\w:)/,'$1');
+import {pathToFileURL,fileURLToPath} from 'node:url';
+const root=process.env.VIDEO_TEST_ROOT??fileURLToPath(new URL('..',import.meta.url));
 const load=async name=>import(pathToFileURL(join(root,'src',name)).href);
 let api;try{api=await load('provider-video-daily.mjs');}catch{}
 const need=()=>{assert.ok(api,'video daily-credit provider must exist');return api;};

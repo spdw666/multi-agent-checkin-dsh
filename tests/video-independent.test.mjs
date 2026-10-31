@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {pathToFileURL,fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-const root=process.env.INDEPENDENT_TEST_ROOT??resolve(new URL('..',import.meta.url).pathname.replace(/^\/(\w:)/,'$1'));
+const root=process.env.INDEPENDENT_TEST_ROOT??resolve(fileURLToPath(new URL('..',import.meta.url)));
 // SAMPLE-only module injection gives fixture writes and every provider read the
 // same reversible crypt callback. Production DPAPI and its host guard are not
 // changed; the explicit Windows DPAPI test still calls the real exported API.

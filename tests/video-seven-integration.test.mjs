@@ -4,7 +4,7 @@ import {tmpdir as sampleVaultTmpdir} from 'node:os';
 import {join as sampleVaultJoin} from 'node:path';
 import {pathToFileURL as sampleVaultFileURL} from 'node:url';
 import {pathToFileURL} from 'node:url';import {mkdtemp} from 'node:fs/promises';import {tmpdir} from 'node:os';
-const MODULE_ROOT=process.env.VIDEO_GATEWAY_TEST_ROOT??new URL('../',import.meta.url).pathname.replace(/^\/(\w:)/,'$1');
+const MODULE_ROOT=process.env.VIDEO_GATEWAY_TEST_ROOT??fileURLToPath(new URL('..',import.meta.url));
 // SAMPLE-only module injection gives fixture writes and every provider read the
 // same reversible crypt callback. Production DPAPI and its host guard are not
 // changed; the explicit Windows DPAPI test still calls the real exported API.
