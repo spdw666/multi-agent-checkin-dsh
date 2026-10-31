@@ -1,7 +1,7 @@
 import {AppError,jsonFetch,hash} from './util.mjs';
 import {zcodeValidation} from './browser-session.mjs';
 // Read-only native billing discovery. Activity claims remain opt-in and need the native challenge flow.
-export async function zcodePreview(credential,{fetchPreview=jsonFetch,version='3.14.4'}={}){
+export async function zcodePreview(credential,{fetchPreview=jsonFetch,version='3.17.1'}={}){
  const mid=credential.identity?.deviceId;if(!mid)throw new AppError('ZCode native telemetry deviceMid is missing',409,'native_device_missing');
  const raw=await fetchPreview(`https://zcode.z.ai/api/v1/zcode-plan/billing/preview?app_version=${encodeURIComponent(version)}&platform=win32-x64`,{headers:{Authorization:`Bearer ${credential.accessToken}`,'User-Agent':`ZCode/${version}`,'X-Title':'Z Code@electron','X-ZCode-App-Version':version,'X-Platform':'win32-x64','X-Release-Channel':'stable','X-Client-Language':'zh-CN','X-Client-Timezone':'Asia/Shanghai','X-Device-Mid':mid}});
  return {source:'ZCode native billing preview',plans:raw.data?.plans??[],dailyCheckinVerified:false};
@@ -9,7 +9,7 @@ export async function zcodePreview(credential,{fetchPreview=jsonFetch,version='3
 export function zcodeHeaders(c) {
  const mid=c.identity?.deviceId;
  if(!mid)throw new AppError('ZCode native device identifier is missing',409,'native_device_missing');
- return {Authorization:`Bearer ${c.accessToken}`,'User-Agent':'ZCode/3.14.4','X-ZCode-App-Version':'3.14.4','X-Platform':'win32-x64','X-Device-Mid':mid};
+ return {Authorization:`Bearer ${c.accessToken}`,'User-Agent':'ZCode/3.17.1','X-ZCode-App-Version':'3.17.1','X-Platform':'win32-x64','X-Device-Mid':mid};
 }
 export const zcodeReceiptKey=(c,id)=>'zcode-plan/'+hash(c.principal)+'/'+id;
 export async function zcodeBalance(c,{request=jsonFetch}={}) {

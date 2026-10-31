@@ -57,7 +57,7 @@ export async function zcodeChat(c,request,signal,ledger){
   ledger.set(key,{until:0});return {response:zcodeStandardStream(response,businessError)};
  }
 
- const r=await fetch('https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages',{method:'POST',headers:{...zcodeHeaders(c),...buildLlmIdentityHeaders({appVersion:'3.14.4',deviceMid:c.identity.deviceId}),'anthropic-version':'2023-06-01','Content-Type':'application/json'},body:JSON.stringify(zcodeBody(request)),signal,redirect:'error'});
+ const r=await fetch('https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages',{method:'POST',headers:{...zcodeHeaders(c),...buildLlmIdentityHeaders({appVersion:'3.17.1',deviceMid:c.identity.deviceId}),'anthropic-version':'2023-06-01','Content-Type':'application/json'},body:JSON.stringify(zcodeBody(request)),signal,redirect:'error'});
  if(!r.ok){
   const d=await r.json().catch(()=>({}));
   if(d?.code===3012||d?.code==='3012'){

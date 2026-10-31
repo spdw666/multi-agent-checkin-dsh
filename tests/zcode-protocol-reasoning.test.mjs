@@ -72,7 +72,11 @@ for(const id of ids){
     assert.equal(body.thinking?.type,'enabled');
     assert.equal(body.output_config?.effort,'high');
     assert.deepEqual(body.messages.slice(1),plain.messages);
-    assert.deepEqual(body.system.slice(-plain.system.length),plain.system);
+    // 上游只接受恰好 3 个 system 块（见 docs/zcode.md 的四重指纹），
+    // 所以调用方 system 文本并入第 3 块而不是作为第 4 块出现。
+    assert.equal(body.system.length,3);
+    const caller=plain.system.map(block=>block.text).join('\n\n');
+    assert.ok(body.system[2].text.endsWith(caller));
     assert.deepEqual(body.tools,plain.tools);
     assert.equal(body.tools.length,331);
     assert.deepEqual(body.tool_choice,plain.tool_choice);

@@ -4,14 +4,14 @@ ZCode 模型调用可选走隔离的本机标准代理，再由网关向调用�
 
 ## 已验证能力与模型目录
 
-当前验收账号在原 DSH 的 ZCode 目录中有两款模型，均完成真实工具闭环：
+当前验收账号在原 DSH 的 ZCode 目录中有两款模型，上下文窗口 1000000、最大输出 128000：
 
 | 模型 | DSH 路由示例 | 验收内容 |
 |---|---|---|
-| `glm-5.3` | `zcode-native/glm-5.3` | 原 DSH 实际执行 `read`，结果回填后由模型生成匹配文件内容的最终正文 |
-| `glm-5.3-flash` | `zcode-native/glm-5.3-flash` | 同一原 DSH 工具执行与结果回填闭环；已另测代理停止后的按需冷启动 |
+| `glm-5.3` | `zcode-native/glm-5.3` | 协议层已通过：请求不再被内容风控拦截，上游返回业务码 `1005`（该权益档不含此型号配额）。因此只登记型号元数据，不把无配额型号当成可用路由 |
+| `glm-5.3-flash` | `zcode-native/glm-5.3-flash` | 真实工具闭环：原 DSH 实际执行 `read`，结果回填后由模型生成匹配文件内容的最终正文；已另测代理停止后的按需冷启动 |
 
-验收保留 **331 个原工具和 128000 输出预算**。用户的 **Default** 模型选择不改为显式 Max；该轮网关实际推理策略为 **`max`**。菜单选择、网关解析后的有效策略和上游实际请求分别记录，不把一个 UI 标签当成完整请求证据。
+验收使用原 DSH 下发的**完整工具集合**（本次实测为 404 个工具，不裁剪重测）和 128000 输出预算；批次总量受免费档限流约束，请求间隔过密会先收到 `429`，属正常退避而非故障。用户的 **Default** 模型选择不改为显式 Max；该轮网关实际推理策略为 **`max`**。菜单选择、网关解析后的有效策略和上游实际请求分别记录，不把一个 UI 标签当成完整请求证据。
 
 模型清单以**当前账号权益和实际目录**为准。标准代理中的兼容型号表、大小写映射或别名不是新增账号权益，也不是“表中所有型号都已真实接通”的证明。未在当前目录出现的模型不批量导入，新增型号按自己的普通/SSE/工具/回填结果验收。
 
@@ -41,7 +41,7 @@ ZCode 模型调用可选走隔离的本机标准代理，再由网关向调用�
 在网关仓库根目录执行：
 
 ```powershell
-node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.17.1 --bun BUN_EXE
 ```
 
 `BUN_EXE` 替换为实际 Bun 可执行文件。脚本将固定上游版本安装到该配置的数据目录，构建所需 worker，并生成运行配置和私有本机密钥。**安装不发送模型生成请求，也不执行领取或新增账号。** 不把私有运行配置、密钥或安装目录中的登录材料提交到仓库。
@@ -51,7 +51,7 @@ node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-ver
 源码网关、桌面版 core 与 DSH 插件可能是不同代码副本。对要使用这条路线的副本重复指定 `--target-root`：
 
 ```powershell
-node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE --target-root GATEWAY_ROOT --target-root OTHER_GATEWAY_ROOT
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.17.1 --bun BUN_EXE --target-root GATEWAY_ROOT --target-root OTHER_GATEWAY_ROOT
 ```
 
 `GATEWAY_ROOT` 和 `OTHER_GATEWAY_ROOT` 替换为各自网关代码根目录，而不是用户聊天目录或 DSH 宿主程序目录。显式提供目标时，只配置列出的副本；需要源码根目录也使用代理时，把它一并列出。安装完成后核对回执中的目标数量，以及每个目标的 `src/zcode-standard-proxy.runtime.json`。
@@ -61,7 +61,7 @@ node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-ver
 已有完整固定提交 checkout 时，可使用 `--source` 避免重复获取源码：
 
 ```powershell
-node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.16.3 --bun BUN_EXE --source PINNED_CHECKOUT
+node scripts/setup-zcode-standard-proxy.mjs --config config.local.json --app-version 3.17.1 --bun BUN_EXE --source PINNED_CHECKOUT
 ```
 
 `PINNED_CHECKOUT` 必须对应下文固定提交，且已跟踪文件保持干净。安装器只复制该提交跟踪的文件，不复制 checkout 中未跟踪的登录文件或 `node_modules`。完全离线安装还需要 Bun 缓存中已有锁定依赖；“复用本地源码”不等于缺失依赖也无需获取。
@@ -109,7 +109,29 @@ node bin/ai-credit.mjs start --config config.local.json
 
 同一账号收到 3012 后进入本地冷却。冷却有效时，本机直接返回已记录原因，不再次向上游发请求；同账号切换另一个 ZCode 模型也可能被该门控拦下。这不是另一型号又实际发出一次失败请求。**本地剩余冷却秒数只表示本机退避期限，不是官方解封时间。** 不自动重放终止错误，也不靠清空冷却反复试探。
 
-排查顺序：核对真实请求型号 → 核对该消费者是否已重载 → 核对完整代理是否就绪与进入分支 → 区分本地拦截和真实派发 → 查看原始 HTTP/业务码及请求诊断。不要将领取成功、余额有值或模型目录可见视为推理成功。
+### 3012 的四重内容指纹（2026-10-31 逐项隔离实测）
+
+对 start-plan 免费档型号，3012 的主体成因不是账号、凭据种类、传输栈或请求体积，而是**请求形状**与官方客户端 3.17.1 不一致。以下四项各自独立生效，缺任一项都返回 `405` + `{"code":3012,"msg":"request has been blocked due to unusual activity."}`：
+
+| # | 指纹 | 必须满足 | 实测反例 |
+|---|---|---|---|
+| 1 | 应用版本头 | `user-agent: ZCode/<当前版本>` 且 `x-zcode-app-version` 同为当前官方版本 | 版本号写成旧版（如 `3.16.3`）即使 body 完全正确也 3012 |
+| 2 | `system[0]` / `system[1]` 文本 | 块 0 为 CLI 前缀原文；块 1 以官方 agent prompt 开头（服务端按前缀逐字节比对，约前 1400 字符即已足够判定） | 自造等长文本、只放块 1、只放块 0 全部 3012 |
+| 3 | `system` 块数 | **恰好 3 块**；客户端自己的 system 文本只能并入第 3 块末尾 | 4 块必挂（即使块 0/块 1 与官方逐字节相同）；2 块也挂 |
+| 4 | 会话类型 | 必须是主回合；`x-zcode-session-type: subagent` 本身即触发 | 带 subagent 标记时配官方 3 块 system 仍 3012 |
+
+由此产生的两条实现约束：
+
+- 客户端传入自定义 system 时，**不替换**官方块 1，而是在保留官方 3 块骨架的前提下把客户端文本并入块 2 末尾。把客户端文本当第 4 块追加、或用 `[CLI 前缀, 自定义文本]` 的两块形状，都是真实客户端不会产生的形状。
+- 自定义 system 不应连带把会话身份改成子代理。会话类型是独立指纹，不是 system 形状的配套产物。
+
+`vendor/zcode-context/zcode_system.json` 的 `cliPrefix` 与 `stableSections` 必须与当前官方客户端版本同步；官方改版后此处的旧文本会直接导致 3012，即使其余代码没有变化。
+
+### 诊断顺序
+
+核对真实请求型号 → 核对上述四项指纹 → 核对该消费者是否已重载 → 核对完整代理是否就绪与进入分支 → 区分本地拦截和真实派发 → 查看原始 HTTP/业务码及请求诊断。不要将领取成功、余额有值或模型目录可见视为推理成功。
+
+只改配置而不重启消费该配置的进程不会生效：代理侧读取的 JSON 与代码模块都在进程启动时载入，改完必须停止旧代理让下一次请求重新按需拉起。清空本地冷却只影响本机退避，不改变上游是否接受该请求形状。
 
 ## 回滚
 

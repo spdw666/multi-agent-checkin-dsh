@@ -169,6 +169,7 @@ Web 版仍标为预览。已做源码/合同与 mock 回归、Windows 构建、�
 | 工作台没有账号 | 首启就是空配置；登录自己的平台，核对正确实例与版本，再添加或导入 |
 | 客户端连不上，后台却正常 | 本实例地址、端口、模型密钥、完整路由 ID；port=0 重启后可能变化 |
 | 目录有模型却调用失败 | 登录、资格、目录能力、上下文与工具分别查；[模型复测](docs/model-retry.md)、[诊断与预演](docs/diagnostics-and-readiness.md) |
+| ZCode 返回 3012 / 异常活动拦截 | 多为请求形状与当前官方客户端不一致：应用版本头、system 块 0/1 文本、恰好 3 块、会话类型四项各自生效；[四重指纹](docs/zcode.md#3012冷却与诊断) |
 | 余额存在但没有“本次新增” | 余额与领取结算分开；[积分状态](docs/points-state-and-window-recovery.md) |
 | 401 / 413 / 等待很久 / 流中断 | [请求可靠性](docs/reliability.md)、[Windows 流清理](docs/runtime-reliability.md)、[请求策略](docs/dsh-request-policy.md) |
 | WB 任务窗口关闭后仍在运行 | UI 等待、后台执行与取消各有生命周期；[后台任务手册](docs/WB_TASK_EXECUTION.md) |
@@ -235,6 +236,7 @@ DSH 通过 bundle 和 `ai-credit` Provider 接入，`discover_models` 控制模�
 | 模型与接力 | [目录与验证](docs/model-directory.md)、[复测](docs/model-retry.md)、[接力](docs/model-relay.md)、[可用性](docs/relay-availability.md)、[思考档位](docs/relay-reasoning.md)、[渠道校验](docs/workbuddy-channel-reliability.md) |
 | 客户端 | [OpenAI 兼容](docs/openai-clients.md)、[DSH](docs/dsh.md)、[DSH 请求策略](docs/dsh-request-policy.md)、[Hermes](docs/hermes.md)、[FleshOut](docs/fleshout-sync.md) |
 | 平台与权益 | [桌面平台](docs/desktop-platforms.md)、[官方 API 平台](docs/free-providers.md)、[Key 录入](docs/free-provider-key.md)、[视频每日权益](docs/video-daily.md)、[独立每日协议](docs/video-independent-daily.md) |
+| ZCode | [标准代理接入](docs/zcode.md)，含 3012 的四重内容指纹与诊断顺序 |
 | 诊断与运行 | [API](docs/api.md)、[用量](docs/usage.md)、[运行中心](docs/operations-center.md)、[客户端更新](docs/client-updates.md)、[性能与取消隔离](docs/performance-and-correctness.md) |
 | 全部已有专题 | [专题索引](docs/getting-started.md#专题手册索引)，保留原主页的完整后端专题入口 |
 

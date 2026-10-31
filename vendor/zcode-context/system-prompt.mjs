@@ -135,7 +135,22 @@ export function buildStartPlanSystem(
     { type: "text", text: stable, cache_control: { ...EPHEMERAL } },
     { type: "text", text: `\n\n${dynamic}`, cache_control: { ...EPHEMERAL } },
   ];
-  return [...official, ...normalizeUserSystem(existingSystem)];
+  // ZCode 3.17.1 风控只接受恰好 3 个 system 块。第 4 块（或只有 2 块）
+  // 都会被判 405/3012 "unusual activity"，即使第 1-2 块与官方逐字节一致——
+  // 2026-10-31 带 404 个工具对 zcode.z.ai 实测确认。客户端 system 文本因此
+  // 并入第 3 块（dynamic 块）末尾，而不是另起一块。
+  const __clientText = normalizeUserSystem(existingSystem)
+    .map((b) => (b && typeof b.text === "string" ? b.text : ""))
+    .filter((t) => t.trim())
+    .join("\n\n");
+  if (__clientText) {
+    official[2] = {
+      type: "text",
+      text: official[2].text + "\n\n" + __clientText,
+      cache_control: { ...EPHEMERAL },
+    };
+  }
+  return official;
 }
 
 /**
