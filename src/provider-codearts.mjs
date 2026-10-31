@@ -80,6 +80,11 @@ export const CODEARTS_TRANSIENT_CODES = Object.freeze({
   APIG: {code: 'APIG.0301', meaning: 'IAM 认证失败；检查临时凭据有效期，不自动重试过期凭据', retryable: false},
   CONCURRENCY: {code: 'TM.00001041', meaning: '账号并发会话数上限（3）已满，HTTP 400', retryable: true},
   TOOL_CHOICE: {code: 'InferHub.001001005.400', meaning: '引擎拒绝 tool_choice 参数（HTTP 200 流内业务错误）', retryable: false},
+  // Whole-request rejection (HTTP 200 + SSE business error) whose only observed trigger is a
+  // history tool call carrying empty/whitespace/malformed `arguments`; normalizeCodeArtsToolArguments
+  // repairs those shapes before the body is signed, so a still-reachable 81001 means some OTHER
+  // field is invalid and must be bisected rather than retried.
+  INVALID_ARGUMENT: {code: 'InferHub.ModelArts.81001.400', meaning: '引擎判定请求参数非法（只观察到一个成因：历史 tool_calls.arguments 为空/非法 JSON，已在构造请求体时归一化）', retryable: false},
 });
 
 /**
@@ -98,6 +103,7 @@ export const CODEARTS_TOOLS_VERIFIED = Object.freeze({
   'glm-5.2-sft-harmony': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
   'deepseek-v4.1-flash': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
   'kimi-k3': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'deepseek-v4.1-flash-1017': 'codearts-1017-20261031/PROBE.json',
 });
 
 /** Models with observed native output; callability still requires a declared local capacity. */
@@ -111,14 +117,18 @@ export const CODEARTS_CHAT_VERIFIED = Object.freeze({
   'glm-5.2-sft-harmony': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
   'deepseek-v4.1-flash': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
   'kimi-k3': 'codearts-all-models-20261024/FORMAL-AUDIT.json',
+  'deepseek-v4.1-flash-1017': 'codearts-1017-20261031/PROBE.json',
 });
 
 // Conservative local request contracts, not invented official output limits.
-// Supplier context reference (2026-10-23):
+// Supplier context reference (2026-10-31):
 // https://support.huaweicloud.com/usermanual-codeartsagent/codeartsagent_ug_0009.html
-// GLM-5.2 keeps its deployed 512K contract. Other limits stay below the published
-// supplier windows; the two hidden VL models use explicit local 256K contracts.
-// The builtin catalog publishes no exact context/output numbers: official* stays null.
+// Published windows: GLM-5.2 / GLM-5.2-ArkTS-SPARK 202.8K; openpangu-2.0-* 524.3K;
+// GLM-5.3 / GLM-5.3-Flash / Kimi-K3 / Kimi-K3.1-Pro / DeepSeek-V4.1-Flash(-1017) 1.05M.
+// Local contracts stay below those windows; GLM-5.2 keeps its deployed 512K contract and
+// the two hidden VL models use explicit local 256K contracts. The builtin catalog publishes
+// no exact context/output numbers: official* stays null.
+
 export const CODEARTS_CONFIGURED_LIMITS = Object.freeze({
   'GLM-5.2': Object.freeze({contextWindow:524288,maxTokens:65536}),
   'Qwen3-VL-235B': Object.freeze({contextWindow:262144,maxTokens:65536}),
@@ -127,8 +137,12 @@ export const CODEARTS_CONFIGURED_LIMITS = Object.freeze({
   'openpangu-2.0-pro': Object.freeze({contextWindow:524288,maxTokens:65536}),
   'glm-5.3': Object.freeze({contextWindow:1048576,maxTokens:65536}),
   'glm-5.2-sft-harmony': Object.freeze({contextWindow:202752,maxTokens:65536,defaultMaxTokens:8192}),
-  'deepseek-v4.1-flash': Object.freeze({contextWindow:202752,maxTokens:65536,defaultMaxTokens:8192}),
+  // DeepSeek-V4.1-Flash / -1017 sit in the supplier's 1.05M row alongside glm-5.3 and
+  // kimi-k3, so they keep the same 1M local contract; the earlier 202752 copy came from
+  // GLM-5.2's row and silently truncated long sessions at the preflight check.
+  'deepseek-v4.1-flash': Object.freeze({contextWindow:1048576,maxTokens:65536,defaultMaxTokens:8192}),
   'kimi-k3': Object.freeze({contextWindow:1048576,maxTokens:65536}),
+  'deepseek-v4.1-flash-1017': Object.freeze({contextWindow:1048576,maxTokens:65536,defaultMaxTokens:8192}),
 });
 
 export const defaultCodeArtsStateDb = () => join(process.env.APPDATA ?? '', 'codearts-agent', 'User', 'globalStorage', 'state.vscdb');
@@ -643,8 +657,36 @@ export async function codeartsHealth(credential, options = {}) {
  * Preserve native tools and supported auto semantics. none removes tool definitions, while
  * forced modes fail explicitly rather than being silently downgraded or prompt-emulated.
  */
+/**
+ * A history tool call whose `arguments` is empty, whitespace, `null` or malformed JSON makes the
+ * ModelArts engine reject the WHOLE request with `InferHub.ModelArts.81001.400 Invalid Argument`
+ * (HTTP 200, failure arrives as an SSE business error). A no-argument call is semantically `{}`,
+ * so normalize only those broken shapes and leave every real payload byte-identical.
+ */
+export function normalizeCodeArtsToolArguments(messages) {
+  if(!Array.isArray(messages))return messages;
+  let touched=false;
+  const normalized=messages.map(message=>{
+    if(!Array.isArray(message?.tool_calls)||!message.tool_calls.length)return message;
+    let changed=false;
+    const tool_calls=message.tool_calls.map(call=>{
+      const args=call?.function?.arguments;
+      if(typeof args!=='string')return call;
+      if(args.trim().startsWith('{')){try{JSON.parse(args);return call;}catch{}}
+      changed=true;return {...call,function:{...call.function,arguments:'{}'}};
+    });
+    if(!changed)return message;touched=true;return {...message,tool_calls};
+  });
+  return touched?normalized:messages;
+}
+
+/**
+ * Preserve native tools and supported auto semantics. none removes tool definitions, while
+ * forced modes fail explicitly rather than being silently downgraded or prompt-emulated.
+ */
+
 export function buildCodeArtsChatBody(input, model, chatId) {
-  const body = {model, stream: true, messages: Array.isArray(input?.messages) ? input.messages : [],
+  const body = {model, stream: true, messages: normalizeCodeArtsToolArguments(Array.isArray(input?.messages) ? input.messages : []),
     chat_id: chatId, prompt_cache_key: chatId, tool_stream: true};
   for (const key of CODEARTS_PASSTHROUGH) if (input?.[key] !== undefined) body[key] = input[key];
   const choice=input?.tool_choice;

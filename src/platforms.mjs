@@ -1,3 +1,4 @@
+import {fetchTransportErrorView} from './transport-failure.mjs';
 import {desktopProvider,desktopProviderKinds,providerCapabilities} from './provider-registry.mjs';
 import {freeProviderModels,freeProviderHealth,freeProviderChat} from './free-providers.mjs';
 import {nvidiaAuthState} from './nvidia-auth.mjs';
@@ -242,6 +243,7 @@ export class Platforms {
       const ensureChannel=credential=>{const channel=workBuddyTransportChannel(credential);if(channel&&Array.isArray(providerOptions.workBuddyRejectedChannels)&&providerOptions.workBuddyRejectedChannels.includes(channel))throw workBuddyChannelSkipped(channel);};
       let c=await this.credentials.resolve(u.accountId);await ensureInference();ensureChannel(c);let result=await this.wb.chatStream(c,body,signal);
       if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken){await ensureInference();ensureChannel(newer);c=newer;result=await this.wb.chatStream(c,body,signal);}}
+      if(!result.ok&&result.status===0){const v=fetchTransportErrorView(result.transportFailure,signal);throw Object.assign(new AppError(v.message,v.status,v.code),v);}
       if(!result.ok)throw workBuddyChannelError(result.message,{status:result.status,channel:workBuddyTransportChannel(c)})??new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
       return {response:result.response,workBuddyChannel:workBuddyTransportChannel(c),recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
     }

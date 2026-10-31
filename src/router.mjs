@@ -155,8 +155,37 @@ export class Router {
       }
       return false;
     };
+    // A connection reset writes a deliberately short circuit (see relay
+    // failure()). Failing the next caller with same_model_cooldown a few
+    // milliseconds after a reset the gateway already survived is the worst of
+    // both worlds: the caller sees two 503s and never gets an answer. Waiting
+    // out that one short window is cheaper than the failed turn. Only the
+    // transport window qualifies — rate limits keep their own recovery, real
+    // outages keep their longer circuit, and every candidate must be blocked by
+    // the same class of evidence before this waits at all.
+    let recoveredTransportCircuit=false;
+    const recoverTransportCircuit=async()=>{
+      if(recoveredTransportCircuit||signal?.aborted)return false;
+      const blocked=prepared.blocked??[];
+      if(!blocked.length||blocked.length!==prepared.enabledTargetCount)return false;
+      if(!blocked.every(row=>row.reasonCode==='upstream_unavailable'&&isRelayTransportFailure({code:row.errorCode})))return false;
+      const delay=Math.max(0,Math.min(...blocked.map(row=>row.until))-Date.now())+25,needed=longPrefill?Math.max(this.relayAttemptTimeoutMs,this.relayPrefillTimeoutMs):this.relayAttemptTimeoutMs;
+      if(delay>5100||requestBudget-(Date.now()-requestStarted)<=delay+needed+1000)return false;
+      for(const row of blocked){if(!this.relay.enabled(row.target))return false;if(this.relay.exhaustedBalance(await this.relay.balance(row.target,signal)))return false;}
+      if(signal?.aborted)throw interrupted(signal);
+      recoveredTransportCircuit=true;
+      try{await sleep(delay,undefined,{signal});}catch(e){if(signal?.aborted)throw interrupted(signal);throw e;}
+      if(signal?.aborted)throw interrupted(signal);
+      // Re-read the circuit: a concurrent failure may have replaced this short
+      // window with a longer or different restriction, and that newer evidence
+      // wins over the recovery this request queued for.
+      if(blocked.some(row=>this.relay.cooldown(row.target)))return false;
+      for(const row of blocked)targets.push({...row.target});
+      relayTrigger='connection_recovery';
+      return true;
+    };
     if(signal?.aborted)throw interrupted(signal);
-    if(!targets.length&&!await recoverRateLimit()){
+    if(!targets.length&&!await recoverRateLimit()&&!await recoverTransportCircuit()){
       const rate=relayActive&&this.relay.rateLimitError([...rateBlocked.values()]);if(rate)throw rate;
       const retry=prepared.retryAfterSeconds,emptyCredits=relayActive&&!retry&&prepared.exhaustedTargetCount>0,error=new AppError(relayActive?(retry?`同型号供应处于额度或限流冷却；${retry}秒后可重试；模型与上下文保持不变`:emptyCredits?'已确认的同型号供应剩余额度为零；模型与上下文保持不变':'同型号当前没有已启用供应；模型与上下文保持不变'):'All WorkBuddy pool accounts are disabled or credits are cooling down',emptyCredits?402:503,relayActive?(retry?'same_model_cooldown':emptyCredits?'same_model_credits_exhausted':'same_model_unavailable'):'account_pool_unavailable');if(retry)error.retryAfterSeconds=retry;throw error;
     }
@@ -220,7 +249,7 @@ export class Router {
             if(controlVersion&&(!this.relay.enabled(target)||controlVersion!==this.controls.targetVersion(target)))throw new AppError('Routing policy candidate source changed before dispatch; refresh eligibility',503,'control_target_ineligible');
             controlLease?.checkTarget?.(target);
             if((this.config.value.upstreams??[]).find(u=>u.id===target.upstreamId)?.kind==='workbuddy'&&!this.relay.enabled(target))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');plan.dispatched(!usage.row.dispatched);usage.dispatched();result=await waitTarget(this.platforms.chat(target,adapted.request,targetSignal,kind==='workbuddy'?{workBuddyRejectedChannels:[...rejectedChannels]}:qoderOptions));break;}
-          catch(e){const retryBase=this.relayNetworkRetryDelayMs,retryDelay=retryBase+Math.floor(Math.random()*retryBase/2);if(!relayActive||(!isRelayTransportFailure(e)||e.code==='relay_target_timeout')||transportAttempt===2||targetSignal?.aborted||attemptBudget<=retryDelay+100||requestBudget-(Date.now()-requestStarted)<=retryDelay+1000)throw e;
+          catch(e){const retryBase=this.relayNetworkRetryDelayMs,retryDelay=retryBase+Math.floor(Math.random()*retryBase/2);if(e.transportRetryable===false||!relayActive||(!isRelayTransportFailure(e)||e.code==='relay_target_timeout')||transportAttempt===2||targetSignal?.aborted||attemptBudget<=retryDelay+100||requestBudget-(Date.now()-requestStarted)<=retryDelay+1000)throw e;
             usage.row.transportAttempts=2;usage.row.transportRetryReason=e.code;usage.row.transportRetryDelayMs=retryDelay;progress();await waitTarget(sleep(retryDelay,undefined,{signal:targetSignal}));progress();}
         }response=result.response;if(kind==='workbuddy'&&isWorkBuddyChannel(result.workBuddyChannel))actualWorkBuddyChannel=result.workBuddyChannel;if(qoderTarget&&result.qoderQueueTelemetry){usage.row.qoderQueueTelemetry=result.qoderQueueTelemetry;queueRecoveryFinalizer=result.finalizeQoderQueue;}
         const nativeAttempts=Number(response.headers?.get('x-ai-credit-trae-attempts'));if(Number.isInteger(nativeAttempts)&&nativeAttempts>0&&nativeAttempts<=2)usage.row.nativeAttempts=nativeAttempts;const nativeRetry=response.headers?.get('x-ai-credit-trae-retry-reason');if(nativeRetry==='reasoning_only_stop')usage.row.nativeRetryReason=nativeRetry;

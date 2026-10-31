@@ -1,3 +1,4 @@
+import {captureFetchTransportFailure} from '../../src/transport-failure.mjs';
 /**
  * WorkBuddy (CodeBuddy / copilot.tencent.com) upstream client: chat streaming,
  * token refresh, model catalog, and credit balance.
@@ -146,6 +147,7 @@ export type WorkBuddyChatResult =
       message: string
       /** Structured fields lifted from a JSON failure body, when there were any. */
       detail?: UpstreamErrorDetail | undefined
+      transportFailure?: {phase: string | null; code: string | null; timeoutOrigin: string | null} | undefined
     }
 
 /**
@@ -929,7 +931,7 @@ export class WorkBuddyUpstreamClient {
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
-      return { ok: false, status: 0, kind: 'server', message: `transport error: ${String(error)}` }
+      return { ok: false, status: 0, kind: 'server', message: 'transport failed', transportFailure: captureFetchTransportFailure(error, signal) }
     }
     if (response.ok) return { ok: true, response }
     const text = (await response.text()).slice(0, ERROR_BODY_LIMIT)

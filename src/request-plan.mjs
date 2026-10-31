@@ -2,6 +2,7 @@
 // is retained here: catalogue snapshots live only for the current invocation.
 import {AppError} from './util.mjs';
 import {rateLimitMetadata} from './rate-limit-metadata.mjs';
+import {transportFailureMetadata} from './transport-failure.mjs';
 
 const positive=v=>Number.isSafeInteger(v)&&v>0?v:null;
 const capability=v=>typeof v==='boolean'?v:null;
@@ -26,15 +27,12 @@ export function requestContract(request){
 }
 
 export function supplierTerminal(cause){
-  const terminal=new AppError('同型号供应未完成本次请求（'+code(cause?.code)+'，HTTP '+status(cause?.status)+'）；其余候选不支持本次完整请求，历史、工具和输出预算均已保留',status(cause?.status),code(cause?.code));
+  const terminal=new AppError('同型号供应未完成本次请求（'+code(cause?.code)+'，'+(transportFailureMetadata(cause)||typeof cause?.upstreamResponseReceived==='boolean'?'网关状态 ':'HTTP ')+status(cause?.status)+'）；其余候选不支持本次完整请求，历史、工具和输出预算均已保留',status(cause?.status),code(cause?.code));
   Object.assign(terminal,rateLimitMetadata(cause));
   if(cause?.code==='workbuddy_channel_rejected')terminal.upstreamCode=11128;
   if(Number.isInteger(cause?.upstreamStatus)&&cause.upstreamStatus>=400&&cause.upstreamStatus<=599)terminal.upstreamStatus=cause.upstreamStatus;
-  for(const [key,allowed]of [
-    ['networkPhase',['connect','tls_handshake','response_header','response_body']],
-    ['transportCode',['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ECONNRESET','ETIMEDOUT','CERT_HAS_EXPIRED','ERR_TLS_CERT_ALTNAME_INVALID','UNABLE_TO_VERIFY_LEAF_SIGNATURE','DEPTH_ZERO_SELF_SIGNED_CERT','ABORT_ERR']],
-    ['timeoutOrigin',['connect_deadline','header_deadline','body_idle','request_deadline']]
-  ])if(allowed.includes(cause?.[key]))terminal[key]=cause[key];
+  const transport=transportFailureMetadata(cause);if(transport)Object.assign(terminal,{networkPhase:transport.phase,transportCode:transport.code,timeoutOrigin:transport.timeoutOrigin});
+  if(typeof cause?.upstreamResponseReceived==='boolean')terminal.upstreamResponseReceived=cause.upstreamResponseReceived;
   return terminal;
 }
 

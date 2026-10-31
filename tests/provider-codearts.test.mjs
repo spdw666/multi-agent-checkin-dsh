@@ -361,6 +361,29 @@ test('CodeArts tool choice never silently weakens forced modes and none sends no
   assert.deepEqual(buildCodeArtsChatBody({...input,tool_choice:null},'GLM-5.2','fixture').tools,tools);
 });
 
+
+
+test('CodeArts history tool arguments are normalized so the engine never rejects the whole request',async()=>{
+  // A no-argument tool call arrives from clients as '' / '   ' / 'null' / malformed JSON, and the
+  // ModelArts engine answers those with HTTP 200 + `InferHub.ModelArts.81001.400 Invalid Argument`
+  // for the WHOLE request — every later turn in that conversation then fails too.
+  const {buildCodeArtsChatBody,normalizeCodeArtsToolArguments}=await import('../src/provider-codearts.mjs');
+  const call=(args)=>({role:'assistant',content:null,tool_calls:[{id:'call_1',type:'function',function:{name:'no_args',arguments:args}}]});
+  for(const broken of ['','   ','null','{bad','[1,2]'])
+    assert.equal(normalizeCodeArtsToolArguments([call(broken)])[0].tool_calls[0].function.arguments,'{}',`${JSON.stringify(broken)} must become {}`);
+  // Real payloads stay byte-identical; a no-op history keeps referential identity (no copy churn).
+  for(const valid of ['{}','{"a":1}','{"nested":{"x":[1,2]}}'])
+    assert.equal(normalizeCodeArtsToolArguments([call(valid)])[0].tool_calls[0].function.arguments,valid);
+  const untouched=[{role:'user',content:'hi'}];
+  assert.equal(normalizeCodeArtsToolArguments(untouched),untouched);
+  const body=buildCodeArtsChatBody({messages:[call('')],tools:[]},'deepseek-v4.1-flash-1017','fixture');
+  assert.equal(body.messages[0].tool_calls[0].function.arguments,'{}');
+  // Caller-owned input must not be mutated in place.
+  const original=call('');
+  buildCodeArtsChatBody({messages:[original]},'deepseek-v4.1-flash-1017','fixture');
+  assert.equal(original.tool_calls[0].function.arguments,'');
+});
+
 test('CodeArts refresh uses exact official STS, PKCE and ES256 DPoP without secret diagnostics or retries',async()=>{
   const {generateKeyPairSync,verify}=await import('node:crypto');
   const {refreshCodeArtsAuth,CODEARTS_TOKEN_URL}=await import('../src/provider-codearts.mjs');

@@ -1887,10 +1887,21 @@ namespace AiCreditDesktop {
         internal static string Time(IDictionary<string,object> row,string key){string value=Json.Get(row,key);DateTimeOffset parsed;if(string.IsNullOrWhiteSpace(value))return "未返回";if(DateTimeOffset.TryParse(value,out parsed))return parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");long millis;if(long.TryParse(value,out millis)&&millis>1000000000){try{return new DateTimeOffset(1970,1,1,0,0,0,TimeSpan.Zero).AddSeconds(millis>100000000000?millis/1000d:millis).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");}catch{}}return value;}
         internal static string Error(IDictionary<string,object> row,string key){var error=NvidiaPresentation.Object(row,key);return error.Count>0?Json.Get(error,"message",Json.Get(error,"code","未返回原因")):Json.Get(row,key,"");}
         internal static bool IsBanned(IDictionary<string,object> row){return Json.Get(NvidiaPresentation.Object(row,"ban"),"status")=="banned"||Json.Get(row,"credentialStatus")=="banned";}
+        // 只有落在登录/账号本身（401/403、账号缺失或停用、凭据过期）才算“登录不上去”；
+        // 网络抖动（provider_timeout 等传输失败）不代表账号死了，保持常色，避免整片误红。
+        internal static bool LoginFailed(IDictionary<string,object> row){
+            var error=NvidiaPresentation.Object(row,"error");
+            if(object.Equals(error.ContainsKey("authRejected")?error["authRejected"]:null,true))return true;
+            switch(Json.Get(error,"code")){case "account_disabled":case "account_not_found":case "auth_rejected":case "expired":case "rejected":case "login_required":case "missing":case "invalid_grant":case "wb_refresh_login_required":return true;}
+            int status;if(!int.TryParse(Json.Get(error,"httpStatus",Json.Get(error,"status")),out status))return false;
+            return status==401||status==403;
+        }
         internal static Color StateColor(IDictionary<string,object> row){
-            string credential=Json.Get(row,"credentialStatus",Json.Get(NvidiaPresentation.Object(row,"credential"),"status")),ban=Json.Get(NvidiaPresentation.Object(row,"ban"),"status");
+            string credential=Json.Get(row,"credentialStatus",Json.Get(NvidiaPresentation.Object(row,"credential"),"status")),usage=Json.Get(row,"usageStatus"),ban=Json.Get(NvidiaPresentation.Object(row,"ban"),"status");
             if(IsBanned(row)||ban=="auth_rejected")return Theme.Danger;
-            switch(credential){case "banned":case "auth_rejected":case "expired":case "rejected":case "login_required":case "missing":return Theme.Danger;default:return Theme.Accent;}
+            switch(credential){case "banned":case "auth_rejected":case "expired":case "rejected":case "login_required":case "missing":return Theme.Danger;}
+            if((credential=="check_failed"||usage=="error")&&LoginFailed(row))return Theme.Danger;
+            return Theme.Accent;
         }
         internal static string State(IDictionary<string,object> row){
             string credential=Json.Get(row,"credentialStatus",Json.Get(NvidiaPresentation.Object(row,"credential"),"status")),usage=Json.Get(row,"usageStatus"),ban=Json.Get(NvidiaPresentation.Object(row,"ban"),"status");
