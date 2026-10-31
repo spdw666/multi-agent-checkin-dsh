@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {VIDEO_SESSION_AUTH_COOKIES} from '../video-session-vault.mjs';
 
 // Original, offline-tested integration candidate. No browser/process/credential-file access.
 // The caller supplies an explicitly authorized credential object and an encrypted-vault writer.
@@ -46,16 +47,19 @@ export function createProvider(input,deps={}){
  const now=deps.now??Date.now,transport=deps.transport??jsonTransport;
  let inFlight=null,attempted=false,liblibOwnerId=null;const memoryReceipts=new Map();
  const apiOrigin=platform==='liblib'?'https://api2.liblib.art':origin;
- const cookies=(url)=>{const u=new URL(url);return (credential.cookies??[]).filter(c=>typeof c.name==='string'&&typeof c.value==='string'&&cookieDomainMatches(u.hostname,c.domain)&&(u.pathname===(c.path||'/')||u.pathname.startsWith((c.path||'/').replace(/\/$/,'')+'/'))&&(!c.expirationDate||c.expirationDate*1000>now())&&(!c.secure||u.protocol==='https:'));};
+ const cookies=(url)=>{const u=new URL(url);return (credential.cookies??[]).filter(c=>typeof c.name==='string'&&typeof c.value==='string'&&cookieDomainMatches(u.hostname,c.domain)&&(u.pathname===(c.path||'/')||u.pathname.startsWith((c.path||'/').replace(/\/$/,'')+'/'))&&(VIDEO_SESSION_AUTH_COOKIES.includes(c.name)||!c.expirationDate||c.expirationDate*1000>now())&&(!c.secure||u.protocol==='https:'));};
  const cookieValue=(names)=>{const c=cookies(origin+'/');for(const n of names){const v=c.find(x=>x.name===n)?.value;if(v){try{return decodeURIComponent(v);}catch{return v;}}}return '';};
  const cookieHeader=url=>cookies(url).map(c=>{if(!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(c.name)||/[\r\n;]/.test(c.value))fail('invalid_cookie');return `${c.name}=${c.value}`;}).join('; ');
  const principalExpected=()=>typeof credential.principal==='string'?credential.principal:credential.principal?.id;
  const principalHash=id=>sha(`${platform}|${origin}|${id}`);
  const persist=async()=>{try{await deps.saveCredential?.(clone(credential));}catch{fail('vault_write_failed');}};
  const token=()=>credential.accessToken||cookieValue(platform==='hailuo'?['_token']:['liblibai_usertoken','usertoken','usertoken_online']);
- const request=async(path,method='GET',body,query={})=>{
+ const request=async(path,method='GET',body,query={},opts={})=>{
   if(!allowedPaths[platform].includes(path))fail('path_not_allowed');
-  let req;
+  // 传输层抖动最多 3 次尝试（15s x 3 仍在视频站 45s 预算内）；写类操作传 {retry:false}。签名/时间戳在循环内重建。
+  const attempts=opts.retry===false?1:3;
+  let res,lastError,req;
+  for(let attempt=0;attempt<attempts;attempt++){
   if(platform==='hailuo'){
    const t=token();if(!t)fail('login_required');
    req=hailuoRequest({path,method,body,query,now:now(),token:t,deviceContext:credential.deviceContext,origin});
@@ -70,13 +74,20 @@ export function createProvider(input,deps={}){
    }else{const t=token(),webid=cookieValue(['webid']);if(!t)fail('login_required');if(!webid)fail('webid_required');headers={...headers,token:t,webid};}
    req={url:u.href,method,headers,body:method==='GET'?undefined:JSON.stringify(body??null)};
   }
-  let res;try{res=await transport(req);}catch(e){if(e instanceof ProviderError)throw e;fail('transport_error');}
+   try{res=await transport(req);lastError=undefined;break;}catch(e){if(e instanceof ProviderError)throw e;lastError=e;}
+   if(attempt+1<attempts)await new Promise(resolve=>setTimeout(resolve,300*(attempt+1)));
+  }
+  // 只重试「未拿到响应」；拿到响应后（含 4xx/5xx）一律按原语义判定。
+  if(lastError)fail('transport_error');
   if(res?.status===401)fail('login_required');if(res?.status===403)fail('upstream_challenge_or_forbidden');
   if(!res||res.status<200||res.status>=300)fail('upstream_http_error');
   if(res.setCookies?.length&&deps.onSetCookies){const updated=await deps.onSetCookies(clone(credential),res.setCookies,req.url);if(updated){if(updated.platform!==platform||updated.origin!==origin||JSON.stringify(updated.principal)!==JSON.stringify(credential.principal))fail('credential_scope_changed');credential=clone(updated);await persist();}}
   return res.body;
  };
+ // 同一 provider 实例内 5s 复用身份查询：一次 health 会调用 3 次 identity，逐个打 api2.liblib.art 成本过高。
+ let identityCache=null;const IDENTITY_CACHE_MS=5000;
  const identity=async({bind=false}={})=>{
+  if(!bind&&identityCache&&now()-identityCache.at<IDENTITY_CACHE_MS)return identityCache.value;
   let id,kind;
   if(platform==='xiaoyunque'){
    const b=await request('/passport/web/account/info/','GET',undefined,{aid:795647,is_from_ttaccountsdk:1,passport_jssdk_type:'normal',passport_jssdk_version:'4.1.5',account_sdk_source:'web'});
@@ -86,7 +97,9 @@ export function createProvider(input,deps={}){
   if(!['string','number'].includes(typeof id)||!String(id))fail('identity_schema_error');id=String(id);
   const expected=principalExpected();if(expected&&String(expected)!==id)fail('principal_mismatch');
   if(!expected&&bind){credential.principal={id,kind};await persist();}
-  return {authenticated:true,principalHash:principalHash(id),bound:!!principalExpected(),kind};
+  const value={authenticated:true,principalHash:principalHash(id),bound:!!principalExpected(),kind};
+  if(!bind)identityCache={at:now(),value};
+  return value;
  };
  const needIdentity=async()=>{const i=await identity();if(!i.bound)fail('principal_not_bound');return i;};
  const xyqHistory=async()=>{
@@ -105,12 +118,15 @@ export function createProvider(input,deps={}){
    rows.push(...d.transactions);more=d.has_more;if(mode==='cursor'&&more&&(!d.next_cursor||d.next_cursor===cursor))fail('history_cursor_error');cursor=d.next_cursor;
   }return {rows,complete:!more};
  };
- const liblibHistory=async()=>{
+ const liblibHistoryUncached=async()=>{
   const {start,end}=dayRange(now());let rows=[],total;for(let page=1;page<=4;page++){
    const d=business(await request('/api/www/power/translogs/management','POST',{page,pageSize:50,opTypeCode:1,startTime:start,endTime:end}),'liblib');
    if(!Array.isArray(d.data)||!Number.isSafeInteger(d.total)||d.total<0)fail('history_schema_error');rows.push(...d.data);total=d.total;if(rows.length>=total)return {rows,complete:true};
   }return {rows,complete:false};
  };
+ // 同日账单在一次 health 里会被读两次（余额证明 + 签到状态），分页往返成本高，5s 内复用。
+ let liblibHistoryCache=null;
+ const liblibHistory=async()=>{if(liblibHistoryCache&&now()-liblibHistoryCache.at<5000)return liblibHistoryCache.value;const value=await liblibHistoryUncached();liblibHistoryCache={at:now(),value};return value;};
  const liblibDailyRows=(h,day,owner)=>{
   const end=Date.parse(day+'T00:00:00+08:00')/1000+86399;
   if(origin!=='https://www.liblib.art'||!owner)return [];
@@ -176,7 +192,7 @@ export function createProvider(input,deps={}){
  const refresh=async()=>{
   if(platform!=='hailuo'){const i=await needIdentity();return {...i,status:'session_revalidated',rotated:false,refreshGrant:'no separate refresh endpoint verified'};}
   if(!principalExpected())fail('principal_not_bound');
-  const d=business(await request('/v1/api/user/renewal','POST',{}),'hailuo');
+  const d=business(await request('/v1/api/user/renewal','POST',{},undefined,{retry:false}),'hailuo');
   if(typeof d.token==='string'&&d.token){credential.accessToken=d.token;await persist();}
   const next=await needIdentity();return {...next,status:'session_revalidated',rotated:typeof d.token==='string'&&!!d.token};
  };
@@ -187,7 +203,7 @@ export function createProvider(input,deps={}){
   const old=await deps.loadReceipt?.(key)??memoryReceipts.get(key);if(old?.settled)return {status:'already_claimed',receipt:old,operationAttempted:false,actualAward:0};if(old?.attempted)return {status:'settlement_pending',operationAttempted:false,actualAward:0};
   if(platform==='xiaoyunque'){
    const before=await xyqHistory();if(!before.complete)fail('baseline_history_incomplete');const ids=new Set(before.rows.map(x=>String(x.history_id)));
-   await markAttempt(key,id,day,[...ids]);let d;try{d=decodeXyq(await request('/commerce/v1/benefits/credit_receive','POST',{source:'web'}));}catch(e){return {status:'settlement_unknown',code:e.code,operationAttempted:true,actualAward:0};}
+   await markAttempt(key,id,day,[...ids]);let d;try{d=decodeXyq(await request('/commerce/v1/benefits/credit_receive','POST',{source:'web'},undefined,{retry:false}));}catch(e){return {status:'settlement_unknown',code:e.code,operationAttempted:true,actualAward:0};}
    if(!Number.isFinite(d.receive_quota)||d.receive_quota<0)return {status:'settlement_unknown',operationAttempted:true,actualAward:0};
    if(d.receive_quota===0)return {status:'no_new_quota',operationAttempted:true,actualAward:0};
    await preservePositiveResponse(key,d.receive_quota);
@@ -219,7 +235,7 @@ export function createProvider(input,deps={}){
 }
 
 export async function jsonTransport(req){
- const res=await fetch(req.url,{method:req.method,headers:req.headers,body:req.body,redirect:'manual',signal:AbortSignal.timeout(30000)});
+ const res=await fetch(req.url,{method:req.method,headers:req.headers,body:req.body,redirect:'manual',signal:AbortSignal.timeout(15000)});
  if(res.status>=300&&res.status<400)fail('redirect_requires_reauthentication');
  let body;try{body=await res.json();}catch{fail('non_json_upstream_response');}
  return {status:res.status,body,setCookies:res.headers.getSetCookie?.()??[]};

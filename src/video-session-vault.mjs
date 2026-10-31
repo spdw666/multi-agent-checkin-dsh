@@ -14,6 +14,8 @@ export const VIDEO_SESSION_RULES=Object.freeze({
   pixverse:{origins:['https://app.pixverse.ai'],domains:['pixverse.ai','app.pixverse.ai','app-api.pixverse.ai']},
   liblib:{origins:['https://www.liblib.art','https://liblib.art','https://www.liblib.tv','https://liblib.tv'],domains:['liblib.art','www.liblib.art','api2.liblib.art','liblib.tv','www.liblib.tv']}
 });
+// 认证类 cookie：令牌有效性只由上游决定，本地浏览器 expirationDate 过期不代表失效。
+export const VIDEO_SESSION_AUTH_COOKIES=Object.freeze(['liblibai_usertoken','usertoken','usertoken_online','webid','_token','sessionid','sessionid_ss','_ai_token','xmst','__msuuid__']);
 const fail=(code='video_session_invalid',status=400)=>new AppError('本机会话结构或主体核验未通过',status,code);
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const keys=(o,allowed)=>object(o)&&Object.keys(o).every(k=>allowed.includes(k));
@@ -62,13 +64,13 @@ export function videoSessionCookieHeader(session,url,{now=Date.now()}={}){
     const domain=c.domain.replace(/^\./,'').toLowerCase();
     const domainMatch=c.domain.startsWith('.')?(u.hostname===domain||u.hostname.endsWith('.'+domain)):u.hostname===domain;
     const pathMatch=u.pathname===c.path||u.pathname.startsWith(c.path.endsWith('/')?c.path:c.path+'/');
-    return domainMatch&&pathMatch&&(!c.expirationDate||c.expirationDate*1000>now);
+    return domainMatch&&pathMatch&&(VIDEO_SESSION_AUTH_COOKIES.includes(c.name)||!c.expirationDate||c.expirationDate*1000>now);
   }).sort((a,b)=>b.path.length-a.path.length);
   return rows.map(c=>`${c.name}=${c.value}`).join('; ');
 }
 export function videoSessionAuthToken(session,name){
   if(session.accessToken)return session.accessToken;
-  const candidates=session.cookies.filter(c=>c.name===name&&(!c.expirationDate||c.expirationDate*1000>Date.now()));
+  const candidates=session.cookies.filter(c=>c.name===name);
   const values=[...new Set(candidates.map(c=>c.value))];
   if(values.length!==1||!values[0])throw fail('video_session_token_missing',401);
   return values[0];
