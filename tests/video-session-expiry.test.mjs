@@ -111,6 +111,26 @@ test('persistent transport failure gives up after three attempts and reports tra
   assert.equal(calls, 3, '失败也要跑满 3 次尝试，不是 1 次');
 });
 
+// 2026-10-31 回归：provider-video-independent 的 boundedTransport 把「没拿到响应」折成
+// video_daily_transport_unknown 并标 transient。那仍是传输事实，必须重试；否则一次抖动
+// 就被当成合同结论，卡片直接显示 502。业务错误（未标 transient）依旧一次即抛。
+test('a transient AppError from the transport layer is retried like a transport outage', async () => {
+  let calls = 0;
+  const prov = createProvider(session('liblib', 'https://www.liblib.art', [
+    {name: 'usertoken', value: 'tok-live', domain: 'www.liblib.art', path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: PAST},
+    {name: 'webid', value: 'web-1', domain: 'www.liblib.art', path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: PAST}
+  ]), {
+    transport: async () => {
+      calls++;
+      if (calls < 3) throw Object.assign(new AppError('视频每日权益合同待核验', 502, 'video_daily_transport_unknown'), {beforeSubmission: false, transient: true});
+      return {status: 200, body: {code: 0, data: {uuid: 'u-1', id: 12621838}}, setCookies: []};
+    }
+  });
+  const identity = await prov.verifyIdentity({bind: false});
+  assert.equal(identity.authenticated, true);
+  assert.equal(calls, 3, '标了 transient 的传输失败要重试到成功，不能被当成一次结论');
+});
+
 test('an HTTP response is never retried, even when it is an error', async () => {
   let calls = 0;
   const prov = createProvider(session('liblib', 'https://www.liblib.art', [

@@ -77,7 +77,7 @@ export function createProvider(input,deps={}){
    }else{const t=token(),webid=cookieValue(['webid']);if(!t)fail('login_required');if(!webid)fail('webid_required');headers={...headers,token:t,webid};}
    req={url:u.href,method,headers,body:method==='GET'?undefined:JSON.stringify(body??null)};
   }
-   try{res=await transport(req);lastError=undefined;break;}catch(e){if(e instanceof ProviderError||typeof e?.code==='string'&&!TRANSPORT_RETRYABLE.has(e.code))throw e;lastError=e;}
+   try{res=await transport(req);lastError=undefined;break;}catch(e){if(e instanceof ProviderError||typeof e?.code==='string'&&!TRANSPORT_RETRYABLE.has(e.code)&&e.transient!==true)throw e;lastError=e;}
    if(attempt+1<attempts)await new Promise(resolve=>setTimeout(resolve,300*(attempt+1)));
   }
   // 只重试「未拿到响应」；拿到响应后（含 4xx/5xx）一律按原语义判定。

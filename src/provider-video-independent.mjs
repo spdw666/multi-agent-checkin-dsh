@@ -71,11 +71,15 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
    if(u.origin!==target||u.username||u.password||u.port||!(isA?aPaths:bPaths)[kind]?.has(u.pathname))throw failure('video_daily_endpoint_invalid');
    return u;
   };
-  const rawFetch=async(url,opt)=>{endpoint(url);return fetchImpl(url,{...opt,redirect:'error',signal:AbortSignal.timeout(20000)});};
+  // liblib 成功响应实测 0.3~1.5s，变慢只发生在死连接上：10s 足够一次尝试，
+ // 重试换新连接就能拿到响应，也不必让一次 health 的串行请求吃穿外层预算。
+ const rawFetch=async(url,opt)=>{endpoint(url);return fetchImpl(url,{...opt,redirect:'error',signal:AbortSignal.timeout(10000)});};
   const boundedTransport=async(req,fetcher=rawFetch)=>{
    const u=new URL(req.url),target=kind==='liblib'?'https://api2.liblib.art':cert.origin;
    if(u.origin!==target||u.username||u.password||u.port||!bPaths[kind]?.has(u.pathname))throw failure('video_daily_endpoint_invalid');
-   let response;try{response=await fetcher(req.url,{method:req.method,headers:req.headers,body:req.body});}catch{throw failure('video_daily_transport_unknown',false);}
+   // A missing response is a transport fact, not a verdict: mark it transient so the
+ // retry loop replays it instead of surfacing one unlucky attempt as the contract.
+ let response;try{response=await fetcher(req.url,{method:req.method,headers:req.headers,body:req.body});}catch(error){throw Object.assign(failure('video_daily_transport_unknown',false),{transient:true,transportCode:error?.code??error?.name??'unknown'});}
    const reader=response.body?.getReader();if(!reader)throw failure('video_daily_response_invalid',false);let count=0;const chunks=[];
    try{for(;;){const step=await reader.read();if(step.done)break;count+=step.value.length;if(count>1048576)throw failure('video_daily_response_too_large',false);chunks.push(step.value);}return {status:response.status,body:JSON.parse(Buffer.concat(chunks).toString('utf8')),setCookies:response.headers.getSetCookie?.()??[]};}
    finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
@@ -182,7 +186,9 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
   return {s,cert,provider,identity};
  }
  async function status(c,task='daily-checkin'){
-  checkTask(task);const x=await context(c);await x.identity();const date=now(),day=dayIn(date,'Asia/Shanghai'),window=nextWindow(date),key=receiptKey(kind,x.cert.origin,x.cert.principal,day),cached=receiptsByDay.get(key);
+  // dailyStatus() 自己做 needIdentity + after 比较，这里再读一次身份纯属重复请求
+  // （liblib 一次 health 已串行 12 次上游调用，全压在这条链上）。
+  checkTask(task);const x=await context(c);const date=now(),day=dayIn(date,'Asia/Shanghai'),window=nextWindow(date),key=receiptKey(kind,x.cert.origin,x.cert.principal,day),cached=receiptsByDay.get(key);
   if(cached)return {known:true,active:false,claimed:cached.amount>0,observed:cached.amount===0,day,credits:cached.amount,nextClaimAt:window,reason:'official_independent_daily_receipt_cached'};
   if(['hailuo','liblib','xiaoyunque'].includes(kind)){
    const observed=await x.provider.dailyStatus();
@@ -224,13 +230,17 @@ export function createGatewayVideoProvider(kind,{readVault=readVideoSessionVault
    return {submitted:true,mutation:true,automaticPerformed:true,claimed:amount>0,observed:amount===0,credit:amount,officialDailyReceipt:receipt};
   }catch(e){if(mayHaveSubmitted)e.beforeSubmission=false;if(e.beforeSubmission===true)attempts.delete(key);else e.beforeSubmission=false;throw e;}
  }
- return Object.freeze({supportsCheckin:true,descriptor:{id:kind,checkinSupported:true,claimOnly:true,inference:false},resolve,models:async()=>[],status,claim,async health(c){const x=await context(c);await x.identity();let h;if(['jimeng','kling'].includes(kind))h=await x.provider.health(x.s);else{const r=await x.provider.status();let value=null;if(kind==='xiaoyunque'){const values=Object.values(r.credit??{});if(values.length&&values.every(finite))value=values.reduce((a,b)=>a+b,0);}else if(kind==='hailuo'&&finite(r.totalCredit))value=r.totalCredit;
+ return Object.freeze({supportsCheckin:true,descriptor:{id:kind,checkinSupported:true,claimOnly:true,inference:false},resolve,models:async()=>[],status,claim,// status() 自己会做身份核对，这里不再重复请求：一次 health 已经是串行的 5 次上游调用。
+ async health(c){const x=await context(c);let h;if(['jimeng','kling'].includes(kind))h=await x.provider.health(x.s);else{const r=await x.provider.status();let value=null;if(kind==='xiaoyunque'){const values=Object.values(r.credit??{});if(values.length&&values.every(finite))value=values.reduce((a,b)=>a+b,0);}else if(kind==='hailuo'&&finite(r.totalCredit))value=r.totalCredit;
     let balance={value,unit:'积分'};
     if(kind==='liblib'){
      if(r.balanceKnown===true){if(!r.balance||!finite(r.balance.value))throw new AppError('Liblib 官网余额返回格式待核验',502,'video_balance_schema_error');balance={...r.balance,value:r.balance.value,unit:'积分'};}
      else {const notes={liblib_balance_requires_settled_daily_receipt:'今日领取回执未核实，核实后同步官网余额',liblib_balance_daily_boundary_pending:'接近积分日切换，稍后重新核验官网余额',liblib_balance_history_incomplete:'官方账单尚未完整返回，暂不触发钱包初始化',liblib_art_wallet_source_unverified:'当前站点尚未核实官网余额来源'};balance={value:null,unit:'积分',note:notes[r.balanceReason]??'官网余额尚未满足只读核验条件'};}
     }
-    h={status:'authenticated',balance};}const checkin=await status(c);return {status:h.status,credentialStatus:'authenticated',websiteUrl:x.cert.origin,balance:h.balance,checkin,capabilities:{checkin:true,inference:false,models:false,claimOnly:true}};}});
+    h={status:'authenticated',balance};}// 余额已经从上一次成功读取拿到时，签到状态读不到不该把整张卡片变成错误：
+ // liblib 的上游抖动会让 12 次串行请求里的任意一次超时，余额仍应显示。
+ let checkin;try{checkin=await status(c);}catch(error){if(!h||h.status!=='authenticated')throw error;checkin={known:false,active:false,claimed:null,day:dayIn(now(),'Asia/Shanghai'),nextClaimAt:nextWindow(now()),credits:null,reason:'official_status_unavailable'};}
+ return {status:h.status,credentialStatus:'authenticated',websiteUrl:x.cert.origin,balance:h.balance,checkin,capabilities:{checkin:true,inference:false,models:false,claimOnly:true}};}});
 }
 export const jimengDailyProvider=createGatewayVideoProvider('jimeng');
 export const klingDailyProvider=createGatewayVideoProvider('kling');
