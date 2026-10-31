@@ -38,6 +38,10 @@ export const clineDescriptor = Object.freeze({
 export const defaultClineCredentialFile = () => join(homedir(), '.cline', 'data', 'settings', 'providers.json');
 export const CLINE_REFRESH_URL=CLINE_API_ORIGIN+'/api/v1/auth/refresh';
 const clineRefreshFlights=new Map();
+// A transient network blip must never lock the account forever. Mirror the retryAt cooldown that
+// codearts/raccoon already publish: only credential failures (no retryAt) keep the permanent block.
+const CLINE_RETRY_COOLDOWN=60000;
+const clineBlockedRefresh=cached=>new AppError(cached?.retryAt?'Cline 续期遇到临时故障；稍后自动重试':'Cline 上次续期未确认；等待本机登录态更新',cached?.retryAt?503:401,'cline_refresh_needs_login');
 const clineExpiry=value=>typeof value==='number'&&Number.isFinite(value)?(value<1e12?value*1000:value):typeof value==='string'?Date.parse(value):NaN;
 function clineClaims(token){try{return JSON.parse(Buffer.from(String(token).replace(/^workos:/i,'').split('.')[1],'base64url').toString('utf8'));}catch{return {};}}
 
@@ -45,9 +49,9 @@ export async function refreshClineAuth(auth,{fetchImpl=fetch,signal,now=Date.now
  if(typeof auth?.refreshToken!=='string'||!auth.refreshToken)throw new AppError('Cline 续期凭据缺失',401,'cline_refresh_missing');
  rememberSecret(auth.refreshToken);const active=signal??AbortSignal.timeout(30000);let response;
  try{response=await fetchImpl(CLINE_REFRESH_URL,{method:'POST',redirect:'error',signal:active,headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:auth.refreshToken,grantType:'refresh_token'})});}
- catch{throw new AppError('Cline 续期请求未确认；未自动重试',503,'cline_refresh_unconfirmed');}
+ catch{throw Object.assign(new AppError('Cline 续期请求未确认；未自动重试',503,'cline_refresh_unconfirmed'),{retryable:true});}
  const data=await readBoundedJson(response,active);
- if(!response.ok)throw new AppError(`Cline 官方续期失败 (HTTP ${response.status})`,response.status,'cline_refresh_failed');
+ if(!response.ok)throw Object.assign(new AppError(`Cline 官方续期失败 (HTTP ${response.status})`,response.status,'cline_refresh_failed'),response.status>=500||response.status===429?{retryable:true}:{});
  const d=data?.data;let token=d?.accessToken;
  if(data?.success!==true||typeof token!=='string'||!token||/[\r\n]/.test(token))throw new AppError('Cline 续期响应格式错误',502,'cline_refresh_invalid');
  if(String(auth.accessToken).startsWith('workos:')&&!token.startsWith('workos:'))token='workos:'+token;
@@ -66,7 +70,7 @@ async function cachedClineAuth(file,original,sourceHash,options={}) {
  try{cache=JSON.parse(await readFile(cacheFile,'utf8'));if(cache.sourceHash!==sourceHash)cache=null;}catch(error){if(error.code==='ENOENT')cache=null;else throw new AppError('Cline 私有续期缓存需核验',409,'cline_refresh_cache_invalid');}
  const now=options.now??Date.now();let auth=cache?.accessToken?{...original,...cache}:original;
  if(!options.allowRefresh)return clineExpiry(auth?.expiresAt)>now?auth:original;
- if(cache?.refreshFailure)throw new AppError('Cline 上次续期未确认；等待本机登录态更新',401,'cline_refresh_needs_login');
+ if(cache?.refreshFailure&&(!cache.retryAt||now<cache.retryAt))throw clineBlockedRefresh(cache);
  if(clineExpiry(auth?.expiresAt)>now+60000||!auth?.refreshToken)return auth;
  await mkdir(dirname(cacheFile),{recursive:true});let lock;
  try{lock=await open(cacheFile+'.lock','wx',0o600);}catch{throw new AppError('Cline 续期正在处理或需核对上次结果',409,'cline_refresh_pending');}
@@ -74,13 +78,16 @@ async function cachedClineAuth(file,original,sourceHash,options={}) {
   // A different process can publish between the initial cache read and lock acquisition.
   let latest;try{latest=JSON.parse(await readFile(cacheFile,'utf8'));}catch(error){if(error.code!=='ENOENT')throw new AppError('Cline 私有续期缓存需核验',409,'cline_refresh_cache_invalid');}
   if(latest?.sourceHash===sourceHash){
-   if(latest.refreshFailure)throw new AppError('Cline 上次续期未确认；等待本机登录态更新',401,'cline_refresh_needs_login');
+   if(latest.refreshFailure&&(!latest.retryAt||now<latest.retryAt))throw clineBlockedRefresh(latest);
    if(latest.accessToken)auth={...original,...latest};
    if(clineExpiry(auth?.expiresAt)>now+60000)return auth;
   }
-  let refreshed;try{refreshed=await refreshClineAuth(auth,options);}catch(error){await writeFile(cacheFile,JSON.stringify({...auth,sourceHash,refreshFailure:error.code??'cline_refresh_unconfirmed'}),{mode:0o600});throw error;}
+  let refreshed;try{refreshed=await refreshClineAuth(auth,options);}catch(error){await writeFile(cacheFile,JSON.stringify({...auth,sourceHash,refreshFailure:error.code??'cline_refresh_unconfirmed',failedAt:now,...(error.retryable?{retryAt:now+CLINE_RETRY_COOLDOWN}:{})}),{mode:0o600});throw error;}
   // Identity/expiry validation precedes publication. Original application credentials remain untouched.
-  const temp=cacheFile+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify({...refreshed,sourceHash}),{mode:0o600});await rename(temp,cacheFile);return refreshed;
+  // A successful renewal must clear the failure markers inherited from the poisoned cache read,
+  // otherwise the account stays "待检查" even after a valid token was obtained.
+  const published={...refreshed,sourceHash};delete published.refreshFailure;delete published.retryAt;delete published.failedAt;
+  const temp=cacheFile+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify(published),{mode:0o600});await rename(temp,cacheFile);return published;
  }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
 }
 

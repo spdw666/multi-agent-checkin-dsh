@@ -41,6 +41,29 @@ test('Cline renewal cache is source-bound, single-flight, preserves original fil
  }finally{await f.cleanup();}
 });
 
+// 2026-10-31 回归：一次网络抖动曾把 cline-oauth.json 写成永久失败，账号在 UI 上永久"待检查/待获取",
+// 而 refreshToken 完全是好的。瞬时失败只许记一段冷却，冷却过后必须自动续期成功。
+test('Cline transient renewal failure cools down instead of blocking the account forever',async()=>{
+ const f=await fixture();const now=Date.now(),account={credentials:{file:f.file}},cacheFile=f.file+'.cool-cache';
+ try{
+  await writeFile(f.file,JSON.stringify({accessToken:TOKEN,refreshToken:'refresh-live',expiresAt:now-1000}));
+  const offline={now,cacheFile,fetchImpl:async()=>{throw Object.assign(new Error('socket hang up'),{code:'ECONNRESET'});}};
+  const first=await resolveClineCredential(account,{},offline).catch(e=>e);
+  assert.equal(first.code,'cline_refresh_unconfirmed');
+  const poisoned=JSON.parse(await readFile(cacheFile,'utf8'));
+  assert.equal(poisoned.refreshFailure,'cline_refresh_unconfirmed');
+  assert.equal(poisoned.failedAt,now);assert.ok(poisoned.retryAt>now);
+  let calls=0;
+  const cooling=await resolveClineCredential(account,{},{...offline,now:now+1000,fetchImpl:async()=>{calls++;return Response.json({});}}).catch(e=>e);
+  assert.equal(cooling.code,'cline_refresh_needs_login');assert.equal(cooling.status,503);
+  assert.equal(cooling.message.includes('临时故障'),true);assert.equal(calls,0);
+  const recovered=await resolveClineCredential(account,{},{now:now+120000,cacheFile,fetchImpl:async()=>{calls++;return Response.json({success:true,data:{accessToken:TOKEN,refreshToken:'refresh-live',expiresAt:now+3600000}})}});
+  assert.equal(recovered.token,TOKEN);assert.equal(calls,1);
+  const healed=JSON.parse(await readFile(cacheFile,'utf8'));
+  assert.equal(healed.refreshFailure,undefined);assert.equal(healed.retryAt,undefined);assert.equal(healed.failedAt,undefined);
+ }finally{await f.cleanup();}
+});
+
 test('Cline account balance follows the full official display scale and preserves true zero',()=>{
   assert.equal(clineBalance({success:true,data:{userId:'usr',balance:500000}},'usr').value,0.5);
   const zero=clineBalance({success:true,data:{userId:'usr',balance:0}},'usr');
