@@ -11,6 +11,9 @@ const receipts=new WeakSet();
 const nonnegative=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:typeof value==='string'&&/^\d+(?:\.\d+)?$/.test(value)&&Number.isFinite(Number(value))?Number(value):null;
 const failure=(message,code,status=502,extra={})=>Object.assign(new AppError(message,status,code),extra);
 const invalid=()=>failure('视频平台返回的积分/任务结构待核验','video_daily_response_invalid');
+// 会话缓存里存着 cookie、但全都过了浏览器期限而被剔除时，真实原因是「过期」而不是「没配」。
+// 混成一个 code 会让卡片永远停在「待登录 / 配置」，用户无法判断该做什么。
+export const expiredVideoSessionCookies=(session)=>{if(!Array.isArray(session?.cookies))return[];const now=Date.now();return session.cookies.filter(c=>Number.isFinite(c?.expirationDate)&&c.expirationDate*1000<=now).sort((a,b)=>b.expirationDate-a.expirationDate);};
 function token(value){return typeof value==='string'&&value.trim()&&!/[\r\n]/.test(value)&&value.length<=32768?value.trim():null;}
 
 export async function resolveVideoDailyCredential(kind,account,config){
@@ -23,7 +26,11 @@ export async function resolveVideoDailyCredential(kind,account,config){
     const session=await readVideoSessionVault(config.path(file),{platform:kind});
     const cookie=kind==='vidu'?videoSessionCookieHeader(session,'https://service.vidu.cn/iam/v1/users/me'):undefined;
     const authToken=kind==='pixverse'?videoSessionAuthToken(session,'_ai_token'):session.accessToken;
-    if(!authToken&&!cookie)throw failure('视频平台会话缺少有效认证字段','video_daily_login_required',401,{loginRequired:true,beforeSubmission:true});
+    if(!authToken&&!cookie){
+      const expired=expiredVideoSessionCookies(session);
+      if(expired.length)throw failure(`视频平台会话已于 ${new Date(expired[0].expirationDate*1000).toISOString().slice(0,10)} 过期，请在浏览器重新登录该站后重新导入会话`,'video_daily_session_expired',401,{loginRequired:true,beforeSubmission:true,expiredAt:new Date(expired[0].expirationDate*1000).toISOString(),expiredCookies:expired.map(c=>c.name)});
+      throw failure('视频平台会话缺少有效认证字段','video_daily_login_required',401,{loginRequired:true,beforeSubmission:true});
+    }
     return {accessToken:authToken??cookie,authToken,cookie,principal:session.principal,expiresAtMs:session.expiresAtMs,source:'windows-current-user-dpapi',filePath:config.path(file),videoSession:session};
   }
   const accessToken=token(raw.accessToken??raw.token),cookie=token(raw.cookie);
@@ -67,6 +74,9 @@ export function parsePixVerseLoginTask(tasks){
   if(matches.length>1)throw failure('PixVerse 每日登录任务出现重复记录','video_daily_task_ambiguous');
   if(!matches.length)return {known:true,active:false,claimed:false,reason:'daily_login_task_not_offered',details:{dailyTaskOffered:false}};
   const task=matches[0],reward=nonnegative(task.reward);
+  // A fresh official task can be progress0. Its reward is not a receipt and
+  // zero progress proves neither eligibility nor a completed daily claim.
+  if(task.progress===0&&reward!==null)return {known:false,active:false,claimed:null,reason:'daily_login_task_pending',details:{taskType:1,subType:1,progress:0,reward}};
   if(![1,2,3,4].includes(task.progress)||reward===null)throw invalid();
   return {known:true,active:task.progress===2&&reward>0,claimed:task.progress===3,credits:reward,reason:task.progress===3?'official_daily_task_claimed':task.progress===2&&reward>0?'official_daily_task_claimable':task.progress===1?'daily_login_task_unfinished':task.progress===4?'daily_login_task_expired':'daily_login_task_zero_reward',details:{taskType:1,subType:1,progress:task.progress,reward}};
 }
@@ -100,14 +110,33 @@ export function createVideoDailyProvider(kind,{fetchImpl=globalThis.fetch,now=()
     if(task!=='daily-checkin')throw failure('视频平台只处理每日登录领取','video_daily_task_invalid',400,{beforeSubmission:true});
     if(kind==='pixverse'){
       const date=now(),nextClaimAt=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate()+1)).toISOString();
-      return {...parsePixVerseLoginTask(await request('/creative_platform/task/list',c)),nextClaimAt};
+      let state=parsePixVerseLoginTask(await request('/creative_platform/task/list',c));
+      // A bound login can still be uninitialized for this UTC day. Perform the
+      // official identity read once, then trust a fresh task state, not balance.
+      if(state.reason==='daily_login_task_pending'&&c.videoSession?.platform==='pixverse'){
+        await verifyPrincipal(c);
+        state=parsePixVerseLoginTask(await request('/creative_platform/task/list',c));
+        state={...state,details:{...state.details,identityInitialized:true}};
+      }
+      return {...state,nextClaimAt};
     }
     await balance(c);const date=now(),nextClaimAt=new Date(Date.parse(dayIn(date,'Asia/Shanghai')+'T00:00:00+08:00')+86400000).toISOString();return {known:true,active:true,claimed:null,nextClaimAt,reason:'daily_login_grant_endpoint_available',details:{confirmation:'official_daily_response_required'}};
   };
   return Object.freeze({
     supportsCheckin:true,descriptor:{id:kind,checkinSupported:true,claimOnly:true,inference:false},
     resolve:(a,config)=>resolveVideoDailyCredential(kind,a,config),models:async()=>[],
-    async health(c){const [b,s]=await Promise.all([balance(c),status(c)]);return {status:'authenticated',credentialStatus:'authenticated',websiteUrl:c.videoSession?.origin??(kind==='vidu'?'https://www.vidu.cn':'https://app.pixverse.ai'),balance:b,checkin:s,capabilities:{checkin:true,inference:false,models:false,claimOnly:true}};},
+    async health(c){
+      // A task-schema change must not erase a separately verified wallet.
+      // Auth, HTTP, transport and wallet errors retain their existing failures.
+      const taskStatus=status(c).catch(e=>{
+        if(kind!=='pixverse'||!['video_daily_response_invalid','video_daily_task_ambiguous','video_daily_response_too_large'].includes(e.code))throw e;
+        return {known:false,active:false,claimed:null,reason:'daily_login_task_schema_pending',details:{taskStatusErrorCode:e.code}};
+      });
+      const [initialBalance,s]=await Promise.all([balance(c),taskStatus]);
+      const b=kind==='pixverse'&&s.details?.identityInitialized===true?await balance(c):initialBalance;
+      if(kind==='pixverse'&&s.known===false)b.note='余额已核验；每日任务状态待官方确认，未自动领取';
+      return {status:'authenticated',credentialStatus:'authenticated',websiteUrl:c.videoSession?.origin??(kind==='vidu'?'https://www.vidu.cn':'https://app.pixverse.ai'),balance:b,checkin:s,capabilities:{checkin:true,inference:false,models:false,claimOnly:true}};
+    },
     status,
     async claim(c,task='daily-checkin'){
       if(task!=='daily-checkin')throw failure('视频平台只处理每日登录领取','video_daily_task_invalid',400,{beforeSubmission:true});

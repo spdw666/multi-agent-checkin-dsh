@@ -159,7 +159,7 @@ function loomyHeaders(secret, {json = false} = {}) {
   return headers;
 }
 
-export async function loomyFetch(fetchImpl, path, {method = 'GET', token, body, timeoutMs = 30000, signal} = {}) {
+export async function loomyFetch(fetchImpl, path, {method = 'GET', token, body, timeoutMs = 45000, signal} = {}) {
   const url = new URL(LOOMY_POINTS_ORIGIN + path);
   if (url.origin !== LOOMY_POINTS_ORIGIN || url.username || url.password || !url.pathname.startsWith(LOOMY_API_PREFIX))
     throw new AppError('Loomy 适配器仅连接官方固定端点', 400, 'loomy_endpoint_invalid');
@@ -174,7 +174,7 @@ export async function loomyFetch(fetchImpl, path, {method = 'GET', token, body, 
   try {
     return await fetchImpl(url.href, {method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal: activeSignal});
   } catch (e) {
-    if (activeSignal.aborted || e?.name === 'AbortError') throw new AppError('Loomy 请求已取消或超时', 499, 'request_cancelled');
+    if (activeSignal.aborted || e?.name === 'AbortError') throw new AppError(`Loomy 官方接口在 ${timeoutMs}ms 内未返回（本次响应过慢或已被取消），这一轮未取得结果`, 499, 'request_cancelled');
     throw new AppError('Loomy 官方接口连接失败或超时', 503, 'loomy_network_error');
   }
 }
@@ -208,7 +208,7 @@ function unwrap(data) {
   return data;
 }
 
-export async function loomyRequest(secret, {method = 'GET', path, query, body, fetchImpl = globalThis.fetch, timeoutMs = 30000, signal} = {}) {
+export async function loomyRequest(secret, {method = 'GET', path, query, body, fetchImpl = globalThis.fetch, timeoutMs = 45000, signal} = {}) {
   const qs = query ? new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null)).toString() : '';
   const response = await loomyFetch(fetchImpl, path + (qs ? `?${qs}` : ''), {method, token: secret?.accessToken, body, timeoutMs, signal});
   if (!response.ok) {
@@ -352,17 +352,23 @@ function errorView(error) {
  * Identity failure and pet-work failure are independent; a stale session (100002) is reported as
  * 'rejected' with the real reason — nothing is fabricated.
  */
+export const LOOMY_HEALTH_PROBE_LIMITS = Object.freeze({identity: 15000, petWork: 22000, quota: 32000, models: 28000});
 export function loomyHealthProbeBudget(limit,timeoutMs){return Number.isFinite(timeoutMs)&&timeoutMs>=0?Math.max(1,Math.min(limit,Math.floor(timeoutMs))):limit;}
 export async function loomyHealth(secret, options = {}) {
   const base = {
     balance: {value: null, unit: 'points', parts: [], note: '个人积分待官方接口返回；不使用团队余额替代', checkedIn: null},
-    capabilities: {checkin: true, inference: false},
+    // inference stays undecided until the official catalog is actually read; a timed-out
+    // catalog read must not be published as "this provider cannot do inference".
+    capabilities: {checkin: true},
   };
   if (!secret?.accessToken) {
     return {...base, status: 'credential_missing', credential: loomyCredentialView(secret), services: {identity: null, petWork: null}};
   }
-  // Independent GET probes run together. Auxiliary metadata cannot multiply the
-  // balance deadline; every probe also honors a shorter caller timeout/signal.
+  // The official endpoints answer an authenticated GET in 7-27s and reject a SECOND
+  // concurrent call on the same token with an instant 502 / "system internal error",
+  // so the probes run strictly one after another with the balance read first: a
+  // successful quota read is what the balance card needs, the rest only enrich it.
+  // Every probe still honors a shorter caller timeout/signal.
   const probe = async (fn,limit) => {
     const budget=loomyHealthProbeBudget(limit,options.timeoutMs);
     const controller=new AbortController();
@@ -372,9 +378,17 @@ export async function loomyHealth(secret, options = {}) {
     catch(error){return {value:null,error:errorView(error)};}
     finally{clearTimeout(timer);}
   };
-  const [identityRead,petRead,quotaRead,modelsRead]=await Promise.all([
-    probe(loomyIdentity,8000),probe(loomyPetWork,8000),probe(loomyPointBalance,20000),probe(loomyModels,8000),
-  ]);
+  let quotaRead=await probe(loomyPointBalance,LOOMY_HEALTH_PROBE_LIMITS.quota);
+  // 900000 "系统内部错误" and a bare 5xx are upstream hiccups on its shared per-token
+  // limit (observed 900000 -> 000000 minutes apart on an unchanged request): one retry,
+  // never a loop. A real business/credential answer is reported as it came.
+  if(quotaRead.error&&['loomy_business_error','loomy_upstream_error','loomy_network_error'].includes(quotaRead.error.code)&&!options.signal?.aborted){
+    await new Promise(resolve=>setTimeout(resolve,1500));
+    if(!options.signal?.aborted)quotaRead=await probe(loomyPointBalance,LOOMY_HEALTH_PROBE_LIMITS.quota);
+  }
+  const petRead=await probe(loomyPetWork,LOOMY_HEALTH_PROBE_LIMITS.petWork);
+  const identityRead=await probe(loomyIdentity,LOOMY_HEALTH_PROBE_LIMITS.identity);
+  const modelsRead=await probe(loomyModels,LOOMY_HEALTH_PROBE_LIMITS.models);
   const identity=identityRead.value,identityError=identityRead.error;
   const pet=petRead.value,petError=petRead.error;
   const quota=quotaRead.value,quotaError=quotaRead.error;
@@ -386,7 +400,10 @@ export async function loomyHealth(secret, options = {}) {
     : (identityError === null ? 'authenticated' : 'degraded');
   // Pet-work is not an authoritative personal balance fallback.
   if(quota)base.balance={...quota,checkedIn:null};
-  base.capabilities.inference=models.some(m=>m.category==='chat');
+  // No catalog read is not the same answer as "no chat model": leave inference
+  // undecided so providerCapabilities falls back to this provider having a chat path.
+  // A slow /api/v1/models must never be published as a capability conclusion.
+  if(models.length)base.capabilities.inference=models.some(m=>m.category==='chat');
   return {
     ...base,
     models,modelCount:models.length,petWork:pet,

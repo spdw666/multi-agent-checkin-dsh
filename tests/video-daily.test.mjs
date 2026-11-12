@@ -67,6 +67,14 @@ test('fixed official endpoint allowlist rejects unknown kinds/paths before fetch
 test('HTTP auth failure is typed login-required without copying raw response',async()=>{
  const {createVideoDailyProvider}=need();const p=createVideoDailyProvider('vidu',{fetchImpl:async()=>new Response('SAMPLE-SECRET',{status:401})});await assert.rejects(()=>p.status(c),e=>e.code==='video_daily_login_required'&&e.loginRequired===true&&!e.message.includes('SAMPLE-SECRET'));
 });
+test('a vault whose auth cookies all expired is reported as an expired session, never as missing configuration',async()=>{
+ const {expiredVideoSessionCookies}=need();const now=Math.floor(Date.now()/1000);
+ const r=expiredVideoSessionCookies({cookies:[{name:'JWT',expirationDate:now-3600},{name:'SSUID',expirationDate:now-7200},{name:'_clck',expirationDate:now+3600}]});
+ assert.deepEqual(r.map(c=>c.name),['JWT','SSUID']);
+ assert.equal(expiredVideoSessionCookies({cookies:[]}).length,0);
+ assert.equal(expiredVideoSessionCookies({}).length,0);
+ assert.equal(expiredVideoSessionCookies({cookies:[{name:'x'}]}).length,0);
+});
 test('oversize and non-JSON replies never become daily receipts',async()=>{
  const {createVideoDailyProvider}=need();for(const response of [new Response('<html>SAMPLE</html>'),new Response('x'.repeat(1048577))])await assert.rejects(()=>createVideoDailyProvider('vidu',{fetchImpl:async()=>response}).claim(c));
 });

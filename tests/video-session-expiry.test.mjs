@@ -63,6 +63,39 @@ test('an expired auth cookie is only rejected when the upstream says 401', async
   }
 });
 
+// 2026-11-11 kling 线上故障：userId 与 kuaishou.ai.portal_st 的浏览器 expirationDate 到 11-10，
+// 本地按期限剔除后上游返回 login:false -> canonical_identity_unknown（卡片「待检查 / 待获取」）。
+// 实测同一对 cookie 过期后原样发送仍 login:true，且**缺任一都变 login:false**（两者必须一起发）。
+test('kling keeps its expired session cookies because the upstream still accepts the pair', () => {
+  const s = session('kling', 'https://klingai.com', [
+    {name: 'did', value: 'did-live', domain: '.klingai.com', path: '/', expirationDate: FUTURE},
+    {name: 'userId', value: '3951585498', domain: '.klingai.com', path: '/', expirationDate: PAST},
+    {name: 'kuaishou.ai.portal_st', value: 'portal-live', domain: '.klingai.com', path: '/', expirationDate: PAST},
+    {name: '__stripe_sid', value: 'stripe-old', domain: '.klingai.com', path: '/', expirationDate: PAST}
+  ]);
+  const header = cookieHeaderFor('https://klingai.com/api/user/profile_and_features', s.cookies, Date.now());
+  assert.match(header, /userId=3951585498/, 'userId 过期后仍必须发送，否则上游 login:false');
+  assert.match(header, /kuaishou\.ai\.portal_st=portal-live/, 'portal_st 过期后仍必须发送');
+  assert.match(header, /did=did-live/);
+  assert.doesNotMatch(header, /__stripe_sid=stripe-old/, '非认证 cookie 仍按期限剔除');
+});
+
+// 2026-11-12 kling 国际站线上故障：旧 kuaishou.ai.portal_st 被上游作废，余额端点返回
+// 401 token value error（identity 仍 200 是弱校验假阳性）。会话令牌已改为
+// klingcn.web.api_st + klingcn.web.api_ph，两者同样只由上游判死。
+test('kling international site keeps the current api_st/api_ph pair after browser expiry', () => {
+  const s = session('kling', 'https://klingai.com', [
+    {name: 'userId', value: '3951585498', domain: '.klingai.com', path: '/', expirationDate: PAST},
+    {name: 'klingcn.web.api_st', value: 'api-st-live', domain: '.klingai.com', path: '/', expirationDate: PAST},
+    {name: 'klingcn.web.api_ph', value: 'api-ph-live', domain: '.klingai.com', path: '/', expirationDate: PAST},
+    {name: '__stripe_sid', value: 'stripe-old', domain: '.klingai.com', path: '/', expirationDate: PAST}
+  ]);
+  const header = cookieHeaderFor('https://klingai.com/api/account/pointAndTicket', s.cookies, Date.now());
+  assert.match(header, /klingcn\.web\.api_st=api-st-live/, 'api_st 过期后仍必须发送，否则余额端点 401 token value error');
+  assert.match(header, /klingcn\.web\.api_ph=api-ph-live/);
+  assert.doesNotMatch(header, /__stripe_sid=stripe-old/, '非认证 cookie 仍按期限剔除');
+});
+
 test('protocol-a cookieHeaderFor keeps expired identity cookies and drops other expired ones', () => {
   const cookies = [
     {name: 'sessionid', value: 'sid-live', domain: '.jianying.com', path: '/', expirationDate: PAST},
@@ -76,7 +109,7 @@ test('protocol-a cookieHeaderFor keeps expired identity cookies and drops other 
 });
 
 test('the shared auth cookie list covers every platform token name used by the import rules', () => {
-  for (const name of ['liblibai_usertoken','usertoken','usertoken_online','webid','_token','sessionid','sessionid_ss','_ai_token']) {
+  for (const name of ['liblibai_usertoken','usertoken','usertoken_online','webid','_token','sessionid','sessionid_ss','_ai_token','userId','kuaishou.ai.portal_st']) {
     assert.equal(VIDEO_SESSION_AUTH_COOKIES.includes(name), true, `${name} 必须在认证名单里`);
   }
 });

@@ -15,7 +15,13 @@ export const VIDEO_SESSION_RULES=Object.freeze({
   liblib:{origins:['https://www.liblib.art','https://liblib.art','https://www.liblib.tv','https://liblib.tv'],domains:['liblib.art','www.liblib.art','api2.liblib.art','liblib.tv','www.liblib.tv']}
 });
 // 认证类 cookie：令牌有效性只由上游决定，本地浏览器 expirationDate 过期不代表失效。
-export const VIDEO_SESSION_AUTH_COOKIES=Object.freeze(['liblibai_usertoken','usertoken','usertoken_online','webid','_token','sessionid','sessionid_ss','_ai_token','xmst','__msuuid__']);
+// kling 实测（2026-11-11）：userId 与 kuaishou.ai.portal_st 的浏览器 expirationDate 在 11-10 到期，
+// 但上游服务端仍接受这一对 cookie（/api/user/profile_and_features 返回 login:true、userId:3951585498）；
+// 缺任一都变成 login:false。所以这两个名字必须留在过期豁免里，由上游判死。
+// kling 国际站实测（2026-11-12）：会话令牌已改为 klingcn.web.api_st + klingcn.web.api_ph，
+// 旧的 kuaishou.ai.portal_st 被上游作废（余额端点返回 401 token value error，identity 仍 200 属弱校验假阳性）。
+// 新的两个名字同样只由上游判死。
+export const VIDEO_SESSION_AUTH_COOKIES=Object.freeze(['liblibai_usertoken','usertoken','usertoken_online','webid','_token','sessionid','sessionid_ss','_ai_token','xmst','__msuuid__','userId','kuaishou.ai.portal_st','klingcn.web.api_st','klingcn.web.api_ph']);
 // 浏览器删除 cookie 时把 expirationDate 写回 epoch 附近（Max-Age=0）。那是一次明确的登出，
 // 仍然权威。普通过期时间只说明浏览器不再发送它，令牌是否还有效只有上游能说了算。
 const TOMBSTONE_EPOCH_MS=1000;

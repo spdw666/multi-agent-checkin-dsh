@@ -98,6 +98,7 @@ export const DEFAULT_TARGETS = [
   {
     id: 'opencode', name: 'OpenCode 桌面版', platform: 'opencode',
     install: join(LOCAL, 'Programs', '@opencodedesktop'),
+    installFallbacks: [join(LOCAL, 'Programs', 'ai.opencode.desktop')],
     version: {type: 'asar'},
     latest: {type: 'json', url: 'https://opencode.ai/update/api/latest/desktop/opencode/', field: 'version'},
     note: ''
@@ -106,7 +107,7 @@ export const DEFAULT_TARGETS = [
     id: 'cline', name: 'Cline 桌面版', platform: 'cline',
     install: 'D:\\Cline',
     version: {type: 'exe', file: 'cline-app.exe'},
-    latest: {type: 'github', repo: 'cline/cline', prefix: 'desktop-v'},
+    latest: {type: 'github', repo: 'cline/cline', prefix: 'desktop-v', scanPrefix: true},
     note: ''
   },
   {
@@ -283,8 +284,25 @@ function powershellVersion(exePath) {
 
 export async function readInstalledVersion(target) {
   const spec = target.version;
-  const root = target.install;
-  if (!spec) return {installed: '', apiVersion: '', path: root};
+  const fallbacks = Array.isArray(target.installFallbacks) ? target.installFallbacks : [];
+  if (!spec) return {installed: '', apiVersion: '', path: target.install};
+  if (fallbacks.length) {
+    // A client can move its install namespace between releases (OpenCode went from
+    // %LOCALAPPDATA%\Programs\@opencodedesktop to ...\ai.opencode.desktop).
+    // Try the declared roots in order and keep the primary path's error when none
+    // yields a version, so "not detected" still names the path actually expected.
+    let primary = null;
+    for (const root of [target.install, ...fallbacks]) {
+      const found = await readInstalledVersionAt(target, spec, root);
+      if (found.installed) return found;
+      if (!primary) primary = found;
+    }
+    return primary;
+  }
+  return readInstalledVersionAt(target, spec, target.install);
+}
+
+async function readInstalledVersionAt(target, spec, root) {
   try {
     if (spec.type === 'json') {
       const data = JSON.parse(await readFile(join(root, spec.file), 'utf8'));
@@ -583,16 +601,30 @@ export async function fetchLatestVersion(target, {installed, apiVersion, timeout
   }
   if (spec.type === 'github') {
     if (!spec.url && !spec.repo) throw new Error('github update source requires URL or repo');
-    const url = spec.url || `https://api.github.com/repos/${spec.repo}/releases/latest`;
+    const prefix = spec.prefix ?? '';
+    // /releases/latest answers "which product line shipped last", not "which
+    // release of THIS line is newest": cline/cline publishes v* (extension),
+    // desktop-v* (app) and cli-v* side by side, so latest hands back v4.1.26
+    // and a current app reads a whole major version behind.
+    // Opted in per target (scanPrefix) rather than inferred from prefix: for a
+    // repo whose newest tags carry no prefix at all, scanning would walk back
+    // to an older prefixed tag and report a current install as behind.
+    const scan = spec.scanPrefix === true && Boolean(prefix) && !spec.url;
+    const url = spec.url || (scan
+      ? `https://api.github.com/repos/${spec.repo}/releases?per_page=100`
+      : `https://api.github.com/repos/${spec.repo}/releases/latest`);
     const headers = {accept: 'application/vnd.github+json'};
     // Never forward the local GitHub credential to a custom update endpoint.
     const token = new URL(url).origin === 'https://api.github.com' ? await abortable(() => githubToken(), signal) : '';
     if (token) headers.authorization = `Bearer ${token}`;
     const {status, text} = await httpText(url, {timeoutMs, headers, fetchImpl, signal});
     if (status !== 200) throw new Error(`HTTP ${status}${text ? ': ' + text.replace(/\s+/g, ' ').slice(0, 120) : ''}`);
-    const data = JSON.parse(text);
+    const payload = JSON.parse(text);
+    const published = (entry) => !entry?.draft && !entry?.prerelease
+      && String(entry?.tag_name ?? '').toLowerCase().startsWith(prefix.toLowerCase());
+    const data = scan ? (Array.isArray(payload) ? payload : []).find(published) : payload;
+    if (!data) throw new Error(`no published release with prefix "${prefix}"`);
     let tag = String(data.tag_name ?? data.name ?? '').trim();
-    const prefix = spec.prefix ?? '';
     if (prefix && tag.toLowerCase().startsWith(prefix.toLowerCase())) tag = tag.slice(prefix.length);
     if (!tag) throw new Error('empty release tag');
     return {latest: tag, source: 'github_releases', url: data.html_url ?? url};
@@ -664,7 +696,7 @@ function updateSource(target, installed = '', apiVersion = '') {
   let sourceUrl = spec.url ?? '';
   if (spec.type === 'feed' && sourceUrl) sourceUrl = `${sourceUrl.replace(/\/$/, '')}/${spec.file ?? 'latest.yml'}`;
   if (spec.type === 'genie' && spec.base) sourceUrl = `${spec.base}/v2/update?platform=${encodeURIComponent(spec.platform ?? '')}&version=${encodeURIComponent(apiVersion || installed || '0.0.0')}`;
-  if (spec.type === 'github' && !sourceUrl && spec.repo) sourceUrl = `https://api.github.com/repos/${spec.repo}/releases/latest`;
+  if (spec.type === 'github' && !sourceUrl && spec.repo) sourceUrl = `https://api.github.com/repos/${spec.repo}/releases${spec.scanPrefix && spec.prefix ? '?per_page=100' : '/latest'}`;
   if (spec.type === 'log') sourceUrl = String(spec.file ?? '').replace('%APPDATA%', ROAMING).replace('%LOCALAPPDATA%', LOCAL);
   return {source: sources[spec.type] ?? 'none', sourceUrl};
 }

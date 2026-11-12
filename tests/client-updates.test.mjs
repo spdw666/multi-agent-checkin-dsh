@@ -88,6 +88,40 @@ test('readInstalledVersion supports json, asar and asarUnpacked layouts', async 
   }
 });
 
+test('readInstalledVersion follows installFallbacks when a client moves its namespace', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'client-fallback-'));
+  try {
+    // OpenCode 2.2.3 moved from Programs/@opencodedesktop to Programs/ai.opencode.desktop.
+    const moved = join(root, 'ai.opencode.desktop');
+    await mkdir(join(moved, 'resources'), {recursive: true});
+    await writeFile(join(moved, 'resources', 'app.asar'), syntheticAsar({version: '2.2.3'}));
+
+    const resolved = await readInstalledVersion({
+      install: join(root, '@opencodedesktop'), installFallbacks: [moved], version: {type: 'asar'}
+    });
+    assert.equal(resolved.installed, '2.2.3');
+    assert.equal(resolved.path, moved);
+
+    // The primary root still wins when it does have a version.
+    const primary = join(root, '@opencodedesktop');
+    await mkdir(join(primary, 'resources'), {recursive: true});
+    await writeFile(join(primary, 'resources', 'app.asar'), syntheticAsar({version: '2.1.0'}));
+    const preferred = await readInstalledVersion({install: primary, installFallbacks: [moved], version: {type: 'asar'}});
+    assert.equal(preferred.installed, '2.1.0');
+    assert.equal(preferred.path, primary);
+
+    // Nothing anywhere: report the declared primary path and its error, not the fallback.
+    const missing = await readInstalledVersion({
+      install: join(root, 'absent'), installFallbacks: [join(root, 'also-absent')], version: {type: 'asar'}
+    });
+    assert.equal(missing.installed, '');
+    assert.equal(missing.path, join(root, 'absent'));
+    assert.match(missing.error, /ENOENT|not found/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 const okJson = (body, status = 200) => async () => new Response(JSON.stringify(body), {status});
 const textResp = (body, status = 200) => async () => new Response(body, {status});
 
@@ -126,12 +160,28 @@ test('fetchLatestVersion reads feeds, JSON APIs and GitHub tags with prefixes', 
   );
   assert.equal(json.latest, '2.0.32');
 
+  // cline/cline ships several product lines at once: the newest release overall
+  // is the extension's v4.1.26, while the desktop app's newest is desktop-v0.0.48.
+  // A prefixed target must pick its own line, not whatever shipped last.
   const github = await fetchLatestVersion(
-    {latest: {type: 'github', repo: 'cline/cline', prefix: 'desktop-v'}},
-    {installed: '0.0.45', fetchImpl: okJson({tag_name: 'desktop-v0.0.48', html_url: 'https://github.com/x'})}
+    {latest: {type: 'github', repo: 'cline/cline', prefix: 'desktop-v', scanPrefix: true}},
+    {installed: '0.0.45', fetchImpl: okJson([
+      {tag_name: 'v4.1.26', html_url: 'https://github.com/cline/cline/releases/tag/v4.1.26'},
+      {tag_name: 'desktop-v0.0.49', prerelease: true, html_url: 'https://github.com/x-pre'},
+      {tag_name: 'desktop-v0.0.48', html_url: 'https://github.com/x'}
+    ])}
   );
   assert.equal(github.latest, '0.0.48');
   assert.equal(github.source, 'github_releases');
+
+  // Without scanPrefix the newest release wins even when a prefix is declared:
+  // a repo can ship date-style tags that never carry the prefix, and walking
+  // the list would then fall back to an older prefixed tag.
+  const githubLatest = await fetchLatestVersion(
+    {latest: {type: 'github', repo: 'netease-youdao/lobsterai', prefix: 'v'}},
+    {installed: '2026.10.30', fetchImpl: okJson({tag_name: '2026.10.30', html_url: 'https://github.com/x'})}
+  );
+  assert.equal(githubLatest.latest, '2026.10.30');
 
   const none = await fetchLatestVersion({latest: {type: 'none'}}, {installed: '1.0.0'});
   assert.deepEqual(none, {latest: '', source: 'none'});
