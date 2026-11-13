@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 import {AppError, atomicJson, localPath} from './util.mjs';
 import {antigravityBase} from './antigravity.mjs';
 export const projectRoot = fileURLToPath(new URL('../',import.meta.url));
-const allowedPlatforms=['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi',...desktopProviderKinds];
+const allowedPlatforms=['workbuddy','trae','qwenwork','zcode','minimax','bigmodel','antigravity','nvidia','freeapi','doubao',...desktopProviderKinds];
 // One malformed account used to fail the whole file, and every chat request re-reads
 // the file: a single unknown platform turned the entire gateway into 400s until a
 // restart. Loading now degrades per object (the bad one is dropped and reported);

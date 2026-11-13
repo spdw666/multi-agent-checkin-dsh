@@ -8,7 +8,7 @@ const codes=new Set(['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ECONNRESET','EPIPE'
 // zero bytes of that attempt, which is what makes a resend free of duplicated
 // text. Everything ambiguous (missing code, TLS, DNS rejection, timeouts, an
 // observed response body) stays non-retryable on purpose.
-const retryableTransient=new Set(['ECONNRESET','EPIPE','UND_ERR_SOCKET']);
+const retryableTransient=new Set(['ECONNRESET','EPIPE','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT']);
 const phases=new Set(['connect','tls_handshake','response_header','response_body']);
 const origins=new Set(['connect_deadline','header_deadline','body_idle','request_deadline']);
 const value=(object,key)=>{try{return object?.[key];}catch{return undefined;}};

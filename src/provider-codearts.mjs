@@ -1,8 +1,8 @@
 import {compactExpandedSchema} from './codearts-schema-compact.mjs';
 import {normalizeLocalRefs} from './codearts-schema.mjs';
 import {desktopSseResponse,desktopCompletionLimit} from './provider-sse.mjs';
-import {join,dirname} from 'node:path';
-import {readFile,writeFile,mkdir,rename,open,unlink} from 'node:fs/promises';
+import {join,dirname,resolve} from 'node:path';
+import {readFile,writeFile,mkdir,rename,open,unlink,realpath} from 'node:fs/promises';
 import {createHash,createHmac,createDecipheriv,createPrivateKey,sign,randomBytes} from 'node:crypto';
 import {dpapiUnprotect} from './windows-crypto.mjs';
 import {redact,rememberSecret,AppError,dayIn} from './util.mjs';
@@ -128,7 +128,6 @@ export const CODEARTS_CHAT_VERIFIED = Object.freeze({
 // Local contracts stay below those windows; GLM-5.2 keeps its deployed 512K contract and
 // the two hidden VL models use explicit local 256K contracts. The builtin catalog publishes
 // no exact context/output numbers: official* stays null.
-
 export const CODEARTS_CONFIGURED_LIMITS = Object.freeze({
   'GLM-5.2': Object.freeze({contextWindow:524288,maxTokens:65536}),
   'Qwen3-VL-235B': Object.freeze({contextWindow:262144,maxTokens:65536}),
@@ -346,18 +345,41 @@ function credentialFromCodeArtsAuth(base,auth,source) {
  return {...base,accessKey:auth.accessKey,secretKey:auth.secretKey,securityToken:auth.securitytoken,accessToken:auth.securitytoken,expiresAt:auth.expires_at,expiresAtMs:Date.parse(auth.expires_at),source};
 }
 async function publishCodeArtsCache(file,data){const temp=file+'.'+randomBytes(6).toString('hex')+'.tmp';await writeFile(temp,JSON.stringify(data),{mode:0o600});await rename(temp,file);}
+async function migrateCodeArtsCache(cacheFile,legacyFiles,matches) {
+ const read=async file=>{try{const text=await readFile(file,'utf8');return {value:JSON.parse(text),digest:sha256Hex(Buffer.from(text))};}catch(error){if(error.code==='ENOENT')return null;throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}};
+ const files=[...new Set(legacyFiles??[])].filter(file=>file!==cacheFile);
+ const legacy=[];for(const file of files){const row=await read(file);if(row&&matches(row.value))legacy.push({file,...row});}
+ if(!legacy.length)return;
+ const first=await read(cacheFile),known=new Set(first?.value?.legacyCacheDigests??[]);
+ if(first&&matches(first.value)&&legacy.every(row=>known.has(row.digest)))return;
+ await mkdir(dirname(cacheFile),{recursive:true});const locks=[];
+ try{
+  for(const file of [cacheFile,...legacy.map(row=>row.file)]){try{locks.push({file,handle:await open(file+'.lock','wx',0o600)});}catch{throw new AppError('CodeArts 续期正在处理或需核对上次结果',409,'codearts_refresh_pending');}}
+  const current=await read(cacheFile),digests=new Set(current?.value?.legacyCacheDigests??[]);let selected=current&&matches(current.value)?current.value:null;
+  const identity=value=>JSON.stringify([value.auth??null,value.refreshFailure??null,value.loginRequired??null,value.retryAt??null]);
+  for(const {file} of legacy){const row=await read(file);if(!row||!matches(row.value)||digests.has(row.digest))continue;
+   if(selected&&identity(selected)!==identity(row.value))throw new AppError('CodeArts 同源续期缓存存在冲突，等待原生登录更新',409,'codearts_refresh_cache_conflict');
+   selected??=row.value;digests.add(row.digest);
+  }
+  if(selected)await publishCodeArtsCache(cacheFile,{...selected,legacyCacheDigests:[...digests]});
+ }finally{for(const {file,handle} of locks.reverse()){await handle.close();await unlink(file+'.lock').catch(()=>{});}}
+}
 function codeartsBlockedRefresh(cached){const pending=cached?.loginRequired===false||/(?:unconfirmed|invalid|pending)$/.test(cached?.refreshFailure??'');return Object.assign(new AppError(pending?'CodeArts 续期结果待核验；检测到新本机登录态后自动恢复':'CodeArts 上次续期未确认；等待本机登录态更新',pending?503:401,'codearts_refresh_needs_login'),{loginRequired:!pending,refreshPending:pending});}
 async function resolveCodeArtsFresh(base,file,options={}) {
  const stored=await nativeCodeArtsStored(file);if(!stored)return base;
  const cacheFile=options.cacheFile??join(process.env.LOCALAPPDATA??dirname(file),'AI Credit Gateway','private-cache','codearts-'+sha256Hex(Buffer.from(file)).slice(0,16)+'.json');
- const now=options.now??Date.now();
+ const now=options.now??Date.now(); const freshFor=Number.isFinite(options.renewWithinMs)?Math.max(60000,Math.min(options.renewWithinMs,3600000)):60000;
  const localState=options.localState??join(dirname(dirname(dirname(file))),'Local State');
  const original=await (options.decryptAuthImpl??decryptCodeArtsAuth)(stored,localState);
  const sourceCredentialHash=sha256Hex(Buffer.from(JSON.stringify([base.principal,original.refresh_token??null,original.loginContext?.pkcePair?.codeVerifier??null,['kty','crv','x','y'].map(k=>original.loginContext?.dpopKeyPair?.publicKeyJwk?.[k]??null)])));
  const matches=value=>value?.sourceCredentialHash?value.sourceCredentialHash===sourceCredentialHash:value?.sourceHash===stored.sourceHash;
+ await migrateCodeArtsCache(cacheFile,options.legacyCacheFiles,matches);
  let cached;
  try{cached=JSON.parse(await readFile(cacheFile,'utf8'));if(!matches(cached))cached=null;}catch(error){if(error.code==='ENOENT')cached=null;else throw new AppError('CodeArts 私有续期缓存需核验',409,'codearts_refresh_cache_invalid');}
- if(Date.parse(original.expires_at)>now+60000&&cached?.auth?.accessKey!==original.accessKey)return credentialFromCodeArtsAuth(base,original,'ide_secret_storage');
+ // An AK difference is not a new login: the gateway itself rotates AKs. A
+ // matching successful newer cache must never downgrade to the older native AK.
+ if(Date.parse(original.expires_at)>now+freshFor&&cached?.auth?.accessKey!==original.accessKey&&
+   !(cached?.auth&&!cached.refreshFailure&&Date.parse(cached.auth.expires_at)>=Date.parse(original.expires_at)))return credentialFromCodeArtsAuth(base,original,'ide_secret_storage');
  // An uncertain early renewal does not revoke an access credential that is
  // still valid. Keep it usable while waiting for native login synchronization.
  const current=cached?.auth??original;
@@ -365,9 +387,9 @@ async function resolveCodeArtsFresh(base,file,options={}) {
  if(cached?.refreshFailure&&Date.parse(current.expires_at)>now+5000)return {...credentialFromCodeArtsAuth(base,current,cached?.auth?'gateway_private_refresh_cache':'ide_secret_storage'),refreshPending:true};
  if(cached?.retryAt&&now<cached.retryAt)throw Object.assign(new AppError('CodeArts 续期暂缓，稍后自动重试',429,'codearts_refresh_deferred'),{retryAt:cached.retryAt});
  if(cached?.refreshFailure&&(!cached.retryAt||now<cached.retryAt))throw codeartsBlockedRefresh(cached);
- if(cached?.auth && Date.parse(cached.auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,cached.auth,'gateway_private_refresh_cache');
+ if(cached?.auth && Date.parse(cached.auth.expires_at)>now+freshFor)return credentialFromCodeArtsAuth(base,cached.auth,'gateway_private_refresh_cache');
  let auth=cached?.auth??original;
- if(Date.parse(auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,auth,'ide_secret_storage');
+ if(Date.parse(auth.expires_at)>now+freshFor)return credentialFromCodeArtsAuth(base,auth,'ide_secret_storage');
  if(!auth.refresh_token||!auth.loginContext)return base;
  await mkdir(dirname(cacheFile),{recursive:true});let lock;
  try{lock=await open(cacheFile+'.lock','wx',0o600);}catch{throw new AppError('CodeArts 续期正在处理或需核对上次结果',409,'codearts_refresh_pending');}
@@ -378,25 +400,42 @@ async function resolveCodeArtsFresh(base,file,options={}) {
    if(latest.retryAt&&now<latest.retryAt)throw Object.assign(new AppError('CodeArts 续期暂缓，稍后自动重试',429,'codearts_refresh_deferred'),{retryAt:latest.retryAt});
    if(latest.refreshFailure&&(!latest.retryAt||now<latest.retryAt))throw codeartsBlockedRefresh(latest);
    if(latest.auth)auth=latest.auth;
-   if(Date.parse(auth.expires_at)>now+60000)return credentialFromCodeArtsAuth(base,auth,'gateway_private_refresh_cache');
+   if(Date.parse(auth.expires_at)>now+freshFor)return credentialFromCodeArtsAuth(base,auth,'gateway_private_refresh_cache');
   }
   if((await nativeCodeArtsStored(file))?.sourceHash!==stored.sourceHash)throw new AppError('CodeArts 原生会话已更新，将重新读取后续期',409,'codearts_refresh_source_changed');
   let refreshed;
-  await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:'codearts_refresh_pending'});
+  const legacyCacheDigests=latest?.legacyCacheDigests??cached?.legacyCacheDigests;
+  await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,legacyCacheDigests,refreshFailure:'codearts_refresh_pending'});
   try{refreshed=await refreshCodeArtsAuth(auth,options);}catch(error){
    // Keep a marker tied to the source login so polling does not replay a rotating token.
-   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,refreshFailure:error.code??'codearts_refresh_unconfirmed',failedAt:now,loginRequired:error.loginRequired===true,...(error.retryable?{retryAt:error.retryAt}:{})});
+   await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth,legacyCacheDigests,refreshFailure:error.code??'codearts_refresh_unconfirmed',failedAt:now,loginRequired:error.loginRequired===true,...(error.retryable?{retryAt:error.retryAt}:{})});
    if(Date.parse(auth.expires_at)>now+5000)return {...credentialFromCodeArtsAuth(base,auth,'gateway_private_refresh_cache'),refreshPending:true};
    throw error;
   }
-  await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth:refreshed});
+  await publishCodeArtsCache(cacheFile,{sourceHash:stored.sourceHash,sourceCredentialHash,auth:refreshed,legacyCacheDigests});
   return credentialFromCodeArtsAuth(base,refreshed,'gateway_private_refresh_cache');
  }finally{await lock.close();await unlink(cacheFile+'.lock').catch(()=>{});}
 }
 export async function resolveCodeArtsCredential(account={},config={},options={}) {
- const file=codeartsCredentialFile(account,config);
+ // The same Windows SQLite file may be reached through case/dot/symlink
+ // aliases. All callers must share the same rotating-token cache, lock and
+ // flight; realpath preserves the existing default cache identity on Windows.
+ const requested=codeartsCredentialFile(account,config);
+ let file;try{file=await realpath(requested);}catch{file=requested;}
  if(codeartsRefreshFlights.has(file))return codeartsRefreshFlights.get(file);
- const pending=(async()=>resolveCodeArtsFresh(await readCodeArtsLocalSession({file}),file,options))();codeartsRefreshFlights.set(file,pending);
+ const pending=(async()=>{
+  const source=await codeartsCredentialSourceVersion({credentials:{file}});
+  // All consumers of one gateway config share its data directory. Per-process
+  // desktop LocalAppData views must not fork a one-use token's renewal chain.
+  const cacheFile=options.cacheFile??(typeof config.dataDir==='string'?join(config.dataDir,'private-cache','codearts-'+sha256Hex(Buffer.from(file)).slice(0,16)+'.json'):undefined);
+  const legacyCacheFiles=options.cacheFile?[]:[requested,resolve(requested),file].map(alias=>join(process.env.LOCALAPPDATA??dirname(alias),'AI Credit Gateway','private-cache','codearts-'+sha256Hex(Buffer.from(alias)).slice(0,16)+'.json'));
+  const result=await resolveCodeArtsFresh(await readCodeArtsLocalSession({file}),file,{...options,cacheFile,legacyCacheFiles});
+  // Cover every early return too: snap and encrypted secret are separate reads.
+  // A native login switch during either read must be re-read, never accepted
+  // as a mixed principal/credential snapshot.
+  if(source!==await codeartsCredentialSourceVersion({credentials:{file}}))throw new AppError('CodeArts 原生会话已更新，将重新读取后续期',409,'codearts_refresh_source_changed');
+  return result;
+ })();codeartsRefreshFlights.set(file,pending);
  try{return await pending}finally{codeartsRefreshFlights.delete(file);}
 }
 
@@ -610,7 +649,10 @@ export async function codeartsStatus(credential, task = 'daily-checkin', options
     credit: firstNumber(campaign, 'benefitAmount'),
     unit: typeof campaign?.benefitUnit === 'string' ? campaign.benefitUnit : null,
     endsAt: typeof campaign?.extra?.endTime === 'string' ? campaign.extra.endTime : null,
-    day: dayIn(new Date(), 'Asia/Shanghai'),
+    day: dayIn(new Date(options.now??Date.now()), 'Asia/Shanghai'),
+    // The scheduler's global noon plan must not defer this daily account until
+    // midday. Its existing per-task window also handles sleep/resume catch-up.
+    ...(campaign?{nextClaimAt:new Date(Date.parse(dayIn(new Date(options.now??Date.now()),'Asia/Shanghai')+'T00:00:00+08:00')+86400000).toISOString()}:{}),
     source: codeartsCheckinSource.endpoint,
   };
 }
@@ -654,10 +696,6 @@ export async function codeartsHealth(credential, options = {}) {
 }
 
 /**
- * Preserve native tools and supported auto semantics. none removes tool definitions, while
- * forced modes fail explicitly rather than being silently downgraded or prompt-emulated.
- */
-/**
  * A history tool call whose `arguments` is empty, whitespace, `null` or malformed JSON makes the
  * ModelArts engine reject the WHOLE request with `InferHub.ModelArts.81001.400 Invalid Argument`
  * (HTTP 200, failure arrives as an SSE business error). A no-argument call is semantically `{}`,
@@ -684,7 +722,6 @@ export function normalizeCodeArtsToolArguments(messages) {
  * Preserve native tools and supported auto semantics. none removes tool definitions, while
  * forced modes fail explicitly rather than being silently downgraded or prompt-emulated.
  */
-
 export function buildCodeArtsChatBody(input, model, chatId) {
   const body = {model, stream: true, messages: normalizeCodeArtsToolArguments(Array.isArray(input?.messages) ? input.messages : []),
     chat_id: chatId, prompt_cache_key: chatId, tool_stream: true};

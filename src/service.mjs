@@ -1,3 +1,4 @@
+import './net-env.mjs';
 import {join} from 'node:path';
 import {ConfigStore} from './config.mjs';
 import {Ledger} from './store.mjs';

@@ -6,7 +6,7 @@ export const isRelayTransportFailure=error=>['provider_network_error','provider_
 const rateLimitKinds=new Set(['transient','long_window','usage_limit','unknown']);
 const rateLimitRetrySources=new Set(['official_header','official_body','local_default']);
 const transientRateCodes=new Set([6001,6002,6005,6006,14003]);
-const knownRateCodes=new Set([6000,...transientRateCodes,6003,6004,6007,6008,14001,14002,14012,14013,14014,14015,14016,14017,14018,14019,10105,15001,11115]);
+const knownRateCodes=new Set([6000,...transientRateCodes,6003,6004,6007,6008,14001,14002,14012,14013,14014,14015,14016,14017,14018,14019,10105,15001,11115,710022002,710022004,710022013]);
 const rateErrorCodes=new Set(['provider_chat_rejected','provider_http_error','provider_rate_limited','rate_limited','nvidia_rate_limited','upstream_error','upstream_sse_error']);
 // Persistent circuits contain only a typed diagnosis, never an upstream body,
 // message, URL or credential. A legacy rate-limit row remains unknown, not a
@@ -16,7 +16,10 @@ export function relayRateLimitMetadata(error={}){
  const rateLimitKind=rateLimitKinds.has(error.rateLimitKind)?error.rateLimitKind:'unknown';
  const supplied=typeof error.retryAfterSeconds==='number'&&Number.isFinite(error.retryAfterSeconds)&&error.retryAfterSeconds>=0&&error.retryAfterSeconds<=86400;
  const retryAfterSource=supplied&&rateLimitRetrySources.has(error.retryAfterSource)?error.retryAfterSource:'local_default';
- const retryAfterSeconds=supplied&&retryAfterSource!=='local_default'?error.retryAfterSeconds:30;
+ // 本地冷却默认 30 秒。provider 确知自己那一族限流需要更长冷却时（例如豆包账号级风控要人工过
+ // 验证码），用 error.localRetrySeconds 显式声明，不要让通用策略替所有平台猜一个长窗口。
+ const localDefault=Number.isFinite(error.localRetrySeconds)&&error.localRetrySeconds>=0&&error.localRetrySeconds<=86400?error.localRetrySeconds:30;
+ const retryAfterSeconds=supplied&&retryAfterSource!=='local_default'?error.retryAfterSeconds:localDefault;
  const rateLimitRetryable=rateLimitKind==='transient'&&transientRateCodes.has(upstreamCode)&&error.rateLimitRetryable===true;
  return {upstreamStatus:429,...(upstreamCode!==undefined?{upstreamCode}:{}),rateLimitKind,rateLimitRetryable,retryAfterSeconds,retryAfterSource};
 }

@@ -15,6 +15,7 @@ import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor
 import {fetchWorkBuddyCreditDetails} from './workbuddy-resources.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {workBuddyChannelError,workBuddyChannelSkipped,workBuddyTransportChannel} from './workbuddy-channel.mjs';
+import {doubaoModels,doubaoChat,doubaoHealth,doubaoStatus,doubaoClaim} from './provider-doubao.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
 import {AppError,jsonFetch,dayIn,errorView} from './util.mjs';
 import {restoreLoomyDailyQuota} from './daily-quota-receipt.mjs';
@@ -112,7 +113,7 @@ export class Platforms {
       for(const m of list){if(m.callable)stack.wire.set(m.id,{configName:m.wireConfigName??m.id,function:m.wireFunction??wire.find(w=>w.id===m.id)?.function,reasoningEfforts:m.reasoningEfforts});}
       // Retain direct wire mapping even if the remote directory is temporarily absent.
       for(const m of wire){if(m.id&&!stack.wire.has(m.id))stack.wire.set(m.id,{configName:m.id,function:m.wireFunction??m.function});}
-    }else if(u.kind==='nvidia'){list=await readModels(c=>nvidiaModels(c,{signal}));}else if(u.kind==='antigravity'){list=await readModels(c=>antigravityModels(u,c,{signal,config:this.config}));}else if(u.kind==='bigmodel'){list=await readModels(c=>bigModelModels(c,{signal}));}else if(u.kind==='qwenwork'){list=await readModels(c=>qwenWorkModels(c));}else if(u.kind==='zcode'){list=await readModels(c=>zcodeModels(c));}else if(u.kind==='minimax'){list=await readModels(c=>miniMaxModels(c));}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
+    }else if(u.kind==='nvidia'){list=await readModels(c=>nvidiaModels(c,{signal}));}else if(u.kind==='antigravity'){list=await readModels(c=>antigravityModels(u,c,{signal,config:this.config}));}else if(u.kind==='bigmodel'){list=await readModels(c=>bigModelModels(c,{signal}));}else if(u.kind==='qwenwork'){list=await readModels(c=>qwenWorkModels(c));}else if(u.kind==='zcode'){list=await readModels(c=>zcodeModels(c));}else if(u.kind==='minimax'){list=await readModels(c=>miniMaxModels(c));}else if(u.kind==='doubao'){ensureSource();list=doubaoModels();}else throw new AppError(`${u.kind}: model transport not yet live-verified`,501,'platform_protocol_pending');
     ensureSource();
     if(!Array.isArray(list)||!list.length)throw new AppError(`Upstream ${u.id} returned an empty catalog`,502,'empty_catalog');
     return remember(list);
@@ -132,6 +133,7 @@ export class Platforms {
       return {...h,capabilities:providerCapabilities(p,h)};
     }
     if(a.platform==='nvidia'){let credential;try{credential=await this.credentials.resolve(id,{force:true});const [health,policy]=await Promise.all([nvidiaHealth(credential),nvidiaPolicy(credential)]);const authRecord=nvidiaAuthState(this.credentials.ledger,id,credential,health.quota?.credentialStatus==='rejected'?'rejected':undefined);return {...health,policy,authRecord};}catch(e){if(e.code==='nvidia_auth_failed'&&credential)nvidiaAuthState(this.credentials.ledger,id,credential,'rejected');if(e.code==='nvidia_credential_missing')return {status:'credential_missing',models:[],quota:{credentialStatus:'missing'}};throw e;}}
+    if(a.platform==='doubao')return doubaoHealth(await this.credentials.resolve(id));
     const credential=await this.credentials.resolve(id,{force:true});
     if(a.platform==='workbuddy'){
       const read=c=>Promise.allSettled([this.wb.fetchCheckinStatus(c),fetchWorkBuddyCreditDetails(c,{signal:AbortSignal.timeout(20000)})]);
@@ -204,6 +206,7 @@ export class Platforms {
     if(a.platform==='zcode'&&taskId==='activity-preview'){return {known:true,active:true,observed:true,details:await zcodePreview(credential),reason:'activity_preview_read_only'};}
     if(a.platform==='zcode'&&taskId==='free-plan-claim')return zcodeStatus(credential,{ledger:this.credentials.ledger,accountId});
     if(a.platform==='minimax'&&taskId==='daily-checkin')return miniMaxStatus(credential);
+    if(a.platform==='doubao'&&taskId==='daily-checkin')return doubaoStatus(credential);
     // Automatic resets are observations, not a fabricated claim endpoint.
     if(a.platform==='qwenwork'&&taskId==='daily-quota') {const context=await this.qwenContext(accountId,credential);return {known:true,active:true,observed:true,details:context,reason:'automatic_daily_quota_read_only'};}
     if(taskId==='daily-quota')throw new AppError('Daily quota observation needs a verified personal-account endpoint',501,'quota_protocol_pending');
@@ -220,6 +223,7 @@ export class Platforms {
     if(desktopProviderKinds.has(a.platform)){const p=await desktopProvider(a.platform);if(typeof p.claim!=='function')throw new AppError('该应用未声明领取接口',400,'checkin_not_supported');return p.claim(c,taskId,{account:a,...(a.platform==='codearts'?{...(options?.confirmOnly===true?{confirmOnly:true}:{}),...(Number.isSafeInteger(options?.expectedCampaignId)&&options.expectedCampaignId>0?{expectedCampaignId:options.expectedCampaignId}:{})}:{})});}
     if(a.platform==='workbuddy'&&taskId==='daily-checkin')return this.wb.claimDailyCheckin(c);
     if(a.platform==='minimax'&&taskId==='daily-checkin')return miniMaxClaim(c);
+    if(a.platform==='doubao'&&taskId==='daily-checkin')return doubaoClaim(c);
     if(a.platform==='zcode'&&taskId==='free-plan-claim')return zcodeClaim(c,{ledger:this.credentials.ledger,accountId,profileDir:this.config.path(`./data/accounts/${accountId}/captcha-browser`)});
     if(a.platform==='trae'&&taskId==='daily-checkin'){const r=await this.traeStack(accountId).usage.claimCheckin();if(!r.claimed){const retryable=Number(r.code)===9074;const error=new AppError(`Trae claim rejected: ${r.code} ${r.message??''}`.trim(),retryable?503:502,retryable?'claim_temporarily_busy':'claim_rejected');error.definitiveRejection=!retryable;error.beforeSubmission=retryable;error.retryable=retryable;throw error;}return r;}
     const custom=(a.tasks??[]).find(t=>t.id===taskId);
@@ -233,6 +237,7 @@ export class Platforms {
   async chat(target,request,signal,providerOptions={}) {
     const u=this.upstream(target.upstreamId);const input={...request,model:target.model,stream:true};
     if(u.kind==='freeapi')return freeProviderChat(u,await this.credentials.resolve(u.accountId),input,signal);
+    if(u.kind==='doubao')return doubaoChat(await this.credentials.resolve(u.accountId),input,signal);
     if(desktopProviderKinds.has(u.kind)){const p=await desktopProvider(u.kind);if(typeof p.chat!=='function')throw new AppError('该应用模型调用协议待核验',501,'model_transport_unavailable');const c=await this.credentials.resolve(u.accountId),chat=credential=>u.kind==='qoder'?p.chat(u,credential,input,signal,providerOptions):p.chat(u,credential,input,signal);try{return await chat(c);}catch(error){if(error.status!==401)throw error;const newer=await this.credentials.resolve(u.accountId,{force:true});if(newer.accessToken===c.accessToken)throw error;return chat(newer);}}
     if(u.kind==='workbuddy') {
       const ensureInference=async()=>{if(typeof this.config.workBuddyInferenceAllowed==='function'&&!await this.config.workBuddyInferenceAllowed(u.accountId))throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');const accounts=this.config.value.accounts;if(accounts===undefined&&typeof this.config.workBuddyInferenceAllowed!=='function')return;const a=Array.isArray(accounts)?accounts.find(a=>a.id===u.accountId&&a.platform==='workbuddy'):undefined;if(!a||a.enabled===false||a.inferenceEnabled===false)throw new AppError('该 WB 帐号已停用积分调用；签到和自动任务保持不变',409,'wb_inference_disabled');};

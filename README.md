@@ -90,6 +90,7 @@ Web 版是**独立实例**，不自动接管原生版账号、配置或快捷方
 | CodeArts Agent `codearts` | 已公开的登录读取、活动查询/领取、模型接入；[适配说明](docs/provider-codearts.md)与[验证说明](docs/codearts-validation.md) |
 | LobsterAI `lobster`、小浣熊 `raccoon`、Loomy `loomy` | 桌面账号、权益与模型能力按各平台实现；[来源与归属](docs/provider-attributions.md) |
 | 千问办公 `qwenwork`、MiniMax Code `minimax` | 按账号资格核对目录、用量与调用；服务端自动重置额度不伪装成手动签到 |
+| 豆包 `doubao` | 桌面客户端「工作」模式的同源协议，凭据是本机登录态；10 个模型的目录、额度与每日签到独立核对，[接入说明](docs/doubao.md) |
 | ZCode `zcode` | 标准代理、本机登录与精确目录；可选代理需单独准备，[接入说明](docs/zcode.md) |
 | BigModel `bigmodel`、NVIDIA NIM `nvidia` | 官方 API、私有 Key 与额度来源；[BigModel](docs/bigmodel.md)、[NVIDIA](docs/nvidia-source-notes.md) |
 | Antigravity `antigravity` | 明确的本机 loopback 桥接；独立桥和登录不随网关打包，[说明](docs/antigravity.md) |
@@ -237,6 +238,7 @@ DSH 通过 bundle 和 `ai-credit` Provider 接入，`discover_models` 控制模�
 | 客户端 | [OpenAI 兼容](docs/openai-clients.md)、[DSH](docs/dsh.md)、[DSH 请求策略](docs/dsh-request-policy.md)、[Hermes](docs/hermes.md)、[FleshOut](docs/fleshout-sync.md) |
 | 平台与权益 | [桌面平台](docs/desktop-platforms.md)、[官方 API 平台](docs/free-providers.md)、[Key 录入](docs/free-provider-key.md)、[视频每日权益](docs/video-daily.md)、[独立每日协议](docs/video-independent-daily.md) |
 | ZCode | [标准代理接入](docs/zcode.md)，含 3012 的四重内容指纹与诊断顺序 |
+| 豆包 | [桌面同源协议接入](docs/doubao.md)，含模型目录、工具提示词桥、600000 窗口声明与额度签到 |
 | 诊断与运行 | [API](docs/api.md)、[用量](docs/usage.md)、[运行中心](docs/operations-center.md)、[客户端更新](docs/client-updates.md)、[性能与取消隔离](docs/performance-and-correctness.md) |
 | 全部已有专题 | [专题索引](docs/getting-started.md#专题手册索引)，保留原主页的完整后端专题入口 |
 

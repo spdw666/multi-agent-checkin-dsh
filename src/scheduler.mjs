@@ -30,7 +30,7 @@ function retryTime(result,attempt,now,schedule) {
   return now+delay;
 }
 export class Scheduler {
-  constructor(config,claims,ledger){Object.assign(this,{config,claims,ledger});this.timer=null;this.running=false;this.ticking=false;this.stopped=true;this.jobs=new Set();this.sourceChecks=new Map();}
+  constructor(config,claims,ledger){Object.assign(this,{config,claims,ledger});this.timer=null;this.running=false;this.ticking=false;this.stopped=true;this.jobs=new Set();this.sourceChecks=new Map();this.codeartsMaintenance=new Map();}
   track(promise){this.jobs.add(promise);void promise.finally(()=>this.jobs.delete(promise)).catch(()=>{});return promise;}
   activeTasks(){return (this.config.value.accounts??[]).filter(a=>a.enabled!==false).flatMap(a=>(a.tasks??[]).filter(t=>t.enabled).map(t=>({accountId:a.id,task:t.id})));}
   context() {
@@ -111,6 +111,29 @@ export class Scheduler {
       this.save(context,last,states,results,{source,daily,requested:tasks??(full?this.activeTasks():[]),sourceVersions});
     }finally{this.running=false;}
   }
+  maintainCodeArtsCredentials(now=Date.now()) {
+    // Renew the existing official session independently of claims. Otherwise a
+    // settled daily receipt stops all credential work until the next day, and
+    // a failed overnight renewal is first noticed only at the next check-in.
+    const credentials=this.claims.credentials??this.service?.credentials;
+    if(typeof credentials?.resolve!=='function')return;
+    const accounts=(this.config.value.accounts??[]).filter(a=>a.enabled!==false&&a.platform==='codearts'&&(a.tasks??[]).some(t=>t.enabled&&t.id==='daily-checkin'));
+    for(const account of accounts){
+      const prior=this.codeartsMaintenance.get(account.id);
+      if(prior?.running||prior?.nextAt>now)continue;
+      const state={running:true,nextAt:now+30000};this.codeartsMaintenance.set(account.id,state);
+      this.track((async()=>{
+        try{
+          const credential=await credentials.resolve(account.id),expires=credential?.expiresAtMs??Date.parse(credential?.expiresAt);
+          state.nextAt=Number.isFinite(expires)&&expires>now+60000?expires-60000:now+30000;
+          this.ledger.set('codearts-session-maintenance:'+account.id,{at:now,status:'ready',...(Number.isFinite(expires)?{expiresAt:new Date(expires).toISOString()}:{}),nextAt:state.nextAt,claimAttempted:false});
+        }catch(error){
+          const retry=timestamp(error.retryAt);state.nextAt=Math.max(now+30000,Number.isFinite(retry)?retry:now+300000);
+          this.ledger.set('codearts-session-maintenance:'+account.id,{at:now,status:'error',reason:error.code??'codearts_credential_error',loginRequired:error.loginRequired===true||error.status===401,nextAt:state.nextAt,claimAttempted:false});
+        }finally{state.running=false;}
+      })());
+    }
+  }
   async tick() {
     if(this.stopped||this.running||this.ticking)return;
     this.ticking=true;
@@ -131,6 +154,7 @@ export class Scheduler {
     }
     if(this.service?.config?.value?.workbuddy?.rotation?.enabled===true){this.track(evaluateWorkBuddyRotation(this.service,{dryRun:false},{scheduled:true}).catch(error=>{this.ledger.set('wb-rotation-last-error',{at:Date.now(),code:error.code??'wb_rotation_error'});}));}
     const s=this.config.value.scheduler;if(!s.enabled)return;
+    this.maintainCodeArtsCredentials();
     const context=this.context(),{day,signature,plan}=context,last=this.ledger.get('schedule-last'),states=this.states(last,s),now=Date.now();
     const daily=now>=plan.at&&((last?.dailyDay??last?.day)!==day||(last?.dailySignature??last?.signature)!==signature);
     const isDue=row=>Number.isFinite(row.retryDue)&&row.retryDue<=now||timestamp(row.nextClaimAt)<=now;

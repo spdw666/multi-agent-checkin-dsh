@@ -7,6 +7,10 @@ import {syncWorkBuddyPools} from './workbuddy-management.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {isWorkBuddyBlocked} from './workbuddy-status.mjs';
 
+// A 11128 is per-account upstream channel verification, not an empty wallet.
+// Five minutes keeps a known-rejecting credential from leading every request
+// without hiding a recovered one for a full credit cooldown.
+const CHANNEL_REJECT_COOLDOWN_MS=5*60*1000;
 export function isCreditExhausted(error) {
   const status=Number(error.status);
   if(/context_length|context_window|prompt_too_long|input_token_limit/i.test(String(error.code??''))||/context (?:window|length)|prompt (?:is )?too long|maximum context|input tokens? .*limit/i.test(String(error.message??'')))return false;
@@ -31,12 +35,24 @@ export class WorkBuddyPool {
     }).filter(Boolean);
     const preferred=this.get('wb-pool-route:'+route.id)?.preferredAccountId;
     if(preferred)targets.sort((a,b)=>Number(b.accountId===preferred)-Number(a.accountId===preferred));
+    // A recent 11128 only demotes the account: candidate count never shrinks,
+    // so one channel rejection can no longer empty the route. Stable sort keeps
+    // the preferred-account order inside each group.
+    const rejected=id=>(this.get('wb-pool-reject:'+id)?.until??0)>Date.now();
+    targets.sort((a,b)=>Number(rejected(a.accountId))-Number(rejected(b.accountId)));
     return ignoreCooldown?targets:targets.filter(t=>(this.get('wb-pool-cooldown:'+t.accountId)?.until??0)<=Date.now());
   }
   version(route){return this.get('wb-pool-route:'+route.id)?.manualVersion??0;}
   success(route,target,{expectedVersion}={}){if(route.accountPool?.enabled){const manualVersion=this.version(route);if(expectedVersion!==undefined&&expectedVersion!==manualVersion)return;this.set('wb-pool-route:'+route.id,{preferredAccountId:target.accountId,manualVersion,updatedAt:new Date().toISOString()});}}
   exhausted(route,target,error){
-    if(!route.accountPool?.enabled||!isCreditExhausted(error))return false;
+    if(!route.accountPool?.enabled)return false;
+    if(error.code==='workbuddy_channel_rejected'){
+      // Deliberately NOT wb-pool-cooldown: model-relay.cooldown() treats that
+      // table as supplier outage and drops the target from candidates entirely.
+      this.set('wb-pool-reject:'+target.accountId,{until:Date.now()+CHANNEL_REJECT_COOLDOWN_MS,reason:'channel_rejected'});
+      return false;
+    }
+    if(!isCreditExhausted(error))return false;
     const until=Date.now()+(route.accountPool.cooldownSeconds??3600)*1000;
     this.set('wb-pool-cooldown:'+target.accountId,{until,reason:'credits_exhausted'});
     this.ledger?.record({day:new Date().toISOString().slice(0,10),platform:'workbuddy',accountId:target.accountId,task:'model-account-switch',status:'credits_exhausted',routeId:route.id,nextRequestCanSwitch:true});
