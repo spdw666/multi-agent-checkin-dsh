@@ -129,7 +129,7 @@ Web 便携版默认使用 `user-data/config.local.json`、`user-data/data`、`us
 
 | 项目 | 当前公开发行 |
 |---|---|
-| 后端产品版本 | **0.8.1**，公开基线加便携路径适配；不夹带其他分支的本机未发布功能 |
+| 后端产品版本 | **0.8.2**，与源码 `main` 同步的 npm 后端包；不夹带其他分支的本机未发布功能 |
 | Web UI 版本 | **0.8.1-web.1** |
 | Web 预览标签 | [`v0.8.1-desktop-webview2.1`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.1-desktop-webview2.1) |
 | Windows x64 附件 | `AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip`，**43,568,706 字节** |
@@ -140,7 +140,7 @@ Web 便携版默认使用 `user-data/config.local.json`、`user-data/data`、`us
 Get-FileHash -Algorithm SHA256 .\AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip
 ```
 
-核对下载附件名、完整 SHA-256 和文件大小；不要把旧的 `dsh-ai-credit-gateway-0.8.1.tgz` 当 Windows 桌面包。原 `v0.8.1` 后端资产保持独立。源码、SDK、Node、bootstrapper pin 和编译输入的说明见 [Web 分发手册](docs/webview-desktop.md)。
+核对下载附件名、完整 SHA-256 和文件大小；不要把 `dsh-ai-credit-gateway-0.8.2.tgz` 当 Windows 桌面包。`v0.8.2` 是后端 npm 包，`v0.8.1` 与 `v0.8.1-desktop-webview2.1` 作为历史资产原字节保留、不覆盖。源码、SDK、Node、bootstrapper pin 和编译输入的说明见 [Web 分发手册](docs/webview-desktop.md)。
 
 ## 快速开始
 
