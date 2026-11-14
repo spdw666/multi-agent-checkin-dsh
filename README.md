@@ -4,7 +4,7 @@
 
 AI积分网关连接你已登录的桌面客户端与已配置的官方 API，集中查看账号、余额、每日领取、WorkBuddy 任务和模型路由，再通过 OpenAI 兼容接口接入 DSH、Hermes 或其他客户端。
 
-[下载 WebView2 便携版](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.1-desktop-webview2.1/AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip) · [三步上手](#三步开始使用) · [功能与平台](#支持的平台与能力边界) · [完整使用手册](docs/getting-started.md) · [隐私与发行核对](docs/release-privacy.md)
+[下载 WebView2 便携版](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip) · [三步上手](#三步开始使用) · [功能与平台](#支持的平台与能力边界) · [完整使用手册](docs/getting-started.md) · [隐私与发行核对](docs/release-privacy.md)
 
 > **先看这三点：**下载包不附个人账号，首次打开是空工作台，需要自己登录或导入自己的账号；平台权益由官方账号与当前服务决定；模型目录、余额、签到回执和真实调用是四种不同证据。
 
@@ -14,7 +14,7 @@ AI积分网关连接你已登录的桌面客户端与已配置的官方 API，�
 
 | 入口 | 适合谁 | 获取与启动 |
 |---|---|---|
-| **WebView2 工作台 · 便携预览版** | 想直接使用新界面的 Windows 用户 | [下载 Windows x64 ZIP](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.1-desktop-webview2.1/AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip)，**完整解压**，双击 `AI积分网关.exe` 或 `启动新版工作台.cmd`。自带 Node.js 与后端，普通用户无需 npm |
+| **WebView2 工作台 · 便携预览版** | 想直接使用新界面的 Windows 用户 | [下载 Windows x64 ZIP](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip)，**完整解压**，双击 `AI积分网关.exe` 或 `启动新版工作台.cmd`。自带 Node.js 与后端，普通用户无需 npm |
 | **WinForms 原生界面** | 继续使用原生桌面、已有原生部署的用户 | 保留原生界面与配置方式；源码默认入口仍是 [`desktop/build.ps1`](desktop/build.ps1)，[原生构建说明](docs/getting-started.md#winforms-原生桌面) |
 | **Node.js 服务 / CLI** | 自行部署、接入客户端或使用管理 API | [源码启动](docs/getting-started.md#源码启动后端)、[Linux 部署](docs/linux.md)、[API 手册](docs/api.md)；浏览器基础管理页与完整桌面工作台分开说明 |
 
@@ -130,14 +130,14 @@ Web 便携版默认使用 `user-data/config.local.json`、`user-data/data`、`us
 | 项目 | 当前公开发行 |
 |---|---|
 | 后端产品版本 | **0.8.2**，与源码 `main` 同步的 npm 后端包；不夹带其他分支的本机未发布功能 |
-| Web UI 版本 | **0.8.1-web.1** |
-| Web 预览标签 | [`v0.8.1-desktop-webview2.1`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.1-desktop-webview2.1) |
-| Windows x64 附件 | `AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip`，**43,568,706 字节** |
-| ZIP SHA-256 | `a2693c8492622689962bdef87787e74560fa6ea1911090f8d66acd0b702cf81d` |
-| 校验与构建资料 | [SHA256SUMS](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.1-desktop-webview2.1/SHA256SUMS)、[BUILD-INFO.json](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.1-desktop-webview2.1/BUILD-INFO.json)、包内 `checksums.sha256` |
+| Web UI 版本 | **0.8.2-web.1** |
+| Web 预览标签 | [`v0.8.2-desktop-webview2.1`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.2-desktop-webview2.1) |
+| Windows x64 附件 | `AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip`，**43,469,759 字节** |
+| ZIP SHA-256 | `e6a39de2f6264f158802e61bba65bdb6bd183568d7d3217897d2a2573bb294be` |
+| 校验与构建资料 | [SHA256SUMS](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/SHA256SUMS)、[BUILD-INFO.json](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/BUILD-INFO.json)、包内 `checksums.sha256` |
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip
+Get-FileHash -Algorithm SHA256 .\AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip
 ```
 
 核对下载附件名、完整 SHA-256 和文件大小；不要把 `dsh-ai-credit-gateway-0.8.2.tgz` 当 Windows 桌面包。`v0.8.2` 是后端 npm 包，`v0.8.1` 与 `v0.8.1-desktop-webview2.1` 作为历史资产原字节保留、不覆盖。源码、SDK、Node、bootstrapper pin 和编译输入的说明见 [Web 分发手册](docs/webview-desktop.md)。

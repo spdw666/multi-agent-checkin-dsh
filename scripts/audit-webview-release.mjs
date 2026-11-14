@@ -20,7 +20,7 @@ const trustedHashes=new Map([
  ['Microsoft.Web.WebView2.Core.dll','acdd517b951829f763d1255f32df1e6a936cb8623a7ebff6b8b24172dede6bd6'],
  ['Microsoft.Web.WebView2.WinForms.dll','c66437f80886aecf074804b61af4cc10ad90a95310c8e0a717f31ea377c26b03'],
  ['WebView2Loader.dll','d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6'],
- ['prerequisites/MicrosoftEdgeWebview2Setup.exe','13f6d9cdc8c3e7186e4b180db7f48e199ee97d631480e8391fb3106f338fb21a']
+ ['prerequisites/MicrosoftEdgeWebview2Setup.exe','cf2f2445fef0c5c14e372045f84998771eeb8bb01d59be4afd00692fa160082e']
 ]);
 export function binaryClassification(name,digest){return trustedHashes.get(name)===digest?'pinned-public-vendor-binary':/^(?:AI积分网关|AiCredit\.WebView2)\.exe$/.test(name)?'application-executable':'unrecognized-binary';}
 function allowedName(name){

@@ -9,8 +9,8 @@
 | 对象 | 本页描述的范围 |
 |---|---|
 | 当前源码主干 | 本轮公开文档整理及明确列出的历史截图移除；最终以已发布 commit 为准 |
-| 固定 Web 标签 | `v0.8.1-desktop-webview2.1` 的源码与自动生成 source archives；与之后更新的 main 分开 |
-| Windows 下载原件 | `AiCreditGateway-WebView2-0.8.1-web.1-win-x64.zip`，以[发行页](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.1-desktop-webview2.1)的完整 SHA-256 和文件大小识别 |
+| 固定 Web 标签 | `v0.8.2-desktop-webview2.1` 的源码与自动生成 source archives；`v0.8.1-desktop-webview2.1` 与 `v0.8.1` 作为历史资产原字节保留，与之后更新的 main 分开 |
+| Windows 下载原件 | `AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip`，以[发行页](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.2-desktop-webview2.1)的完整 SHA-256 和文件大小识别 |
 | 原 `v0.8.1`、旧提交与历史附件 | 旧 `.tgz` 逐项检查，全部可达 Git 历史另行复核；历史状态截图明确保留，不把凭据检查通过说成所有历史都没有账号状态 |
 | 第一次运行后的文件夹 | 含用户自己的配置、凭据、账本、profile 和备份，不是可公开再分发的原件 |
 
@@ -30,9 +30,9 @@
 
 | 审计项 | 需要的证据 | 本轮结果 |
 |---|---|---|
-| 新增/修改源码及可达历史 | 完整取得 Git 历史后逐 blob 扫描，另查当前文档/guard/fixture | 基线覆盖 57 个可达提交、1052 个唯一 blob；真实凭据与不透明账号身份未命中。公共别名、实现枚举与旧测试路径人工分级；当前测试用户名已改为 SAMPLE |
+| 新增/修改源码及可达历史 | 完整取得 Git 历史后逐 blob 扫描，另查当前文档/guard/fixture | 基线覆盖 78 个可达提交、1627 个唯一 blob；真实凭据与不透明账号身份未命中。公共别名、实现枚举与旧测试路径人工分级；当前测试用户名已改为 SAMPLE |
 | Release 附件与 sidecar | 实际下载、远端/本地 hash 对照，实际值内存交叉比对 | 四个原始附件均检查；未发现与已收集本机 Token、Cookie、Key、密文 vault、官方身份、邮箱或手机号重合的数据 |
-| ZIP 解包与清单 | 每 entry、魔数、隐藏/嵌套载荷、`checksums.sha256` 对照 | 225 个文件、224 项内部校验全部匹配；未发现运行配置、账号数据库、日志、profile、账号包或个人目录载荷 |
+| ZIP 解包与清单 | 每 entry、魔数、隐藏/嵌套载荷、`checksums.sha256` 对照 | 228 个文件、227 项内部校验全部匹配；未发现运行配置、账号数据库、日志、profile、账号包或个人目录载荷 |
 | 二进制、图像及运行常量 | 7 个 PE 的 ASCII/UTF-16、35 张 PNG/字体来源与实际值比对；历史图另做 OCR | 本次包未发现本机账号身份或凭据；默认客户端安装发现常量单列，不冒称所有 Windows 路径字符串都不存在 |
 | 首次运行与 Actions 构建附件 | 三空模板、自动任务全关、独立目录；实际下载 CI artifact | 包内账号/路由/上游为空；既有独立首启 34 项通过。CI artifact 实际 224 文件，无个人运行状态；空 probe 目录不成为账号数据 |
 | 历史 `.tgz`、源码归档与截图 | 旧后台包 543 个 tar 文件、两个匿名 Source ZIP、3 版历史图 | 未发现已收集真实凭据或不透明身份命中；旧包及源码历史确有历史状态截图，保留范围如上，不作全历史净空结论 |
