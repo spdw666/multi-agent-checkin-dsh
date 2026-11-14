@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {homedir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {parseTraeStorageDocument, readTraeIdentity} from '../vendor/trae-core.mjs';
 
 // 每天检查一次被反代的桌面客户端是否有新版本，只读：不改任何客户端、不下载安装包。
 // 每个目标的版本来源都写在清单里；没有公开来源的目标诚实显示“无来源”，
@@ -116,9 +117,11 @@ export const DEFAULT_TARGETS = [
     version: {type: 'json', file: 'resources/app/product.json', field: 'appVersion', apiField: 'tronBuildVersion'},
     latest: {
       type: 'trae', url: 'https://api.trae.com.cn/icube/api/v1/package/check_update',
-      mid: '561ed8eddac7a1a19ff38d5f2e5068e4c5bbe879de78d1b794f03080f02cf1a9',
-      did: '810790401142921', branch: 'release_desktop_yoma_win32_cn',
-      versionCode: '20250325', pid: '7409949320595642651', iid: '1787183286984867'
+      // mid/did 是本机设备指纹，逐机不同，运行时从 Trae 的 storage.json 读（见 traeIdentity）。
+      branch: 'release_desktop_yoma_win32_cn',
+      // pid 是 Trae 客户端代码里的产品常量（所有安装相同）；iid 是本机登录账号，
+      // 与 mid/did 一样运行时从 storage.json 读，见 traeUpdateIdentity。
+      versionCode: '20250325', pid: '7409949320595642651'
     },
     note: '字节 ICUBE 更新接口；按 tron 构建号比较'
   },
@@ -559,6 +562,36 @@ async function readLatestFromHtml(url, regex, {fetchImpl, timeoutMs, signal}) {
   return String(match[1] ?? match[0]).trim();
 }
 
+// Trae 的更新接口要求 mid（machineId）与 did（设备号），两者都是本机标识、逐机不同。
+// 解析复用 vendor/trae-core.mjs 的 readTraeIdentity：它已经处理多历史设备 ID、
+// 用最新日志确认当前设备、以及缺 storage 时回落到 CLI 身份。这里只把字段名映射成
+// 更新接口要的 mid/did，不另写一套解析，也不再回落到任何硬编码值。
+const TRAE_APP_NAMES = {cn: 'Trae CN', sg: 'Trae', solo: 'TRAE SOLO CN', 'solo-sg': 'TRAE SOLO'};
+// 账号 ID（更新接口的 iid）也是本机登录态的一部分，逐账号不同。
+// 优先从登录票据里取；票据缺失时退回 icube_gtm.users 的唯一键；两者都没有就留空，
+// 让请求不带 iid，而不是编一个。
+async function traeAccountId(path) {
+  const text = await readFile(path, 'utf8').catch(() => '');
+  if (!text) return '';
+  try { return String(parseTraeStorageDocument(text).userId ?? '').trim(); } catch {}
+  try {
+    const users = Object.keys(JSON.parse(text).icube_gtm?.users ?? {});
+    return users.length === 1 ? users[0].trim() : '';
+  } catch { return ''; }
+}
+
+export async function traeUpdateIdentity({edition = 'cn', roaming = ROAMING} = {}) {
+  const appName = TRAE_APP_NAMES[edition];
+  if (!appName) throw new Error(`unknown Trae edition "${edition}"`);
+  const path = join(roaming, appName, 'User', 'globalStorage', 'storage.json');
+  try {
+    const identity = await readTraeIdentity({path, edition, source: 'desktop'});
+    return {mid: identity.machineId, did: identity.deviceId, iid: await traeAccountId(path)};
+  } catch (error) {
+    throw new Error(`Trae 本机设备标识读取失败（${path}）：${error.message}`);
+  }
+}
+
 export async function fetchLatestVersion(target, {installed, apiVersion, timeoutMs = 15000, fetchImpl = fetch, signal} = {}) {
   signal?.throwIfAborted();
   const spec = target.latest;
@@ -630,12 +663,13 @@ export async function fetchLatestVersion(target, {installed, apiVersion, timeout
     return {latest: tag, source: 'github_releases', url: data.html_url ?? url};
   }
   if (spec.type === 'trae') {
+    const identity = spec.mid && spec.did ? {mid: spec.mid, did: spec.did, iid: spec.iid ?? ''} : await traeUpdateIdentity({edition: spec.edition ?? 'cn'});
     const params = new URLSearchParams({
-      mid: spec.mid, did: spec.did, uid: `stable_${spec.mid}`,
+      mid: identity.mid, did: identity.did, uid: `stable_${identity.mid}`,
       userRegion: 'CN', packageType: 'stable_cn', productCode: 'TRAE',
       platform: 'Win', branch: spec.branch, arch: 'x64', tenant: 'marscode',
       appVersion: installed, buildVersion: apiVersion, traeVersionCode: spec.versionCode,
-      pid: spec.pid, iid: spec.iid
+      pid: spec.pid, ...(identity.iid ? {iid: identity.iid} : {})
     });
     const url = `${spec.url}?${params.toString()}`;
     const {status, text} = await httpText(url, {timeoutMs, headers: {accept: 'application/json'}, fetchImpl, signal});

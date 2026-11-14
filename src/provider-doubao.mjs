@@ -1,3 +1,6 @@
+import {readFile} from 'node:fs/promises';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
 import {AppError, dayIn} from './util.mjs';
 
 // 豆包桌面客户端「工作」模式的同源协议。
@@ -10,8 +13,30 @@ import {AppError, dayIn} from './util.mjs';
 const ENDPOINT = 'https://www.doubao.com/chat/completion';
 const BOT_ID = '7338286299411103781';
 const AID = 582478;
-const DEFAULT_DEVICE_ID = '810790401142921';
+// 设备标识不是常量：每个安装的豆包客户端在 Local State 的 aha.device.device_id 里各有一份，
+// 换机、重装都会变。硬编码某一个值既泄露了那台机器的指纹，也会让别处跑不起来，
+// 所以只在运行时读本机客户端；读不到就要求调用方在账号凭据里显式提供 deviceId。
+const DOUBAO_LOCAL_STATE = () => process.env.DOUBAO_LOCAL_STATE
+  || join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData/Local'), 'Doubao/User Data/Local State');
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
+
+export async function doubaoDeviceId(c) {
+  const explicit = typeof c?.deviceId === 'string' ? c.deviceId.trim() : '';
+  if (explicit) return explicit;
+  const file = DOUBAO_LOCAL_STATE();
+  let raw;
+  try {
+    raw = JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, ''));
+  } catch (error) {
+    throw new AppError(`豆包设备标识读取失败：${file}（${error.code ?? error.message}）；请在账号凭据里填 deviceId`, 401, 'doubao_device_id_missing');
+  }
+  const id = raw?.aha?.device?.device_id;
+  if (typeof id !== 'string' || !id.trim()) {
+    throw new AppError(`豆包设备标识未找到：${file} 里没有 aha.device.device_id；请在账号凭据里填 deviceId`, 401, 'doubao_device_id_missing');
+  }
+  return id.trim();
+}
 
 // 工作模式固定档位。对话模式那套 need_deep_think 0/1/3 不适用。
 const WORK_MODE = {agentMode: 1, needDeepThink: 10001, modeId: '3', conversationMode: '2'};
@@ -272,7 +297,7 @@ function flattenMessages(messages, system) {
   return blocks.map(([r, t]) => `<|im_start|>${r}\n${t}<|im_end|>`).join('\n');
 }
 
-export function doubaoBody(input, meta, deviceId = DEFAULT_DEVICE_ID) {
+export function doubaoBody(input, meta, deviceId) {
   const now = Date.now();
   const localMessageId = uuid();
   const text = flattenMessages(input.messages, input.system);
@@ -703,7 +728,7 @@ export async function doubaoChat(c, input, signal, {fetcher = fetch} = {}) {
   wireEffort(input?.reasoning_effort, meta.defaultEffort);
   // 同理，缺登录态属于 401 凭证问题，不能等 body 组装完才暴露。
   const cookie = doubaoCookie(c);
-  const deviceId = typeof c?.deviceId === 'string' && c.deviceId.trim() ? c.deviceId.trim() : DEFAULT_DEVICE_ID;
+  const deviceId = await doubaoDeviceId(c);
   // 带 tools 的请求走提示词桥：豆包没有原生工具通道，桥负责把工具定义交给模型并解析它的 JSON 回执。
   const toolList = Array.isArray(input?.tools) && input.tools.length ? input.tools : null;
   if (toolList) return doubaoBridge(c, input, meta, cookie, deviceId, toolList, signal, fetcher);
@@ -945,7 +970,7 @@ function quotaWindows(section) {
 
 // 只读：不触发任何领取动作。额度来自 subscription/quota/summary，活动进度来自 ug/campaign/v3/detail。
 export async function doubaoHealth(c, { fetcher = fetch } = {}) {
-  const deviceId = typeof c?.deviceId === 'string' && c.deviceId.trim() ? c.deviceId.trim() : DEFAULT_DEVICE_ID;
+  const deviceId = await doubaoDeviceId(c);
   const cookie = doubaoCookie(c);
   const [subscription, campaign, signIns] = await Promise.all([
     alicePost(fetcher, '/alice/commerce/sale/subscription/quota/summary/', { product_line: 'membership' }, cookie, deviceId),
@@ -1015,7 +1040,7 @@ async function readSignIns(fetcher, cookie, deviceId, {timezone = 'Asia/Shanghai
 
 // 只读：判断今天是否已签。返回 claims.mjs 需要的 {known,active,claimed,credits,details}。
 export async function doubaoStatus(c, {fetcher = fetch, timezone = 'Asia/Shanghai'} = {}) {
-  const deviceId = typeof c?.deviceId === 'string' && c.deviceId.trim() ? c.deviceId.trim() : DEFAULT_DEVICE_ID;
+  const deviceId = await doubaoDeviceId(c);
   const signIns = await readSignIns(fetcher, doubaoCookie(c), deviceId, {timezone});
   return {
     known: true,
@@ -1041,7 +1066,7 @@ export async function doubaoClaim(c, {fetcher = fetch, timezone = 'Asia/Shanghai
   if (before.claimed) {
     return {claimed: true, submitted: false, alreadyClaimed: true, mutation: false, credits: before.credits, details: before.details};
   }
-  const deviceId = typeof c?.deviceId === 'string' && c.deviceId.trim() ? c.deviceId.trim() : DEFAULT_DEVICE_ID;
+  const deviceId = await doubaoDeviceId(c);
   const cookie = doubaoCookie(c);
   const data = await alicePost(fetcher, '/alice/ug/campaign/item/reward/claim/', {campaign_item_code: SIGNIN_TASK_CODE}, cookie, deviceId);
   const biz = data?.biz_error ?? {};

@@ -1,7 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {DOUBAO_MODELS,doubaoModel,doubaoModels,doubaoCookie,doubaoChat} from '../src/provider-doubao.mjs';
+import {mkdtemp,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {DOUBAO_MODELS,doubaoModel,doubaoModels,doubaoCookie,doubaoChat,doubaoDeviceId} from '../src/provider-doubao.mjs';
 
-const c={cookie:'sessionid=fixture; sessionid_ss=fixture',deviceId:'810790401142921'};
+const c={cookie:'sessionid=fixture; sessionid_ss=fixture',deviceId:'100000000000001'};
 const enc=new TextEncoder();
 
 // 把豆包 SSE 事件列表拼成 Response；body 走 ReadableStream 以便流式分支按真实 read() 拉取。
@@ -15,6 +18,39 @@ async function capture(input,events=okStream('OK')){
   return {url:new URL(url),body,response};
 }
 async function drain(response){const t=await response.text();return t;}
+
+// 设备标识按安装而变，只能运行时读本机客户端；绝不回落到任何硬编码值。
+test('device id comes from the credential when the account supplies one',async()=>{
+  assert.equal(await doubaoDeviceId({deviceId:'  100000000000001  '}),'100000000000001');
+});
+
+test('device id falls back to the local client state, never to a baked-in value',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'doubao-state-'));
+  const file=join(dir,'Local State');
+  await writeFile(file,JSON.stringify({aha:{device:{device_id:'200000000000002'}}}),'utf8');
+  const saved=process.env.DOUBAO_LOCAL_STATE;
+  process.env.DOUBAO_LOCAL_STATE=file;
+  try{assert.equal(await doubaoDeviceId({}),'200000000000002');}
+  finally{if(saved===undefined)delete process.env.DOUBAO_LOCAL_STATE;else process.env.DOUBAO_LOCAL_STATE=saved;}
+});
+
+test('a missing local client state is a credential problem, not a silent default',async()=>{
+  const saved=process.env.DOUBAO_LOCAL_STATE;
+  process.env.DOUBAO_LOCAL_STATE=join(tmpdir(),'doubao-state-absent','Local State');
+  try{
+    await assert.rejects(()=>doubaoDeviceId({}),e=>e.status===401&&e.code==='doubao_device_id_missing');
+  }finally{if(saved===undefined)delete process.env.DOUBAO_LOCAL_STATE;else process.env.DOUBAO_LOCAL_STATE=saved;}
+});
+
+test('a local client state without aha.device is rejected instead of guessed',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'doubao-state-'));
+  const file=join(dir,'Local State');
+  await writeFile(file,JSON.stringify({aha:{}}),'utf8');
+  const saved=process.env.DOUBAO_LOCAL_STATE;
+  process.env.DOUBAO_LOCAL_STATE=file;
+  try{await assert.rejects(()=>doubaoDeviceId({}),e=>e.status===401&&e.code==='doubao_device_id_missing');}
+  finally{if(saved===undefined)delete process.env.DOUBAO_LOCAL_STATE;else process.env.DOUBAO_LOCAL_STATE=saved;}
+});
 
 test('catalog exposes exactly the ten client work-mode entries',()=>{
   const rows=doubaoModels();
@@ -51,11 +87,11 @@ test('request targets the desktop client endpoint with aid 582478 and device-der
   assert.equal(url.origin+url.pathname,'https://www.doubao.com/chat/completion');
   assert.equal(url.searchParams.get('aid'),'582478');
   assert.equal(url.searchParams.get('real_aid'),'582478');
-  assert.equal(url.searchParams.get('device_id'),'810790401142921');
-  assert.equal(url.searchParams.get('fp'),'verify_810790401142921');
-  assert.equal(url.searchParams.get('web_id'),'810790401142921');
-  assert.equal(url.searchParams.get('tea_uuid'),'810790401142921');
-  assert.equal(url.searchParams.get('web_tab_id'),'810790401142921-1');
+  assert.equal(url.searchParams.get('device_id'),'100000000000001');
+  assert.equal(url.searchParams.get('fp'),'verify_100000000000001');
+  assert.equal(url.searchParams.get('web_id'),'100000000000001');
+  assert.equal(url.searchParams.get('tea_uuid'),'100000000000001');
+  assert.equal(url.searchParams.get('web_tab_id'),'100000000000001-1');
   assert.equal(url.searchParams.get('doubao_device_platform'),'desktop');
   // 网页版 497858 会被判「访问频繁」，任何位置都不许出现
   for(const v of url.searchParams.values())assert.notEqual(v,'497858');

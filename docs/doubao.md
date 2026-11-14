@@ -9,12 +9,30 @@
 | 端点 | `https://www.doubao.com/chat/completion` | 只此一个推理入口 |
 | `aid` | `582478` | **桌面客户端**的 aid；网页版的 `497858` 会被判「访问频繁」 |
 | `bot_id` | `7338286299411103781` | 工作模式固定 bot |
-| `device_id` | 默认 `810790401142921` | 可在账号凭据里覆盖 |
+| `device_id` | 运行时读本机客户端 `Local State` 的 `aha.device.device_id`，或用凭据里的 `deviceId` 覆盖 | 每个安装都不同；读不到时报 `doubao_device_id_missing`，不会猜一个值 |
 | 签名 | 不需要 `a_bogus` / `msToken` | 缺的是同源浏览器头，不是签名 |
 
 `doubaoCookie(c)` 优先用凭据里的完整 `cookie` 字段；只给 `sessionid` 时兜底拼成 `sessionid=<sid>; sessionid_ss=<sid>`，但服务端会判 login invalid，**正常路径必须导入完整 cookie**。
 
 请求头必须带齐桌面客户端的同源标记，否则风控更容易把请求判成脚本：`origin` / `referer` / `user-agent`（Chrome 147）/ `agw-js-conv: str, str` / `x-flow-trace`（每次随机 `04-<uuid>-<hex16>-01`）/ `sec-ch-ua*` / `sec-fetch-*`。
+
+## 设备标识从哪里来
+
+`device_id` 不是常量。每个安装的豆包客户端把自己的标识写在
+`%LOCALAPPDATA%\Doubao\User Data\Local State` 的 `aha.device.device_id` 里，换机、重装都会变。
+网关按下面的顺序取，取不到就报错，绝不回落到硬编码值：
+
+1. 账号凭据里的 `deviceId`（显式覆盖，多机部署时用这个）；
+2. 环境变量 `DOUBAO_LOCAL_STATE` 指向的 Local State 文件；
+3. 默认路径 `%LOCALAPPDATA%\Doubao\User Data\Local State`。
+
+三条都取不到 `aha.device.device_id` 时抛 `doubao_device_id_missing`（401）——
+它属于凭据问题而不是传输问题，重试不会让它变好。
+
+Trae 的更新检查同理：`mid`/`did` 也是本机标识，运行时从
+`%APPDATA%\Trae CN\User\globalStorage\storage.json` 的 `telemetry.machineId`
+与 `iCubeAuthInfo://icube-dc:<deviceId>` 键读取（`traeIdentity()`），
+清单里不再写死任何一台机器的值。
 
 ## 模型目录
 

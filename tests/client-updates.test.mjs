@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {
   compareVersions, parseLatestYml, fieldValue, normalizeClientUpdates,
   readInstalledVersion, fetchLatestVersion, checkTarget, runClientUpdateCheck,
-  clientUpdateDue, mergeTargets
+  clientUpdateDue, mergeTargets, traeUpdateIdentity
 } from '../src/client-updates.mjs';
 
 test('compareVersions treats build suffixes as the same release', () => {
@@ -323,4 +323,28 @@ test('trae and codearts use their official update APIs', async () => {
   );
   assert.equal(codearts.latest, '26.10.1');
   assert.equal(codearts.source, 'codearts_release_api');
+});
+
+// Trae 的 mid/did 是本机设备指纹，逐机不同：只从客户端自己的 storage.json 读，
+// 并且复用 vendor 的 readTraeIdentity（它会用最新日志确认当前设备，而不是取第一个历史 ID）。
+test('trae update identity is read from the local client instead of a baked-in value',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'trae-upd-'));
+  try{
+    const dir=join(root,'Trae CN','User','globalStorage');
+    await mkdir(dir,{recursive:true});
+    await writeFile(join(dir,'storage.json'),JSON.stringify({
+      'telemetry.machineId':'machine-fixture',
+      'iCubeAuthInfo://icube-dc:100000000000001':'fixture-key'
+    }));
+    const id=await traeUpdateIdentity({edition:'cn',roaming:root});
+    assert.equal(id.mid,'machine-fixture');
+    assert.equal(id.did,'100000000000001');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('a missing Trae client state fails loudly instead of inventing an identity',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'trae-upd-'));
+  try{
+    await assert.rejects(()=>traeUpdateIdentity({edition:'cn',roaming:root}),/Trae 本机设备标识读取失败/);
+  }finally{await rm(root,{recursive:true,force:true});}
 });
