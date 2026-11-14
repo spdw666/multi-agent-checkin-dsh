@@ -15,13 +15,29 @@ import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor
 import {fetchWorkBuddyCreditDetails} from './workbuddy-resources.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {workBuddyChannelError,workBuddyChannelSkipped,workBuddyTransportChannel} from './workbuddy-channel.mjs';
-import {doubaoModels,doubaoChat,doubaoHealth,doubaoStatus,doubaoClaim} from './provider-doubao.mjs';
+import {doubaoModels,doubaoChat,doubaoHealth,doubaoStatus,doubaoClaim,doubaoProvider} from './provider-doubao.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
 import {AppError,jsonFetch,dayIn,errorView} from './util.mjs';
 import {restoreLoomyDailyQuota} from './daily-quota-receipt.mjs';
 import {qwenWorkContext} from './qwenwork.mjs';
 import {zcodePreview,zcodeStatus,zcodeClaim} from './zcode.mjs';
 import {miniMaxStatus,miniMaxClaim,miniMaxMembership} from './minimax.mjs';
+// 每个平台的可重复初始化声明来源。desktopProvider 系列来自 provider-registry，
+// 豆包直接从 provider 模块取（未进入 desktopProviderKinds，因为缺少 resolve 契约）。
+const DAILY_RECONCILIATION_SOURCES={
+  raccoon:()=>desktopProvider('raccoon'),
+  loomy:()=>desktopProvider('loomy'),
+  doubao:async()=>doubaoProvider,
+};
+
+// 上游目录把 trae 全部模型的 context_window 声明成 200000（prompt_max_tokens），
+// 但实测有反例：usage_calls 2026-11-13T15:00:03.283Z 的
+// trae-code-cn/deepseek-v4.1-flash 发过 435545 prompt tokens 并 completed
+// （dispatchCount:1，序列化 1669225 字节、97 条消息、497 个工具、带图）。
+// 声明值偏保守，这里按实测下限抬高，只抬有真凭据的模型：
+// 无证据的模型保持上游声明，避免误导调用方发出超窗请求后被上游 400。
+const TRAE_MEASURED_CONTEXT_FLOORS=Object.freeze({'deepseek-v4.1-flash':400000});
+
 export class Platforms {
   constructor(config,credentials){this.config=config;this.credentials=credentials;this.wb=new WorkBuddyUpstreamClient();this.quotaCache=new Map();this.catalogs=new Map();this.catalogFlights=new Map();this.trae=new Map();}
   account(id){return this.credentials.account(id);}
@@ -40,16 +56,32 @@ export class Platforms {
     if(newer.accessToken===credential.accessToken&&(newer.domain??'')===(credential.domain??''))return null;
     return newer;
   }
+  async reconciliationSource(id) {
+    const a=this.account(id);
+    const source=DAILY_RECONCILIATION_SOURCES[a.platform];
+    if(!source)return null;
+    const p=await source();
+    return p?{platform:a.platform,provider:p}:null;
+  }
+  // Is repeatable initialization declared for exactly this platform and task?
+  // Both the mode lookup and the caller's fencing rely on this single answer.
+  async dailyReconciliationDeclared(id,task) {
+    const s=await this.reconciliationSource(id);
+    if(!s)return false;
+    return (s.provider.dailyReconciliationTasks??s.provider.descriptor?.dailyReconciliationTasks)?.includes(task)===true;
+  }
   async dailyReconciliationMode(id,task) {
     // A protocol migration, not a caller-provided escape from POST fencing.
-    // Only Raccoon's native GET initialization and Loomy's server-idempotent
-    // first-login initialization are repeatable. Pet-work/reward POSTs are not.
-    const a=this.account(id);
-    if(!['raccoon','loomy'].includes(a.platform)||task!=='daily-quota')return null;
-    const p=await desktopProvider(a.platform);
-    if(!(p.dailyReconciliationTasks??p.descriptor?.dailyReconciliationTasks)?.includes(task))return null;
-    return a.platform==='raccoon'?'native-session-get':(p.dailyReconciliationMode??p.descriptor?.dailyReconciliationMode)==='idempotent-first-login'?'idempotent-first-login':null;
+    // Repeatability is declared by the provider itself: Raccoon's native GET
+    // initialization, Loomy's and Doubao's server-idempotent first-login
+    // initialization. Pet-work/reward POSTs are not.
+    const s=await this.reconciliationSource(id);
+    if(!s)return null;
+    if(!(s.provider.dailyReconciliationTasks??s.provider.descriptor?.dailyReconciliationTasks)?.includes(task))return null;
+    if(s.platform==='raccoon')return 'native-session-get';
+    return (s.provider.dailyReconciliationMode??s.provider.descriptor?.dailyReconciliationMode)==='idempotent-first-login'?'idempotent-first-login':null;
   }
+
   async qwenContext(id,c) {
     try{return await qwenWorkContext(c)}catch(e){if(e.status!==401)throw e;const newer=await this.credentials.refreshQwen(id);return qwenWorkContext(newer);}
   }
@@ -110,6 +142,8 @@ export class Platforms {
       const remote=await stack.remote.fetchModels(signal).catch(()=>[]);
       ensureSource();
       list=mergeTraeModelSources(remote,wire).map(m=>({...m,tools:true,multimodal:m.multimodal===true,callable:!!(m.wireFunction||wire.some(w=>w.id===m.id)),...(!(m.wireFunction||wire.some(w=>w.id===m.id))?{unavailableReason:'当前 SOLO 调用目录未提供该模型；仅发现展示目录条目'}:{})}));
+      // 声明值 → 实测下限（只抬有实测证据的模型，且不降级上游更大的声明）。
+      list=list.map(m=>{const floor=TRAE_MEASURED_CONTEXT_FLOORS[m.id];return floor&&(!m.contextWindow||m.contextWindow<floor)?{...m,contextWindow:floor,contextWindowSource:'gateway_measured_floor',declaredContextWindow:m.contextWindow??null}:m;});
       for(const m of list){if(m.callable)stack.wire.set(m.id,{configName:m.wireConfigName??m.id,function:m.wireFunction??wire.find(w=>w.id===m.id)?.function,reasoningEfforts:m.reasoningEfforts});}
       // Retain direct wire mapping even if the remote directory is temporarily absent.
       for(const m of wire){if(m.id&&!stack.wire.has(m.id))stack.wire.set(m.id,{configName:m.id,function:m.wireFunction??m.function});}

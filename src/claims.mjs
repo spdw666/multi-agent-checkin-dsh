@@ -12,7 +12,7 @@ export class ClaimService {
     const account=this.config.value.accounts.find(a=>a.id===accountId),day=videoDailyClaimDay(account?.platform,new Date(),this.config.value.scheduler.timezone);
     const automatic=context.trigger==='automatic';
     const base={day,platform:account?.platform??'unknown',accountId,task:taskId,trigger:automatic?'automatic':'manual',triggerSource:automatic?context.source??'scheduler':'direct',operationAttempted:false,automaticOperationConfirmed:false,automaticRewardConfirmed:false};
-    let key,reserved=false,reservationId,wrote=false,previousUncertain=false,readOnlyDaily=false,reconcilableDaily=false;
+    let key,reserved=false,reservationId,wrote=false,previousUncertain=false,readOnlyDaily=false,reconcilableDaily=false,declaredDaily=false;
     const finish=(status,result={})=>{
       const provenance={trigger:base.trigger,triggerSource:base.triggerSource,operationAttempted:base.operationAttempted,automaticOperationConfirmed:base.automaticOperationConfirmed,automaticRewardConfirmed:base.automaticRewardConfirmed};
       result={...provenance,...(base.campaignId?{campaignId:base.campaignId}:{}),...result};
@@ -34,8 +34,11 @@ export class ClaimService {
       const task=account.tasks?.find(t=>t.id===taskId);if(!task?.enabled)return finish('skipped',{reason:'task_disabled'});
       const c=await this.credentials.resolve(accountId);
       const mode=await this.platforms.dailyReconciliationMode?.(accountId,taskId);
-      readOnlyDaily=account.platform==='raccoon'&&taskId==='daily-quota'&&mode==='native-session-get';
-      reconcilableDaily=readOnlyDaily||account.platform==='loomy'&&taskId==='daily-quota'&&mode==='idempotent-first-login';
+      // mode 只是候选：还要 provider 真的为这个 platform+task 声明过可重复初始化。
+      // 声明缺失一律按不可重试处理，:89 的 POST fencing 原样生效。
+      declaredDaily=!mode?false:await this.platforms.dailyReconciliationDeclared?.(accountId,taskId)===true;
+      readOnlyDaily=declaredDaily&&mode==='native-session-get';
+      reconcilableDaily=declaredDaily&&(mode==='native-session-get'||mode==='idempotent-first-login');
       // Qoder campaigns roll over at 10:00 CST, not at the ledger's midnight.
       let before;
       if(account.platform==='qoder'||account.platform==='codearts'){

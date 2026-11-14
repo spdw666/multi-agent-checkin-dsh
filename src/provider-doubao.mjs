@@ -19,8 +19,6 @@ const AID = 582478;
 const DOUBAO_LOCAL_STATE = () => process.env.DOUBAO_LOCAL_STATE
   || join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData/Local'), 'Doubao/User Data/Local State');
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
-
 export async function doubaoDeviceId(c) {
   const explicit = typeof c?.deviceId === 'string' ? c.deviceId.trim() : '';
   if (explicit) return explicit;
@@ -37,6 +35,7 @@ export async function doubaoDeviceId(c) {
   }
   return id.trim();
 }
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 
 // 工作模式固定档位。对话模式那套 need_deep_think 0/1/3 不适用。
 const WORK_MODE = {agentMode: 1, needDeepThink: 10001, modeId: '3', conversationMode: '2'};
@@ -951,6 +950,31 @@ function parseAmount(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// 活动额度池（doubao_activity_reward_quota）的只读视图。签到奖励由这个池子发放，
+// 池子用到 100% 后上游对 claim 只回「当前暂不符合领取条件」，再 POST 就是白打。
+// 只认 used_percent / total_amount / used_amount 三个上游字段；读不到返回 null 表示
+// 「未判定」，永不因为读不到而拦住签到。
+const ACTIVITY_REWARD_GROUP = 'doubao_activity_reward_quota';
+
+function activityQuotaView(subscription) {
+  const groups = subscription?.incentive_quota_section?.window_limit_groups ?? [];
+  for (const g of groups) {
+    if (g?.feature_group !== ACTIVITY_REWARD_GROUP) continue;
+    for (const w of g?.window_limits ?? []) {
+      const usedPercent = parseAmount(w?.used_percent);
+      return {
+        group: g.feature_group,
+        usedPercent,
+        totalAmount: parseAmount(w?.total_amount),
+        usedAmount: parseAmount(w?.used_amount),
+        exhausted: usedPercent !== null && usedPercent >= 100,
+        expiresAt: Number.isFinite(w?.end_time) && w.end_time > 0 ? new Date(w.end_time).toISOString() : null,
+      };
+    }
+  }
+  return null;
+}
+
 function quotaWindows(section) {
   const out = [];
   for (const g of section?.window_limit_groups ?? []) {
@@ -999,6 +1023,7 @@ export async function doubaoHealth(c, { fetcher = fetch } = {}) {
     },
     quotas,
     remaining,
+    activityQuota: activityQuotaView(subscription),
     campaign: campaignView,
     checkedIn: signIns.today !== null,
     signIn: {
@@ -1041,11 +1066,24 @@ async function readSignIns(fetcher, cookie, deviceId, {timezone = 'Asia/Shanghai
 // 只读：判断今天是否已签。返回 claims.mjs 需要的 {known,active,claimed,credits,details}。
 export async function doubaoStatus(c, {fetcher = fetch, timezone = 'Asia/Shanghai'} = {}) {
   const deviceId = await doubaoDeviceId(c);
-  const signIns = await readSignIns(fetcher, doubaoCookie(c), deviceId, {timezone});
+  const cookie = doubaoCookie(c);
+  const signIns = await readSignIns(fetcher, cookie, deviceId, {timezone});
+  const claimed = signIns.today !== null;
+  // 已签的账号不需要额度池：省掉这次只读请求，减少上游可见面。
+  const activity = claimed ? null
+    : await alicePost(fetcher, '/alice/commerce/sale/subscription/quota/summary/', {product_line: 'membership'}, cookie, deviceId)
+        .then(r => activityQuotaView(r)).catch(() => null);
+  // 活动额度池用尽时上游对 claim 只回「当前暂不符合领取条件」。这里把 active 置 false：
+  // claims.mjs 会记 not_available 而不是 uncertain，当天不白打上游，也不污染重试门禁。
+  // used_percent 一回落（< 100），下一次 status 读到的 active 自动恢复，签到立刻继续，
+  // 无需任何人工解锁。
+  const exhausted = !claimed && activity?.exhausted === true;
   return {
     known: true,
-    active: true,
-    claimed: signIns.today !== null,
+    active: !exhausted,
+    claimable: !exhausted,
+    ...(exhausted ? {reason: 'activity_quota_exhausted'} : {}),
+    claimed,
     credits: signIns.todayCredits,
     day: signIns.today ?? signIns.day,
     details: {
@@ -1056,6 +1094,7 @@ export async function doubaoStatus(c, {fetcher = fetch, timezone = 'Asia/Shangha
       sampleDays: signIns.history.length,
       history: signIns.history.slice(0, 8),
       lastSignInAt: signIns.history[0]?.at ?? null,
+      ...(activity ? {activityQuota: activity} : {}),
     },
   };
 }
@@ -1066,12 +1105,32 @@ export async function doubaoClaim(c, {fetcher = fetch, timezone = 'Asia/Shanghai
   if (before.claimed) {
     return {claimed: true, submitted: false, alreadyClaimed: true, mutation: false, credits: before.credits, details: before.details};
   }
+  // 正常路径由 claims.mjs 用 status.active 在发请求之前拦下；这里兜底，防止任何
+  // 直接调用者绕过去白打上游。beforeSubmission 表明「一个字节都没发」。
+  if (before.active === false) {
+    const error = new AppError(`豆包签到暂不可领：${before.reason ?? 'activity_inactive'}`, 503, 'doubao_claim_temporarily_unavailable');
+    error.retryable = true;
+    error.beforeSubmission = true;
+    throw error;
+  }
   const deviceId = await doubaoDeviceId(c);
   const cookie = doubaoCookie(c);
   const data = await alicePost(fetcher, '/alice/ug/campaign/item/reward/claim/', {campaign_item_code: SIGNIN_TASK_CODE}, cookie, deviceId);
   const biz = data?.biz_error ?? {};
   if (Number(biz.code ?? 0) !== 0) {
-    throw new AppError(`豆包签到被拒：${biz.message ?? 'unknown'}`, 409, 'doubao_claim_rejected');
+    const message = biz.message ?? 'unknown';
+    // 上游对「今天还没到可领时点 / 活动刚重置 / 名额瞬时占用」这类情况也会回 biz_error，
+    // 它们不是账号不可领。只有明确的终局措辞才算定论拒绝；其余标记 retryable，
+    // 由 claims.mjs 记为 uncertain 后按调度器 backoff 重新 POST。
+    const terminal = /已结束|已下线|不存在|无此活动|已领取完毕|活动已停|已失效/.test(message);
+    const error = new AppError(
+      `豆包签到被拒：${message}`,
+      terminal ? 409 : 503,
+      terminal ? 'doubao_claim_rejected' : 'doubao_claim_temporarily_unavailable',
+    );
+    error.retryable = !terminal;
+    error.definitiveRejection = terminal;
+    throw error;
   }
   // 回执说成功不算数：接口对「今天已领」同样回成功。用流水复验（0/400/1200ms）。
   let after = null;
@@ -1094,3 +1153,11 @@ export async function doubaoClaim(c, {fetcher = fetch, timezone = 'Asia/Shanghai
     },
   };
 }
+
+// 能力声明。豆包的任务名是 daily-checkin（不是 daily-quota），且 claim 走 POST 但
+// 服务端幂等（今天已领再调仍回「领取成功」而不新增流水），因此可安全重复初始化的
+// 语义与 Loomy 的 idempotent-first-login 一致：重复提交只会有一次真实入账。
+export const doubaoProvider = {
+  dailyReconciliationTasks: Object.freeze(['daily-checkin']),
+  dailyReconciliationMode: 'idempotent-first-login',
+};
