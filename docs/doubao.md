@@ -123,6 +123,9 @@ Trae 的更新检查同理：`mid`/`did` 也是本机标识，运行时从
 - `doubaoHealth()` 只读，并发拉三个接口：`/alice/commerce/sale/subscription/quota/summary/`（`product_line=membership`，额度）、`/alice/ug/campaign/v3/detail/`（`campaign_group_code=pc_incentive_task_mvp_v3`，活动进度，失败则 `null`）、以及签到流水。额度取 `incentive_quota_section` + `window_limit_section` 的 `window_limit_groups[].window_limits[]`，`remaining = total - used`，`expiresAt` 来自 `end_time`。
 - 签到**不是** campaign landing 接口——那套 `scene` 对任意值都返回空壳，不可枚举。真实来源是额度流水：`POST /alice/ug/campaign/quota/records/` 里 `task_code === 'daily_signin'` 的记录，每条 +200 POINT。
 - 领取是 `POST /alice/ug/campaign/item/reward/claim/`，body `{"campaign_item_code":"daily_signin"}`。**该接口是幂等的：今天已领也会回「领取成功」，所以结算只认流水是否新增**。`doubaoClaim()` 领取后在 0 / 400 / 1200ms 三次复验 `doubaoStatus()`，`verifiedBy` 如实写 `quota_records_after_claim` 或 `quota_records_unchanged`，回执文案放进 `rewardToast` 仅作展示。
+- 签到奖励由活动额度池 `doubao_activity_reward_quota` 发放。`quota/summary/` 里该池的 `used_percent` 到达 100 时，上游对领取只会回「当前暂不符合领取条件」——**这不是凭据或接口故障，而是池子已经用完**。此时 `doubaoStatus()` 返回 `active:false` + `reason:'activity_quota_exhausted'`，领取流程据此**跳过 POST**（一个字节都不发），并把本轮记成 `not_available` 而不是 `uncertain`；`used_percent` 回落到 100 以下时 `active` 自动恢复，无需人工解锁。
+- 领取失败要分两类，不能一律当终局：命中 `/已结束|已下线|不存在|无此活动|已领取完毕|活动已停|已失效/` 才是终局（409 `doubao_claim_rejected` + `definitiveRejection`），其余（含「暂不符合」）都是可重试的 503 `doubao_claim_temporarily_unavailable`。**把可重试错误当终局，会让当天的签到被永久锁死**——一次性拒绝不应该等于今天的资格作废。
+- 豆包因此声明了可重复初始化能力：`doubaoProvider = { dailyReconciliationTasks: ['daily-checkin'], dailyReconciliationMode: 'idempotent-first-login' }`。依据就是上面那条幂等性——重复初始化安全，结算始终只看流水是否新增。
 
 `doubaoStatus()` 返回 `claims.mjs` 需要的 `{known, active, claimed, credits, day, details}`；`details` 带 `source`、`taskCode`、`creditsPerDay`、`sampleDays`、最近 8 条 `history`、`lastSignInAt`，便于排查"为什么今天判成已签"。
 
