@@ -23,4 +23,6 @@ vendor/trae-core.mjs
 /desktop/webview-shell/user-data/
 /desktop/webview-shell/prerequisites/*.exe
 /proof/
+# 本地探测记录，含账号级 entitlement 流水，不入库
+docs/platform-probes.json
 *.zip
