@@ -196,7 +196,11 @@ test('fetchLatestVersion reads official page patterns and the Trae manifest', as
   assert.equal(page.source, 'official_page');
 
   const trae = await fetchLatestVersion(
-    {latest: {type: 'trae', url: 'https://api.trae.test/check_update'}},
+    // mid/did 是本机设备指纹：这里显式注入，避免测试去读运行机器的 Trae 客户端状态
+    // （CI runner 上没有 Trae CN，storage.json 必然 ENOENT）。身份读取本身由
+    // 「trae update identity is read from the local client」与「a missing Trae client
+    // state fails loudly」两条测试单独覆盖。
+    {latest: {type: 'trae', url: 'https://api.trae.test/check_update', mid: 'm1', did: 'd1'}},
     {installed: '3.4.3', fetchImpl: okJson({data: {manifest: {win32: {version: '2.3.92182'}}}})}
   );
   assert.equal(trae.latest, '2.3.92182');
