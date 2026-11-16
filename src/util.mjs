@@ -29,6 +29,20 @@ export function redact(value) {
   return text.replace(/Bearer\s+[^\s"',]+/gi, 'Bearer [REDACTED]').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[JWT]');
 }
 export const errorView = e => ({code: e.code ?? 'upstream_error', message: redact(e.message ?? String(e)).slice(0, 500), status: e.status ?? 502});
+// Electron clients launched by this gateway must stay GUI apps. When
+// ELECTRON_RUN_AS_NODE is inherited (electron-builder, playwright and other Node
+// toolchains set it, and a harness may pass it down to us), Electron degrades to a
+// bare Node runtime: the app prints node's usage and exits 0 within a second.
+// spawn() still reports success and no 'error' event fires, so the only symptom is
+// a process that vanishes - see the MiniMax lease renewal investigation.
+export function electronLaunchEnv(base = process.env) {
+  const env = {...base};
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  delete env.ELECTRON_ENABLE_LOGGING;
+  delete env.ELECTRON_ENABLE_STACK_DUMPING;
+  return env;
+}
 export function localPath(value, base) {
   const expanded = String(value).replace(/^~(?=[\\/]|$)/, homedir()).replace(/%([^%]+)%/g,(_,key)=>process.env[key]??`%${key}%`);
   return isAbsolute(expanded) ? resolve(expanded) : resolve(base,expanded);

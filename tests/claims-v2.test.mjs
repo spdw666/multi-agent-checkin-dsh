@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,mkdir,writeFile} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,utimes} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import net from 'node:net';
 import http from 'node:http';
 import {createHash} from 'node:crypto';
 import {miniMaxRequest,miniMaxStatus,miniMaxClaim} from '../src/minimax.mjs';
-import {miniMaxLeaseEndpoint,requestMiniMaxLease,readMiniMaxDesktop} from '../src/minimax-desktop.mjs';
+import {miniMaxLeaseEndpoint,miniMaxLeaseTargets,requestMiniMaxLease,readMiniMaxDesktop} from '../src/minimax-desktop.mjs';
 import {qwenRequest} from '../src/qwenwork.mjs';
 import {CredentialManager,resolveCredentialFile} from '../src/credentials.mjs';
 import {Ledger} from '../src/store.mjs';
 import {ClaimService} from '../src/claims.mjs';
 import {Scheduler} from '../src/scheduler.mjs';
 import {zcodeStatus,zcodeClaim,zcodeReceiptKey} from '../src/zcode.mjs';
-import {hash,dayIn,AppError} from '../src/util.mjs';
+import {hash,dayIn,AppError,electronLaunchEnv} from '../src/util.mjs';
 const credential={accessToken:'fixture-opaque-token',principal:'account-a',region:'cn',authMode:'desktop-oauth',webIdentity:{device_id:'device-a',user_id:'account-a'}};
 const temp=()=>mkdtemp(join(tmpdir(),'credit-v2-'));
 test('MiniMax native OAuth uses bearer, mcode and account-owned device; POST signs exact JSON',()=>{
@@ -30,6 +30,29 @@ test('MiniMax real shape: today status 2 -> 3 and claim_result 1/2; malformed re
  await assert.rejects(miniMaxClaim(credential,{fetchImpl:async()=>Response.json({base_resp:{status_code:0},data:{claim_result:0}})}));
 });
 test('MiniMax lease endpoint canonicalizes Windows profile paths',()=>{const a=miniMaxLeaseEndpoint('C:\\Users\\SAMPLE\\.minimax\\','win32'),b=miniMaxLeaseEndpoint('c:\\users\\sample\\.minimax','win32');assert.equal(a.endpoint,b.endpoint);assert.equal(a.capabilityFile.toLowerCase(),b.capabilityFile.toLowerCase());});
+test('MiniMax 3.1.15 per-instance lease directories are discovered newest first',async()=>{ const dir=await temp(),run=join(dir,'run');await mkdir(run);const older=join(run,'mt-older'),newer=join(run,'mt-newer');
+ for(const d of [older,newer]){await mkdir(d);await writeFile(join(d,'mcode-auth-lease-v1.cap'),'a'.repeat(43));}
+ await utimes(join(older,'mcode-auth-lease-v1.cap'),1,1);
+ const targets=await miniMaxLeaseTargets(dir),digest=p=>createHash('sha256').update(p.toLowerCase()).digest('hex').slice(0,16);
+ if(process.platform==='win32'){
+  assert.equal(targets[0].capabilityFile,join(newer,'mcode-auth-lease-v1.cap'));
+  assert.equal(targets[0].endpoint,'\\\\.\\pipe\\mcode-auth-lease-'+digest(newer));
+  assert.equal(targets[1].capabilityFile,join(older,'mcode-auth-lease-v1.cap'));
+  assert.equal(targets.at(-1).capabilityFile,join(run,'mcode-auth-lease-v1.cap'));
+ }else{assert.deepEqual(targets,[{endpoint:join(dir,'run/mcode-auth-lease-v1.sock'),capabilityFile:join(run,'mcode-auth-lease-v1.cap')}]);}
+ await rm(dir,{recursive:true,force:true});
+});
+test('MiniMax autoLaunch strips Electron run-as-node so the client stays a GUI app',()=>{
+ const base={PATH:'/usr/bin',HOSTNAME:'h',ELECTRON_RUN_AS_NODE:'1',ELECTRON_NO_ATTACH_CONSOLE:'1',ELECTRON_ENABLE_LOGGING:'1',ELECTRON_ENABLE_STACK_DUMPING:'1'};
+ const env=electronLaunchEnv(base);
+ assert.equal(env.ELECTRON_RUN_AS_NODE,undefined);
+ assert.equal(env.ELECTRON_NO_ATTACH_CONSOLE,undefined);
+ assert.equal(env.ELECTRON_ENABLE_LOGGING,undefined);
+ assert.equal(env.ELECTRON_ENABLE_STACK_DUMPING,undefined);
+ assert.equal(env.PATH,'/usr/bin');
+ assert.equal(env.HOSTNAME,'h');
+ assert.equal(base.ELECTRON_RUN_AS_NODE,'1','the caller env must not be mutated');
+});
 test('MiniMax local lease handles fragmented frames and rejects a mismatched audience',async()=>{
  const dir=await temp(),cap=join(dir,'mcode-auth-lease-v1.cap'),endpoint=process.platform==='win32'?'\\\\.\\pipe\\credit-test-'+process.pid:join(dir,'test.sock');await writeFile(cap,'a'.repeat(43));let invalid=false;
  const server=net.createServer(socket=>{let b=Buffer.alloc(0);socket.on('data',chunk=>{b=Buffer.concat([b,chunk]);if(b.length<4||b.length<4+b.readUInt32BE(0))return;const r=JSON.parse(b.subarray(4).toString());assert.equal(r.capability,'a'.repeat(43));const payload=Buffer.from(JSON.stringify({version:1,requestId:r.requestId,ok:true,result:{method:'lease',accessToken:'fixture-lease',expiresAtMs:Date.now()+600000,generation:1,audience:invalid?'wrong':'agent-backend',scopes:['agent.default']}})),frame=Buffer.alloc(4+payload.length);frame.writeUInt32BE(payload.length);payload.copy(frame,4);socket.write(frame.subarray(0,3));setTimeout(()=>socket.end(frame.subarray(3)),5);});});

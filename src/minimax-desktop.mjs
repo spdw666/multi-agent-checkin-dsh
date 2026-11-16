@@ -1,13 +1,19 @@
 import net from 'node:net';
-import {readFile,access} from 'node:fs/promises';
+import {readFile,access,readdir,stat} from 'node:fs/promises';
 import {join,dirname,resolve,win32} from 'node:path';
 import {homedir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
-import {AppError,readJson,rememberSecret} from './util.mjs';
+import {AppError,readJson,rememberSecret,electronLaunchEnv} from './util.mjs';
 
 // Independent client for the installed application's v1 local auth-lease protocol.
 // No native implementation is distributed, and refresh tokens stay in the client's store.
+//
+// 3.1.15+ changed the runtime layout: the broker no longer binds
+// <dataDir>/run/mcode-auth-lease-v1.cap. Each client launch mints a private
+// <dataDir>/run/<instance>/ directory whose path (not <dataDir>) derives both
+// the capability file location and the named-pipe digest, and stale instance
+// directories are left behind. Discovery therefore has to enumerate them.
 export function miniMaxLeaseEndpoint(dataDir,platform=process.platform) {
   if(platform==='win32') {
     const canonical=win32.normalize(dataDir).replace(/[\\/]+$/,'');
@@ -15,6 +21,23 @@ export function miniMaxLeaseEndpoint(dataDir,platform=process.platform) {
     return {endpoint:'\\\\.\\pipe\\mcode-auth-lease-'+digest,capabilityFile:win32.join(canonical,'run/mcode-auth-lease-v1.cap')};
   }
   return {endpoint:join(dataDir,'run/mcode-auth-lease-v1.sock'),capabilityFile:join(dataDir,'run/mcode-auth-lease-v1.cap')};
+}
+const instanceDigest=dir=>createHash('sha256').update(win32.normalize(dir).replace(/[\\/]+$/,'').toLowerCase()).digest('hex').slice(0,16);
+// Newest live instance directory first, then the pre-3.1.15 fixed layout. The
+// capability file is the liveness marker: the broker rewrites it on launch.
+export async function miniMaxLeaseTargets(dataDir,platform=process.platform) {
+  const fixed=miniMaxLeaseEndpoint(dataDir,platform);
+  if(platform!=='win32')return [fixed];
+  const run=win32.join(win32.normalize(dataDir).replace(/[\\/]+$/,''),'run');
+  const found=[];
+  for(const name of await readdir(run).catch(()=>[])){
+    const dir=win32.join(run,name),capabilityFile=win32.join(dir,'mcode-auth-lease-v1.cap');
+    const info=await stat(capabilityFile).catch(()=>null);
+    if(!info?.isFile())continue;
+    found.push({endpoint:'\\\\.\\pipe\\mcode-auth-lease-'+instanceDigest(dir),capabilityFile,mtimeMs:info.mtimeMs});
+  }
+  found.sort((a,b)=>b.mtimeMs-a.mtimeMs);
+  return [...found.map(({endpoint,capabilityFile})=>({endpoint,capabilityFile})),fixed];
 }
 export async function requestMiniMaxLease(dataDir,{timeout=12000,endpoint:explicitEndpoint}={}) {
   const {endpoint,capabilityFile}=explicitEndpoint??miniMaxLeaseEndpoint(dataDir);
@@ -43,23 +66,47 @@ export async function requestMiniMaxLease(dataDir,{timeout=12000,endpoint:explic
   });
 }
 export function miniMaxRuntimeDir(account,config) {return account.credentials.runtimeDataDir?config.path(account.credentials.runtimeDataDir):resolve(process.env.MINIMAX_DATA_DIR??join(homedir(),'.minimax'));}
+// Electron honours ELECTRON_RUN_AS_NODE by degrading into a plain Node runtime, so a
+// launcher that inherited it (Harness, CI, a node-based installer) starts the client
+// and watches it exit 0 within a second. Strip the switch for the child only.
 async function startNative(account,config) {
   const candidates=account.credentials.executable&&account.credentials.executable!=='auto'?[config.path(account.credentials.executable)]:[process.env.MINIMAX_CODE_EXE,'D:/MiniMax Code/MiniMax Code.exe',join(process.env.LOCALAPPDATA??homedir(),'Programs/MiniMax Code/MiniMax Code.exe')].filter(Boolean);
-  for(const file of candidates)try{await access(file);const child=spawn(file,[],{windowsHide:true,detached:true,stdio:'ignore'});child.on('error',()=>{});child.unref();return true}catch{}
+  const env=electronLaunchEnv();
+  for(const file of candidates)try{await access(file);const child=spawn(file,[],{windowsHide:true,detached:true,stdio:'ignore',env,cwd:dirname(file)});child.on('error',()=>{});child.unref();return true}catch{}
   return false;
 }
 export async function readMiniMaxDesktop(file,account,config,{leaseRequest=requestMiniMaxLease}={}) {
   const runtime=miniMaxRuntimeDir(account,config),region=account.region==='intl'?'intl':'cn';
-  const raw=await readJson(file),service='com.minimax.mcode.oauth.prod.'+(region==='intl'?'en':'cn');
-  const records=Object.entries(raw.records??{}).filter(([k,v])=>k.split('\0')[0]===service&&v.clientId==='mcode-public'&&v.audience==='agent-backend');
-  if(records.length!==1)throw new AppError('MiniMax Code 本机登录态尚未就绪',401,'minimax_login_required');
-  const stored=records[0][1];rememberSecret(stored.accessToken);rememberSecret(stored.refreshToken);
+  const service='com.minimax.mcode.oauth.prod.'+(region==='intl'?'en':'cn');
+  // Re-reading is the point: a native renewal rewrites this file while we wait,
+  // so the snapshot taken before the first attempt is never the last word.
+  const readStored=async()=>{
+    const raw=await readJson(file);
+    const records=Object.entries(raw.records??{}).filter(([k,v])=>k.split('\0')[0]===service&&v.clientId==='mcode-public'&&v.audience==='agent-backend');
+    if(records.length!==1)throw new AppError('MiniMax Code 本机登录态尚未就绪',401,'minimax_login_required');
+    const stored=records[0][1];rememberSecret(stored.accessToken);rememberSecret(stored.refreshToken);return stored;
+  };
+  let stored=await readStored();
+  const targets=async()=>await miniMaxLeaseTargets(runtime).catch(()=>[miniMaxLeaseEndpoint(runtime)]);
+  const tryLease=async()=>{
+    let last;
+    for(const target of await targets()){try{return await leaseRequest(runtime,{endpoint:target})}catch(e){if(e.code==='minimax_login_required')throw e;last=e}}
+    throw last??new AppError('MiniMax Code 登录续期服务尚未运行',401,'minimax_broker_unavailable');
+  };
   let lease;
-  try {lease=await leaseRequest(runtime)}catch(e){
+  try {lease=await tryLease()}catch(e){
     if(e.code==='minimax_login_required')throw e;
     if(stored.expiresAtMs>Date.now()+30000)lease=stored;
-    else if(account.credentials.autoLaunch!==false&&await startNative(account,config)) {
-      for(let i=0;i<30;i++){await new Promise(r=>setTimeout(r,1000));try{lease=await leaseRequest(runtime);break}catch{}}
+    else {
+      if(account.credentials.autoLaunch!==false)await startNative(account,config);
+      // A cold Electron launch publishes its instance directory well after the
+      // process appears, so give it a full minute rather than the old 30s.
+      for(let i=0;i<60;i++){
+        await new Promise(r=>setTimeout(r,1000));
+        stored=await readStored().catch(()=>stored);
+        try {lease=await tryLease();break}catch{}
+        if(stored.expiresAtMs>Date.now()+30000){lease=stored;break;}
+      }
     }
   }
   if(!lease)throw new AppError('MiniMax Code 登录态到期，客户端续期尚未完成',401,'minimax_refresh_pending');

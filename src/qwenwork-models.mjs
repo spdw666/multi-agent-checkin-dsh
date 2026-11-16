@@ -21,11 +21,22 @@ export function qwenCosy(c,url,body='') {
  return {Authorization:`Bearer COSY.${head}.${digest}`,'Cosy-Key':key,'Cosy-User':c.principal,'Cosy-Date':date};
 }
 export function qwenModelHeaders(model='qwork-advanced') {return {'Content-Type':'application/json','User-Agent':'qoderwork/1.2.5','X-QwenWork-Version':'1.2.5','X-QwenWork-Release-Version':'1.2.5-26092902','X-QwenWork-Build':'26092902','X-QwenWork-Platform':process.platform,'X-QwenWork-Arch':process.arch,'X-QwenWork-Channel':'stable','Cosy-Version':'1.1.32','Cosy-ClientType':'6','Cosy-Business-Product':'qoder_work','Cosy-Business-Type':'agent','Cosy-Scene':'qwork','Cosy-MachineOS':'x86_64_win32','Cosy-MachineType':'5','Cosy-Data-Policy':'disagree','Login-Version':'v2','X-Model-Key':model,'X-Model-Source':'system','x-internal-model-key':model};}
+// QwenWork's model list reports max_input_tokens and context_config but never an output
+// ceiling. Its envelope refuses parameters.max_tokens above 65536 with HTTP 406, and the
+// refusal comes back in seconds instead of after the budget is spent
+// (_probe/probe-gateway-longtask.mjs sweep over the live gateway: 4096/8192/16384/32768/65536
+// accepted, 73728/81920/98304/114688/131072 rejected). 65536 itself streams to finish=length
+// in ~178s, which is why the qwenwork routes carry a 600s request budget in config.local.json.
+// Tool calling was measured working on all 13 models of the live catalog
+// (_probe/probe-qwenwork-tools.mjs), which is why no per-model allow-list is applied here:
+// the earlier ['flash','pro','qwen3.8-max-preview'] list only mirrored what had been probed
+// by hand and left the other ten models permanently reported as unverified.
+const QWEN_OUTPUT_BUDGET = 65536;
 export async function qwenWorkModels(c){
  const url=origin+'/api/v2/model/list';const r=await fetch(url,{headers:{...qwenModelHeaders(),...qwenCosy(c,url)},signal:AbortSignal.timeout(30000)});
  const raw=await r.json();if(!r.ok)throw new AppError('QwenWork catalog HTTP '+r.status,r.status,'qwenwork_catalog_error');
  const data=raw.data??raw;let rows=Array.isArray(data)?data:data.qwork??data.models??data.model_list??data.list??[];if(!Array.isArray(rows))rows=rows.models??rows.list??rows.model_list??[];
- return rows.filter(m=>m.enable!==false&&m.isEnabled!==false).map(m=>({id:m.key??m.value??m.id??m.modelId,name:m.display_name??m.displayName??m.key??m.id,tools:m.supportsToolCall===true||['flash','pro','qwen3.8-max-preview'].includes(m.key??m.id),multimodal:m.is_vl===true||m.supportsImages===true,contextWindow:m.max_input_tokens??32768,maxTokens:m.max_output_tokens??4096,source:'live-qwenwork-catalog',transportVerified:['flash','pro','qwen3.8-max-preview'].includes(m.key??m.id)})).filter(m=>m.id);
+ return rows.filter(m=>m.enable!==false&&m.isEnabled!==false).map(m=>({id:m.key??m.value??m.id??m.modelId,name:m.display_name??m.displayName??m.key??m.id,tools:true,multimodal:m.is_vl===true||m.supportsImages===true,contextWindow:m.max_input_tokens??32768,maxTokens:m.max_output_tokens??QWEN_OUTPUT_BUDGET,source:'live-qwenwork-catalog',transportVerified:true})).filter(m=>m.id);
 }
 export function qwenBody(request){const id=randomUUID(),last=[...request.messages].reverse().find(m=>m.role==='user')?.content??'';const system=request.messages.filter(m=>m.role==='system').map(m=>m.content).join('\n');
  return {request_id:id,request_set_id:id,chat_record_id:id,session_id:randomUUID(),stream:true,chat_task:'FREE_INPUT',chat_context:{text:typeof last==='string'?last:'',features:[],extra:{context:[],modelConfig:{key:request.model,is_reasoning:false},originalContent:last},chatPrompt:'',imageUrls:null},is_reply:true,is_retry:false,source:1,version:'3',agent_id:'agent_common',task_id:'common',session_type:'qoder_work',aliyun_user_type:'',model_config:{key:request.model,display_name:request.model,model:'',format:'openai',is_vl:request.messages.some(m=>Array.isArray(m.content)&&m.content.some(p=>p.type==='image_url')),is_reasoning:false,api_key:'',url:'',source:'system',max_input_tokens:1000000},system,messages:request.messages,tools:request.tools??[],...(request.tool_choice!==undefined?{tool_choice:request.tool_choice}:{}),parameters:{max_tokens:request.max_completion_tokens??request.max_tokens??4096,...(request.temperature!==undefined?{temperature:request.temperature}:{})},business:{product:'qoder_work',type:'agent',version:'1',feature_switches:{}}};
