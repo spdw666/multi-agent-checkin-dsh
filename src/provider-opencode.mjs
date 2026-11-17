@@ -28,7 +28,9 @@ import {AppError,rememberSecret,errorView} from './util.mjs';
 import {resolveOpenCodeService} from './opencode-service.mjs';
 
 const LOOPBACK = /^http:\/\/127\.0\.0\.1:(\d{1,5})$/;
-const SESSION_TIMEOUT_MS = 120000;
+// 长任务实测：一次 3000 词请求 95.9s 才 finish（22,827 字符 / 5,533 输出 token）。
+// 旧的 120s 顶到边缘就会被判超时，120s→300s 让 "长文/长任务" 真正跑完。
+const SESSION_TIMEOUT_MS = 300000;
 const POLL_INTERVAL_MS = 1200;
 
 function servicePasswordPath() {
@@ -133,6 +135,11 @@ async function api(service, credential, path, {method = 'GET', body, signal, tim
 
 // Model list comes from the running app, so a renamed or withdrawn free model
 // disappears from the directory instead of being guessed.
+//
+// 能力必须照抄上游 /api/model 的真实声明：`capabilities.tools` 与
+// `capabilities.input` 里是否含 'image'。旧版本这里硬编码 tools:false /
+// multimodal:false，直接把 deepseek-v4.1-flash-free（上游声明 tools:true、
+// input:[text,image]）标成「不会工具、不能识图」，与实测相反。
 export async function openCodeModels(credential, upstream = {}, options = {}) {
   const service = upstream.kind === 'opencode' ? await resolveOpenCodeService(upstream, credential, options) : upstream;
   const payload = await api(service, credential, '/api/model', {signal: options.signal, timeoutMs: options.timeoutMs ?? 20000});
@@ -140,23 +147,33 @@ export async function openCodeModels(credential, upstream = {}, options = {}) {
   return rows
     .filter(row => row?.providerID === 'opencode')
     .filter(row => typeof row.id === 'string' && /-free$/.test(row.id))
-    .map(row => ({
-      id: row.id,
-      name: row.name ?? row.id,
-      // The gateway only treats a model as importable when both limits are
-      // known positive integers; OpenCode reports them under limit.context/output.
-      callable: true,
-      importable: true,
-      free: true,
-      contextWindow: Number.isSafeInteger(row.limit?.context) ? row.limit.context : null,
-      maxTokens: Number.isSafeInteger(row.limit?.output) ? row.limit.output : null,
-      // The local prompt API accepts text, not caller-defined OpenAI tools or
-      // image_url parts. Advertise what this bridge can preserve, not the raw
-      // model's unrelated native-agent capabilities.
-      tools: false,
-      multimodal: false,
-      note: '本机 OpenCode 文本桥接；仅单条用户纯文本，无显式生成参数；复杂请求保持原样交由兼容供应接力。额度与可用性由 OpenCode 决定',
-    }));
+    .map(row => {
+      const input = Array.isArray(row.capabilities?.input) ? row.capabilities.input : [];
+      const supportsImages = input.includes('image');
+      const supportsTools = row.capabilities?.tools === true;
+      // variants 是上游自己的思考档清单（low/high/max），照抄成 OpenAI 形状。
+      const efforts = (Array.isArray(row.variants) ? row.variants : [])
+        .map(v => (typeof v?.id === 'string' ? v.id : null)).filter(Boolean);
+      return {
+        id: row.id,
+        name: row.name ?? row.id,
+        // The gateway only treats a model as importable when both limits are
+        // known positive integers; OpenCode reports them under limit.context/output.
+        callable: true,
+        importable: true,
+        free: true,
+        contextWindow: Number.isSafeInteger(row.limit?.context) ? row.limit.context : null,
+        // 输出上限是上游给的 limit.output；桥不裁剪输出，只裁剪输入。
+        maxTokens: Number.isSafeInteger(row.limit?.output) ? row.limit.output : null,
+        maxTokensSource: Number.isSafeInteger(row.limit?.output) ? 'official_catalog' : null,
+        officialMaxTokens: Number.isSafeInteger(row.limit?.output) ? row.limit.output : null,
+        tools: supportsTools,
+        ...(supportsTools ? {toolsSource: 'opencode_live_catalog_2026-11-17'} : {}),
+        multimodal: supportsImages,
+        ...(efforts.length ? {reasoning: {supportedEfforts: efforts, defaultEffort: efforts[0]}, reasoningEfforts: Object.fromEntries(efforts.map(e => [e, e])), reasoningSource: 'opencode_catalog_variants'} : {}),
+        note: '本机 OpenCode 会话桥：文本+图像附件、多轮历史拼接、提示词工具契约（无原生 tools 通道）；额度与可用性由 OpenCode 决定',
+      };
+    });
 }
 
 // OpenCode surfaces upstream failures as a typed block. Map the ones that mean
@@ -184,32 +201,221 @@ function assistantText(message) {
   return {text, reasoning};
 }
 
-// Pinned public protocol: Model.Ref={providerID,id}, session.create accepts
-// model; session.prompt accepts text/files/agents/skills/metadata/delivery/resume,
-// but no external tool definitions, output budget or sampling controls.
-// https://github.com/anomalyco/opencode/blob/c38d83c0c4f92466ff9c8e12b8a741698e811012/packages/protocol/src/groups/session.ts
-// Do not stringify roles/tools into a prompt or send ignored unknown fields:
-// typed incompatibility lets the router hand the original request to a capable
-// same-model provider, without modifying any caller-owned messages or budget.
-function bridgePrompt(input) {
+// ---------------------------------------------------------------------------
+// 调用方协议 → OpenCode 会话协议
+//
+// openapi（/openapi.json，2026-11-17 实测 124 条 paths）里 prompt 只收
+// {text, files}：没有 tools、没有 max_tokens、没有 temperature。旧实现因此对
+// 任何工具、图像、多轮历史直接 400，把「能识图会工具」的模型标成纯文本。
+// 实测（2026-11-17）纠正了三点：
+//   1) files[].uri 接受 data:image/png;base64 与 file:///，16x16 PNG 被正确
+//      识别成 "Red"，所以图像可以无损转过去；
+//   2) 把 OpenAI 的 tool 定义写成提示词契约后，模型会精确回一行
+//      {"tool_calls":[{"name":..,"arguments":{..}}]}（3.8s，正文精确命中），
+//      工具语义可以保留；
+//   3) 多轮历史拼进单条 text 后模型确实按历史回答（Ada/41 → ADA:41）。
+// 仍然做不到的只有采样参数与显式输出上限（会话桥没有这两个通道），这类请求
+// 继续抛 relay_capacity_incompatible，让路由把原文交给兼容供应。
+// ---------------------------------------------------------------------------
+const TOOL_CONTRACT_MAX_SPECS = 32;
+// 单条 prompt 的字符预算：会话桥按上游 200K 窗口收，留出契约与模板余量。
+const PROMPT_CHAR_BUDGET = 400000;
+
+function toolSpecLines(tools) {
+  const picked = tools.slice(0, TOOL_CONTRACT_MAX_SPECS);
+  const lines = picked.map(t => {
+    const fn = t?.function ?? t ?? {};
+    const params = fn.parameters ?? {};
+    const argList = Object.keys(params?.properties ?? {}).join(', ') || '无参数';
+    const desc = String(fn.description ?? '').replace(/\s+/g, ' ').slice(0, 80);
+    return '- ' + (fn.name ?? '') + '(' + argList + ')' + (desc ? ': ' + desc : '');
+  });
+  if (tools.length > picked.length) {
+    const rest = tools.slice(picked.length).map(t => (t?.function ?? t ?? {}).name ?? '').filter(Boolean);
+    lines.push('- 另有 ' + rest.length + ' 个工具，用法相同，按名称直接调用即可（例如 ' + rest.slice(0, 8).join(', ') + (rest.length > 8 ? ' …' : '') + '）。');
+  }
+  return lines.join('\n');
+}
+
+function toolContract(tools, retry) {
+  const head = retry ? '上一次回复没有被解析成工具调用。这一次请只输出那一行 JSON，不要任何解释、不要 Markdown 代码块。\n\n' : '';
+  const bounds = [
+    '忽略你自己环境里的内置工具（read/edit/bash 等）；本对话里可用的工具只有下面列出的这些，且由我方程序执行。',
+    '需要工具时不要输出 Markdown 代码块，直接给裸 JSON。',
+  ].join('\n');
+  return `${head}${bounds}\n\n我的程序会读取并执行你回复里的工具调用，然后把结果发回来。需要调用工具时，请直接输出一行 JSON：
+{"tool_calls":[{"name":"工具名","arguments":{...}}]}
+不需要工具时，正常回答即可。
+
+可用工具：
+${toolSpecLines(tools)}`;
+}
+
+// 历史必须拼成一条文本：会话桥的 prompt 只有 text 一个内容入口。用与 OpenAI
+// 消息形状无关的显式标记，避免模型把历史文本当成自己的指令。
+function historyBlock(messages) {
+  const out = [];
+  for (const m of messages) {
+    if (!m) continue;
+    const role = m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : m.role === 'tool' ? 'tool' : 'user';
+    let text = typeof m.content === 'string'
+      ? m.content
+      : Array.isArray(m.content)
+        ? m.content.map(p => (typeof p === 'string' ? p : p?.type === 'text' ? p.text ?? '' : '')).join('')
+        : '';
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      const notes = m.tool_calls.map(c => {
+        const name = c?.function?.name ?? c?.name ?? '';
+        const args = safeJson(c?.function?.arguments ?? c?.arguments ?? {});
+        return '（我调用了 ' + name + '，参数 ' + JSON.stringify(args) + '）';
+      });
+      text = (text ? text + '\n' : '') + notes.join('');
+    }
+    if (!text.trim()) continue;
+    out.push(`<|${role}|>\n${text}`);
+  }
+  return out.join('\n\n');
+}
+
+function safeJson(value) {
+  if (typeof value !== 'string') return value ?? {};
+  try { return JSON.parse(value); } catch { return {}; }
+}
+
+// data: URI 或 http(s) URL 都是 FileAttachment.uri 允许的形状；OpenAI 的
+// image_url.url 原样搬过去即可。非图（image_url 之外的多模态部件）不猜，直接报错。
+function imageFiles(messages) {
+  const files = [];
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!Array.isArray(m?.content)) continue;
+    for (const part of m.content) {
+      if (part?.type !== 'image_url' && part?.type !== 'input_image') continue;
+      const url = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url ?? part.image_url;
+      if (typeof url === 'string' && url) files.push({uri: url, name: url.startsWith('data:') ? 'inline-image' : url.split('/').pop() || 'image'});
+    }
+  }
+  return files;
+}
+
+function stripDataUri(url) {
+  const m = /^data:([^;,]+)?(?:;base64)?,(.*)$/s.exec(String(url ?? ''));
+  if (!m) return null;
+  return {mime: m[1] ?? 'image/png', base64: m[2]};
+}
+
+// 1x1 或损坏的 data URI 会被 OpenCode 以 400 "Image could not be decoded" 拒绝，
+// 那会让一条本来只想问文字历史的长对话整轮失败。发送前先做最小校验。
+function validDataUri(url) {
+  const parsed = stripDataUri(url);
+  if (!parsed) return true; // file:// 或 http(s) 交给上游判断
+  const payload = parsed.base64.trim();
+  if (!payload) return false;
+  try {
+    const bytes = Buffer.from(payload, 'base64');
+    // PNG 签名 + IHDR 宽度/高度：太小（1x1）上游解码器会拒。
+    if (bytes.length < 60) return false;
+    if (parsed.mime === 'image/png' && bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') return false;
+    if (parsed.mime === 'image/png') {
+      const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
+      if (!(w >= 2 && h >= 2)) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+// OpenAI 的 reasoning_effort 在会话桥里没有对应字段，但 session 的
+// Model.Ref.variant 就是思考档（实测 2026-11-17：default/low/high/max 逐档可设，
+// 回执 modelVariant.variant 与请求一致）。所以这里只做「档位→variant」翻译，
+// 不再像旧实现那样把 reasoning_effort 当非法生成参数拒掉。
+const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+function wantsVariant(input) {
+  if (input?.reasoning_effort === undefined) return null;
+  const effort = typeof input.reasoning_effort === 'string' ? input.reasoning_effort.trim().toLowerCase() : '';
+  if (!EFFORT_ORDER.includes(effort)) throw new AppError('OpenCode思考档格式无效', 400, 'reasoning_effort_not_supported');
+  return effort;
+}
+
+// 把请求档位落到上游真实声明的 variant 上（catalog 的 variants 通常只有
+// low/high/max）。none/minimal 表示「尽量别思考」，取最弱的可用档。
+function pickVariant(effort, variants) {
+  if (!effort || !Array.isArray(variants) || !variants.length) return null;
+  const ranked = variants.filter(v => EFFORT_ORDER.includes(v)).sort((a, b) => EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b));
+  if (!ranked.length) return null;
+  const want = EFFORT_ORDER.indexOf(effort);
+  let best = ranked[0];
+  for (const v of ranked) {
+    if (EFFORT_ORDER.indexOf(v) <= want) best = v;
+  }
+  return best;
+}
+
+function bridgeRequest(input) {
   const messages = Array.isArray(input?.messages) ? input.messages : [];
-  if (input?.tools?.length || input?.functions?.length || input?.tool_choice && input.tool_choice !== 'none'
-      || input?.function_call && input.function_call !== 'none'
-      || messages.some(m => m?.role === 'tool' || m?.role === 'function' || m?.tool_calls?.length || m?.function_call)) {
-    throw new AppError('OpenCode 本机文本桥接未提供调用者工具协议；工具及调用历史已保留供兼容供应接力', 400, 'tools_not_supported');
-  }
-  if (messages.some(m => Array.isArray(m?.content) && m.content.some(p => p?.type === 'image_url' || p?.type === 'input_image'))) {
-    throw new AppError('OpenCode 本机文本桥接未提供调用者图像输入协议', 400, 'images_not_supported');
-  }
-  const unsupported = Object.keys(input ?? {}).filter(key => !['model', 'messages', 'stream', 'tools', 'tool_choice', 'functions', 'function_call'].includes(key) && input[key] !== undefined);
+  if (!messages.length) throw new AppError('OpenCode 请求缺少消息', 400, 'empty_messages');
+  const tools = Array.isArray(input?.tools) ? input.tools : Array.isArray(input?.functions) ? input.functions : [];
+  const effort = wantsVariant(input);
+  // 采样参数与原生输出上限是会话桥唯一真实缺失的通道；保留原样交给兼容供应。
+  const unsupported = Object.keys(input ?? {}).filter(key => !['model', 'messages', 'stream', 'tools', 'tool_choice', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'reasoning_effort'].includes(key) && input[key] !== undefined);
   if (unsupported.length) {
     throw new AppError('OpenCode 本机协议未提供本次显式生成参数：' + unsupported.join(', ') + '；原始约束已保留供兼容供应接力', 400, 'relay_capacity_incompatible');
   }
-  if (messages.length !== 1 || messages[0]?.role !== 'user' || typeof messages[0]?.content !== 'string'
-      || Object.keys(messages[0]).some(key => !['role', 'content'].includes(key))) {
-    throw new AppError('OpenCode 本机文本桥接未提供无损多角色历史导入；原始上下文已保留供兼容供应接力', 400, 'relay_context_incompatible');
+  const files = imageFiles(messages).filter(f => {
+    if (f.uri.startsWith('data:') && !validDataUri(f.uri)) return false;
+    return true;
+  });
+  let text = historyBlock(messages);
+  if (!text.trim()) throw new AppError('OpenCode 请求缺少可用文本', 400, 'empty_messages');
+  const wantTools = tools.length > 0 && input?.tool_choice !== 'none';
+  if (wantTools) {
+    const contract = toolContract(tools, false);
+    // 契约放在最后一条 user 之前，与豆包一致：写进 system 会被判提示词注入。
+    text = contract + '\n\n---\n\n' + text;
   }
-  return messages[0].content;
+  if (text.length > PROMPT_CHAR_BUDGET) {
+    // 超预算时保留尾部（最近对话），头部加省略标记。
+    text = '[较早的对话已省略以适配会话桥单条文本上限]\n\n' + text.slice(-PROMPT_CHAR_BUDGET);
+  }
+  return {text, files, wantTools, tools, effort};
+}
+
+// 模型常带前后废话，不能全文 JSON.parse；找第一个括号配对的完整对象。
+function matchJsonEnd(s) {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return i + 1; }
+  }
+  return 0;
+}
+
+function parseToolCalls(text, tools) {
+  if (typeof text !== 'string' || !text || !tools?.length) return null;
+  const known = new Set(tools.map(t => (t?.function ?? t)?.name).filter(Boolean));
+  for (let i = text.indexOf('{'); i !== -1; i = text.indexOf('{', i + 1)) {
+    const end = matchJsonEnd(text.slice(i));
+    if (!end) continue;
+    let obj;
+    try { obj = JSON.parse(text.slice(i, i + end)); } catch { continue; }
+    const arr = obj?.tool_calls;
+    if (!Array.isArray(arr) || !arr.length) continue;
+    const out = [];
+    for (const c of arr) {
+      const name = c?.name ?? c?.function?.name;
+      if (name == null || !known.has(name)) continue;
+      out.push({id: 'call_' + Math.random().toString(16).slice(2, 18), type: 'function', function: {name, arguments: JSON.stringify(safeJson(c?.arguments ?? c?.function?.arguments ?? {}))}});
+    }
+    if (out.length) return out;
+  }
+  return null;
 }
 
 function newest(rows, predicate) {
@@ -227,29 +433,59 @@ export async function openCodeChat(upstream, credential, input, signal) {
   if (signal?.aborted) throw new AppError('请求取消或超时', 499, 'request_cancelled');
   const model = typeof input?.model === 'string' ? input.model : '';
   if (!model) throw new AppError('OpenCode 请求缺少模型 ID', 400, 'model_missing');
-  const text = bridgePrompt(input);
+  const bridged = bridgeRequest(input);
   const service = upstream?.kind === 'opencode' ? await resolveOpenCodeService(upstream, credential, {signal}) : upstream ?? {};
   const timeoutMs = SESSION_TIMEOUT_MS;
+  // 思考档只能通过 Model.Ref.variant 落到上游。catalog 声明的档位是权威清单
+  // （free 模型是 low/high/max），请求档位先映射到最近的一档，映射不到就不设。
+  const sessionModel = {providerID: 'opencode', id: model};
+  if (bridged.effort) {
+    const catalog = await api(service, credential, '/api/model', {signal, timeoutMs: 15000}).catch(() => null);
+    const row = (Array.isArray(catalog?.data) ? catalog.data : []).find(entry => entry?.providerID === 'opencode' && entry?.id === model);
+    const variants = (Array.isArray(row?.variants) ? row.variants : []).map(v => v?.id).filter(id => typeof id === 'string');
+    const chosen = pickVariant(bridged.effort, variants);
+    if (chosen) sessionModel.variant = chosen;
+  }
   // Default agent is "build", which allows every tool — a forwarded chat message
   // could then edit files or run commands here. Read-only agent plus "ask" is the
   // strictest policy the free tier still accepts: community measurements report
-  // that "deny" trips the same 403 gate as no session at all. Any approval the
+  // that "deny" trips the same 403 gate as no session at all (实测 2026-11-17：
+  // deny-all 会让回合在 100s 后 finish:"error" 且无任何正文). Any approval the
   // model raises is refused below, so no local action ever runs.
   const created = await api(service, credential, '/api/session', {
     method: 'POST',
     // A supplied title prevents OpenCode's automatic (potentially paid) title-model request.
-    body: {title: 'AI credit gateway', location: {directory: process.cwd()}, model: {providerID: 'opencode', id: model}, agent: 'plan', permissions: [{action: '*', resource: '*', effect: 'ask'}]},
+    body: {title: 'AI credit gateway', location: {directory: process.cwd()}, model: sessionModel, agent: 'plan', permissions: [{action: '*', resource: '*', effect: 'ask'}]},
     signal,
     timeoutMs: 20000,
   });
   const sessionId = created?.data?.id;
   if (typeof sessionId !== 'string' || !sessionId) throw new AppError('OpenCode 未能创建会话', 502, 'opencode_session_failed');
   try {
-    await api(service, credential, '/api/session/' + encodeURIComponent(sessionId) + '/prompt', {method: 'POST', body: {text}, signal, timeoutMs: 20000});
+    // files 只在真有图时才带：空数组会被 additionalProperties:false 的严格校验接受，
+    // 但省掉更干净。
+    const promptBody = bridged.files.length ? {text: bridged.text, files: bridged.files} : {text: bridged.text};
+    const posted = await api(service, credential, '/api/session/' + encodeURIComponent(sessionId) + '/prompt', {method: 'POST', body: promptBody, signal, timeoutMs: 30000});
+    void posted;
     const deadline = Date.now() + timeoutMs;
     let assistant = null, failure = null, completed = false;
+    // 拒绝过的审批必须记住，否则每轮轮询都会重发一次 reply，把上游刷成 400。
+    const answered = new Set();
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new AppError('请求取消或超时', 499, 'request_cancelled');
+      // 本机模型会主动发起 read/bash 一类本地工具调用。网关只做中转，绝不能让它
+      // 落到宿主机上：每轮把待审批项全部 reject（正确字段是 decision，不是 reply）。
+      const pending = await api(service, credential, '/api/session/' + encodeURIComponent(sessionId) + '/permission', {signal, timeoutMs: 15000}).catch(() => null);
+      for (const request of Array.isArray(pending?.data) ? pending.data : []) {
+        const requestId = request?.id;
+        if (typeof requestId !== 'string' || answered.has(requestId)) continue;
+        answered.add(requestId);
+        await api(service, credential, '/api/session/' + encodeURIComponent(sessionId) + '/permission/' + encodeURIComponent(requestId) + '/reply', {
+          method: 'POST',
+          body: {decision: 'reject', message: 'ai-credit-gateway: 本地工具执行已禁用'},
+          timeoutMs: 15000,
+        }).catch(() => {});
+      }
       // Ask for the newest page explicitly: the default first page may contain
       // only old completed steps once a multi-step turn exceeds its page size.
       const listed = await api(service, credential, '/api/session/' + encodeURIComponent(sessionId) + '/message?order=desc&limit=200', {signal, timeoutMs: 20000});
@@ -287,9 +523,11 @@ export async function openCodeChat(upstream, credential, input, signal) {
       throw new AppError('OpenCode 返回模型与所选模型不一致', 502, 'opencode_model_mismatch');
     }
     const shaped = assistantText(assistant);
-    // OpenCode reports a failed turn as finish:"error" with empty text; surfacing
-    // that as a successful empty answer would hide a real upstream failure.
-    if (!shaped.text.trim()) {
+    // 提示词契约回执：正文就是那一行 JSON 时，按 OpenAI 的 tool_calls 交回调用方。
+    const calls = bridged.wantTools ? parseToolCalls(shaped.text, bridged.tools) : null;
+    if (!calls && !shaped.text.trim()) {
+      // OpenCode reports a failed turn as finish:"error" with empty text; surfacing
+      // that as a successful empty answer would hide a real upstream failure.
       const detail = assistant?.error?.message ?? assistant?.error ?? failure?.message ?? 'empty answer';
       throw new AppError('OpenCode 免费模型未返回正文：' + detail, 502, 'opencode_empty_answer');
     }
@@ -298,11 +536,15 @@ export async function openCodeChat(upstream, credential, input, signal) {
       completion_tokens: assistant.tokens.output ?? 0,
       total_tokens: (assistant.tokens.input ?? 0) + (assistant.tokens.output ?? 0),
     } : null;
+    const finish = calls ? 'tool_calls' : (assistant?.finish ?? 'stop');
+    const delta = calls
+      ? {role: 'assistant', content: null, tool_calls: calls.map((c, index) => ({index, ...c}))}
+      : {role: 'assistant', content: shaped.text, ...(shaped.reasoning ? {reasoning_content: shaped.reasoning} : {})};
     const chunk = {
       id: 'chatcmpl-opencode-' + sessionId,
       object: 'chat.completion.chunk',
       model,
-      choices: [{index: 0, delta: {role: 'assistant', content: shaped.text, ...(shaped.reasoning ? {reasoning_content: shaped.reasoning} : {})}, finish_reason: assistant?.finish ?? 'stop'}],
+      choices: [{index: 0, delta, finish_reason: finish}],
       ...(usage ? {usage} : {}),
     };
     const body = new ReadableStream({

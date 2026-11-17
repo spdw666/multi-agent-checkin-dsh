@@ -13,7 +13,8 @@ test('session has explicit title and exact selected free model without executing
   if(u.includes('/message?'))return Response.json({data:[{type:'assistant',model:{providerID:'opencode',id:'SAMPLE-free'},content:[{type:'text',text:'SAMPLE final text'}],finish:'stop'}]});
   return Response.json({data:true});});
  const v=await openCodeChat({baseUrl:'http://127.0.0.1:12345'},c,{model:'SAMPLE-free',messages:[{role:'user',content:'SAMPLE complete question'}]});await v.response.text();
- const create=seen.find(x=>x.url.endsWith('/api/session')).body;assert.equal(create.title,'AI credit gateway');assert.deepEqual(create.model,{providerID:'opencode',id:'SAMPLE-free'});assert.deepEqual(create.permissions,[{action:'*',resource:'*',effect:'ask'}]);assert.equal(seen.find(x=>x.url.endsWith('/prompt')).body.text,'SAMPLE complete question');assert.equal(seen.at(-1).method,'DELETE');
+ const create=seen.find(x=>x.url.endsWith('/api/session')).body;assert.equal(create.title,'AI credit gateway');assert.deepEqual(create.model,{providerID:'opencode',id:'SAMPLE-free'});assert.deepEqual(create.permissions,[{action:'*',resource:'*',effect:'ask'}]);// 会话桥只有 text 一个入口，角色标记是协议的一部分；用户原文必须逐字保留在标记之后。
+ assert.equal(seen.find(x=>x.url.endsWith('/prompt')).body.text,'<|user|>\nSAMPLE complete question');assert.equal(seen.at(-1).method,'DELETE');
 });
 const t=(name,fn)=>test(name,{skip:!mod},fn);
 t('validate dedicated profile without leaking controller token',()=>assert.equal(mod.validateNetworkProfile(p).proxyUrl,p.proxyUrl));

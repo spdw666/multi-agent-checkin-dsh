@@ -18,14 +18,14 @@ test('Qoder declared context selector enters parameters.context_length, never ov
  const r=await invoke({contextWindow:400000});assert.equal(r.error,undefined);assert.equal(r.body.parameters.context_length,400000);assert.equal(r.body.model_config.max_input_tokens,180000);
 });
 test('Qoder omitted context leaves native selection absent instead of guessing a default or reserve',async()=>{
- const r=await invoke();assert.equal(r.error,undefined);assert.equal(r.body.parameters.max_tokens,1024);assert.equal(r.body.parameters.context_length,undefined);assert.equal(r.body.model_config.max_input_tokens,180000);
+ const r=await invoke();assert.equal(r.error,undefined);assert.equal(r.body.parameters.max_tokens,65536);assert.equal(r.body.parameters.context_length,undefined);assert.equal(r.body.model_config.max_input_tokens,180000);
 });
 test('Qoder invalid or undeclared context and unsupported efforts stop before dispatch',async()=>{
  for(const input of [{contextWindow:1000000},{contextWindow:'400000'},{contextWindow:-1},{reasoning_effort:'xhigh'},{reasoning_effort:'SAMPLE_SECRET'},{reasoning_effort:0}]){const r=await invoke(input);assert.ok(r.error);assert.equal(r.error.status,400);assert.equal(r.calls,1);assert.equal(r.body,undefined);assert.doesNotMatch(r.error.message,/SAMPLE_SECRET/);}
  const model=raw();delete model.thinking_config.disabled;const r=await invoke({reasoning_effort:'none'},model);assert.equal(r.error.code,'reasoning_effort_not_supported');assert.equal(r.calls,1);
 });
 test('Qoder existing output cap and missing actual input remain unchanged before dispatch',async()=>{
- const over=await invoke({max_tokens:1025});assert.equal(over.error.code,'provider_output_limit');assert.equal(over.calls,1);
+ const over=await invoke({max_tokens:65537});assert.equal(over.error.code,'provider_output_limit');assert.equal(over.calls,1);
  const missing=await invoke({contextWindow:200000},{...raw(),max_input_tokens:null});assert.equal(missing.error.code,'provider_model_unverified');assert.equal(missing.calls,1);
 });
 test('Qoder max_completion_tokens intention is projected to native output budget',async()=>{

@@ -50,6 +50,11 @@ export function signQoder(url,plain,c,{model,encode=true}={}){
  return {body,headers:{...bearer(c),Authorization:`Bearer COSY.${payload}.${signature}`,'Cosy-Version':VERSION,'Cosy-ClientType':'5','Cosy-Data-Policy':'agree','Cosy-Date':ts,'Cosy-Key':cosyKey,'Cosy-Scene':'assistant','Cosy-User':c.uid,'Cosy-Business-Product':'cli','Cosy-Business-Type':'agent','Login-Version':'v2',...(model?{'X-Model-Key':model,'X-Model-Source':'system'}:{})}};
 }
 function cacheKey(c){return c.edition+':'+c.uid}
+// 官方目录里 deepseek-flash / dfmodel 这一类条目**没有** max_output_tokens 字段。
+// 旧实现兜底成 1024，等于把「长文输出」整条路堵死：调用方只要 max_tokens>1024
+// 就在 qoderChat 里被判 provider_output_limit。这里改成与 codearts 一致的
+// configured_limit 语义（保守配置上限，不冒充官方声明）。
+const QODER_OUTPUT_BUDGET = 65536;
 function qoderNativeParameters(model){
  const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
  const entries=value=>record(value)?Object.entries(value):[];
@@ -65,7 +70,15 @@ function qoderNativeParameters(model){
   context:contextOptions.length?{source:'context_config',options:contextOptions,defaultTokenCount:singleDefault(contextOptions)?.tokenCount??null}:null,
   thinking:thinkingModes.length?{source:'thinking_config',modes:thinkingModes,defaultMode:singleDefault(thinkingModes)?.id??null,efforts,defaultEffort:singleDefault(efforts)?.id??null}:null};
 }
-export function parseQoderModels(data){const seen=new Map();for(const scene of ['chat','developer','assistant','app'])for(const m of Array.isArray(data?.[scene])?data[scene]:[]){if(!m?.key||m.enable===false||seen.has(m.key)||(m.source&&m.source!=='system'))continue;const ctx=Number.isSafeInteger(m.max_input_tokens)&&m.max_input_tokens>0?m.max_input_tokens:null,out=Number.isSafeInteger(m.max_output_tokens)&&m.max_output_tokens>0?m.max_output_tokens:1024,native=qoderNativeParameters(m);seen.set(m.key,{id:m.key,name:m.display_name??m.key,contextWindow:ctx,maxTokens:out,maxTokensSource:m.max_output_tokens>0?'official_catalog':'configured_default',officialMaxTokens:m.max_output_tokens>0?m.max_output_tokens:null,tools:true,multimodal:m.is_vl===true,reasoning:null,isReasoning:m.is_reasoning===true,callable:!!ctx,source:'qoder-official-signed-catalog',priceFactor:m.price_factor??null,...(native?{qoderNativeParameters:native}:{})})}return [...seen.values()]}
+export function parseQoderModels(data){const seen=new Map();for(const scene of ['chat','developer','assistant','app'])for(const m of Array.isArray(data?.[scene])?data[scene]:[]){if(!m?.key||m.enable===false||seen.has(m.key)||(m.source&&m.source!=='system'))continue;const ctx=Number.isSafeInteger(m.max_input_tokens)&&m.max_input_tokens>0?m.max_input_tokens:null,native=qoderNativeParameters(m);
+ // 官方目录没给 max_output_tokens 时，使用保守配置上限并如实标注 configured_limit，
+ // 不再退回 1024（那会把所有长文请求判成 provider_output_limit）。
+ const declared=Number.isSafeInteger(m.max_output_tokens)&&m.max_output_tokens>0?m.max_output_tokens:null,out=declared??QODER_OUTPUT_BUDGET;
+ // thinking_config 声明的档位必须翻译成 router 认得的字段（reasoningEfforts /
+ // reasoning.supportedEfforts）；qoderNativeParameters 只是原始留档，router 不读它，
+ // 所以旧版本在界面上永远显示「无思考档」。
+ const thought=native?.thinking??null,efforts=(thought?.efforts??[]).map(o=>o.id),canDisable=(thought?.modes??[]).some(o=>o.id==='disabled');
+ seen.set(m.key,{id:m.key,name:m.display_name??m.key,contextWindow:ctx,maxTokens:out,maxTokensSource:declared?'official_catalog':'configured_limit',officialMaxTokens:declared,tools:true,multimodal:m.is_vl===true,reasoning:efforts.length?{supportedEfforts:efforts,defaultEffort:thought?.defaultEffort??efforts[0],...(canDisable?{canDisableThinking:true}:{})}:null,reasoningEfforts:efforts.length?Object.fromEntries(efforts.map(e=>[e,e])):null,...(efforts.length?{reasoningSource:'qoder_thinking_config'}:{}),isReasoning:m.is_reasoning===true,callable:!!ctx,source:'qoder-official-signed-catalog',priceFactor:m.price_factor??null,...(native?{qoderNativeParameters:native}:{})})}return [...seen.values()]}
 export async function qoderModels(c,options={}){const cached=catalogCache.get(cacheKey(c));if(!options.force&&!options.refresh&&cached&&Date.now()-cached.at<300000)return cached.models;const url=region(c).infer+'/algo/api/v2/model/list?Encode=1',s=signQoder(url,'',c,{encode:false}),data=await providerJson(url,c,{...options,headers:s.headers});const models=parseQoderModels(data);if(!models.length)throw new AppError('Qoder官方目录未返回可核验模型',502,'provider_catalog_empty');catalogCache.set(cacheKey(c),{at:Date.now(),models});return models}
 async function openapi(c,path,options={}){return providerJson(region(c).openapi+path,c,{...options,headers:bearer(c)})}
 export function qoderCampaignStatus(data,c,now=Date.now()){

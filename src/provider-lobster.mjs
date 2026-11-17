@@ -381,6 +381,10 @@ export async function lobsterModels(secret, {fetchImpl = globalThis.fetch, signa
       multimodal: entry?.supportsImage === true,
       reasoning: null, isReasoning:entry?.supportsThinking===true,
       reasoningOptions: thinkingOptions,
+      // router.mjs 只认 reasoningEfforts / reasoning.supportedEfforts 两种形态，
+      // 上游真实 level 不投影过去，对外就永远显示"无思考档"（2026-11-17 实测：
+      // deepseek-flash 的 thinkingConfig.options 确实声明了 off/high/max）。
+      ...(thinkingOptions.length ? {reasoningEfforts: Object.fromEntries(thinkingOptions.map(level => [level, level]))} : {}),
       reasoningEffortMapping: lobsterReasoningMapping(thinkingOptions),
       reasoningMappingSource: "gateway_aliases_of_official_options",
       reasoningDefault: typeof entry?.thinkingConfig?.defaultLevel === 'string' ? entry.thinkingConfig.defaultLevel : null,

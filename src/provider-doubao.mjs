@@ -47,13 +47,13 @@ export const DOUBAO_MODELS = [
   {id: 'auto', key: '9', name: '自动', vendor: 'doubao', defaultEffort: 'medium', tools: true},
   {id: 'doubao-2.1-lite', key: 'seed-lite-7b', name: '豆包 2.1 Lite', vendor: 'doubao', defaultEffort: 'medium', tools: true},
   {id: 'doubao-2.1-pro', key: '5', name: '豆包 2.1 Pro', vendor: 'doubao', defaultEffort: 'medium', tools: true},
-  {id: 'deepseek-v4.1-flash', key: 'person-deepseek-v4-1-flash-261017', name: 'DeepSeek V4.1 Flash', vendor: 'deepseek', defaultEffort: 'medium', tools: true},
+  {id: 'deepseek-v4.1-flash', key: 'person-deepseek-v4-1-flash-261017', name: 'DeepSeek V4.1 Flash', vendor: 'deepseek', defaultEffort: 'medium', tools: true, vision: true},
   {id: 'kimi-k3.1-pro', key: 'person-kimi-k3-1-pro-261111', name: 'Kimi K3.1 Pro', vendor: 'moonshot', defaultEffort: 'medium', tools: true},
   {id: 'kimi-k3.1-pro-highspeed', key: 'person-kimi-k3-1-pro-highspeed-261111', name: 'Kimi K3.1 Pro 高速', vendor: 'moonshot', defaultEffort: 'medium', tools: true},
   {id: 'kimi-k3', key: 'person-kimi-k3-261111', name: 'Kimi K3', vendor: 'moonshot', defaultEffort: 'medium', tools: true},
   {id: 'glm-5.3', key: 'person-glm-5-3-261111', name: 'GLM 5.3', vendor: 'zhipu', defaultEffort: 'high', tools: true},
   {id: 'glm-5.3-flash', key: 'person-glm-5-3-flash-261111', name: 'GLM 5.3 Flash', vendor: 'zhipu', defaultEffort: 'high', tools: false},
-  {id: 'deepseek-v4-pro', key: 'person-deepseek-v4-pro-ga-260813', name: 'DeepSeek V4 Pro', vendor: 'deepseek', defaultEffort: 'high', tools: true},
+  {id: 'deepseek-v4-pro', key: 'person-deepseek-v4-pro-ga-260813', name: 'DeepSeek V4 Pro', vendor: 'deepseek', defaultEffort: 'high', tools: true, vision: true},
 ];
 
 const EFFORTS = {low: '3', medium: '4', high: '5'};
@@ -87,7 +87,10 @@ export function doubaoModels() {
     // 对调用方而言确实返回 tool_calls，因此这里如实声明 true（稳定性见 doubaoBridge 的重试策略）。
     tools: m.tools === true,
     toolsSource: m.tools === true ? 'prompt_bridge_until_native_channel' : 'model_refuses_contract',
-    multimodal: false,
+    // 识图：走「上传换签名 URL + 文本直链」通道，实测 2026-11-17（16x16 四象限图四色全对）。
+    // 只有逐模型实测通过的才置 true，其余仍如实声明不支持。
+    multimodal: m.vision === true,
+    multimodalSource: m.vision === true ? 'gateway_url_bridge_2026-11-17' : 'model_has_no_image_channel',
     // 客户端工作模式在真实请求里带 model_extra_params:{memory_profile:'300k_230',
     // total_window_size:'300000'}，**豆包自己的文本窗口就是 300000**。早先保守写成 200000
     // 会让 DSH 的模型切换压缩算出 threshold=118080（=200000-16384 预留输出-65536 headroom），
@@ -254,7 +257,7 @@ function trimToBudget(blocks, budget) {
   return out;
 }
 
-function flattenMessages(messages, system) {
+function flattenMessages(messages, system, imageUrls = []) {
   let blocks = [];
   if (typeof system === 'string' && system.trim()) blocks.push(['system', system]);
   for (const m of Array.isArray(messages) ? messages : []) {
@@ -287,7 +290,15 @@ function flattenMessages(messages, system) {
     if (!text) continue;
     blocks.push([role, text]);
   }
-  if (!blocks.length) throw new AppError('豆包请求缺少可用消息内容', 400, 'empty_messages');
+  if (!blocks.length && !imageUrls.length) throw new AppError('豆包请求缺少可用消息内容', 400, 'empty_messages');
+  // 图片以签名 URL 的形式贴在末尾：豆包没有附件通道，模型会自行下载 URL 再读像素。
+  if (imageUrls.length) {
+    const lines = imageUrls.map((u, i) => '[图片 ' + (i + 1) + '] ' + u).join('\n');
+    const note = '以下是本次消息附带的图片直链，请自行下载并读取像素后再回答：\n' + lines;
+    const last = blocks.length ? blocks[blocks.length - 1] : null;
+    if (last && last[0] === 'user') blocks[blocks.length - 1] = ['user', last[1] + '\n\n' + note];
+    else blocks.push(['user', note]);
+  }
   // 豆包工作模式对单条 text_block 有长度上限：实测 20 万字符可过、57 万字符被服务端判
   // 710020202 common invalid param（不是超时，是读 body 时即拒）。超限时保留 system 与最近的
   // 若干轮，从中间丢弃并留一条省略标记，保证长会话仍能跑而不是整轮失败。
@@ -299,7 +310,7 @@ function flattenMessages(messages, system) {
 export function doubaoBody(input, meta, deviceId) {
   const now = Date.now();
   const localMessageId = uuid();
-  const text = flattenMessages(input.messages, input.system);
+  const text = flattenMessages(input.messages, input.system, input.imageUrls ?? []);
   const effort = wireEffort(input.reasoning_effort, meta.defaultEffort);
   const agentTaskParam = {runtime_type: 1, folder_name: '', device_name: '', workspace: '', local_app_id: '', local_device_id: ''};
   const generalTaskParam = {
@@ -409,6 +420,94 @@ export function doubaoBody(input, meta, deviceId) {
       commerce_credit_config_enable: '0',
     },
   };
+}
+
+// 豆包桌面端没有 OpenAI 式 image 通道，但它的图片上传接口是公开可用的：
+// 客户端自己把 Blob POST 到 /samantha/pages/upload_image，拿回 {url, uri}。
+// 我们把 data URI 先上传成签名 URL，再把 URL 写进文本，模型会自己去读像素
+// （2026-11-17 实测：16x16 四象限图，四个象限颜色全对）。
+const UPLOAD_PATH = '/samantha/pages/upload_image';
+
+function uploadQuery(deviceId) {
+  return new URLSearchParams({
+    aid: String(AID), device_id: deviceId, device_platform: 'web', doubao_device_platform: 'desktop',
+    channel: 'win', client_platform: 'pc_client', pc_version: '2.35.8', doubao_pc_version: '2.35.8',
+    samantha_web: '1', region: 'CN', version_code: '20800', real_aid: String(AID), language: 'zh',
+    real_region: 'CN', sys_region: 'CN', use_olympus: '0',
+  }).toString();
+}
+
+async function uploadImage(cookie, deviceId, bytes, mime, name, signal, fetcher) {
+  const form = new FormData();
+  form.append('file_type', String(mime || 'image/png').split('/')[1] || 'png');
+  form.append('data', new Blob([bytes], {type: mime || 'image/png'}), name || 'image.png');
+  const res = await fetcher(ALICE_BASE + UPLOAD_PATH + '?' + uploadQuery(deviceId), {
+    method: 'POST',
+    redirect: 'error',
+    signal,
+    headers: {
+      accept: 'application/json, text/plain, */*',
+      'agw-js-conv': 'str',
+      referer: 'chrome://doubao-chat/',
+      'user-agent': CLIENT_UA,
+      cookie,
+    },
+    body: form,
+  });
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch { throw new AppError(`豆包图片上传返回非 JSON（HTTP ${res.status}）`, 502, 'doubao_upload_error'); }
+  if (Number(json.code) !== 0) throw upstreamError(json.code, json.msg || json.message, json.error);
+  const url = json.data?.url;
+  if (typeof url !== 'string' || !url) throw new AppError('豆包图片上传未返回 url', 502, 'doubao_upload_error');
+  return url;
+}
+
+// 把一条消息里的图片分片取出来：既接 OpenAI 的 image_url，也接 Responses 的 input_image。
+// 只支持 data URI 与 http(s) 直链；data URI 需要先上传换成签名 URL。
+function imageParts(messages) {
+  const out = [];
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || !Array.isArray(m.content)) continue;
+    for (const part of m.content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'image_url') {
+        const u = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url;
+        if (typeof u === 'string' && u) out.push(u);
+      } else if (part.type === 'input_image') {
+        const u = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url;
+        if (typeof u === 'string' && u) out.push(u);
+        else if (typeof part.image === 'string' && part.image) out.push(part.image);
+      }
+    }
+  }
+  return out;
+}
+
+function parseDataUri(uri) {
+  const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(uri);
+  if (!m) return null;
+  const mime = m[1] || 'image/png';
+  const raw = m[3] || '';
+  const bytes = m[2] ? Buffer.from(raw, 'base64') : Buffer.from(decodeURIComponent(raw), 'binary');
+  if (!bytes.length) return null;
+  return {mime, bytes};
+}
+
+// 最多 4 张：豆包单条文本要装下 URL 清单，且它的图片理解是按需下载，太多会拖长时间。
+const MAX_IMAGES = 4;
+
+async function doubaoImageUrls(cookie, deviceId, messages, signal, fetcher) {
+  const uris = imageParts(messages).slice(0, MAX_IMAGES);
+  const urls = [];
+  for (const uri of uris) {
+    if (/^https?:\/\//i.test(uri)) { urls.push(uri); continue; }
+    const parsed = parseDataUri(uri);
+    if (!parsed) continue;
+    urls.push(await uploadImage(cookie, deviceId, parsed.bytes, parsed.mime, 'image.' + (parsed.mime.split('/')[1] || 'png'), signal, fetcher));
+  }
+  return urls;
 }
 
 function doubaoUrl(deviceId) {
@@ -728,10 +827,13 @@ export async function doubaoChat(c, input, signal, {fetcher = fetch} = {}) {
   // 同理，缺登录态属于 401 凭证问题，不能等 body 组装完才暴露。
   const cookie = doubaoCookie(c);
   const deviceId = await doubaoDeviceId(c);
+  // 图片：先上传换签名 URL，再以文本清单形式随请求发出（豆包无附件块通道，见 doubaoImageUrls）。
+  const imageUrls = await doubaoImageUrls(cookie, deviceId, input?.messages, signal, fetcher);
+  const withImages = imageUrls.length ? {...input, imageUrls} : input;
   // 带 tools 的请求走提示词桥：豆包没有原生工具通道，桥负责把工具定义交给模型并解析它的 JSON 回执。
-  const toolList = Array.isArray(input?.tools) && input.tools.length ? input.tools : null;
-  if (toolList) return doubaoBridge(c, input, meta, cookie, deviceId, toolList, signal, fetcher);
-  const body = doubaoBody(input, meta, deviceId);
+  const toolList = Array.isArray(withImages?.tools) && withImages.tools.length ? withImages.tools : null;
+  if (toolList) return doubaoBridge(c, withImages, meta, cookie, deviceId, toolList, signal, fetcher);
+  const body = doubaoBody(withImages, meta, deviceId);
   const wantStream = input?.stream !== false;
   const id = 'chatcmpl-' + uuid().replace(/-/g, '').slice(0, 24);
 

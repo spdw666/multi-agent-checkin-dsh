@@ -29,7 +29,7 @@ for(const edition of ['cn','global']){
   await result.response.text();const{body,headers}=captured;
   assert.equal(body.business.version,expectedNativeVersion);assert.equal(headers['Cosy-Version'],expectedNativeVersion);assert.equal(authPayload(headers).cosyVersion,expectedNativeVersion);
   assert.equal(body.version,'3');assert.equal(body.session_type,'qoderclicn');assert.equal(body.source,1);assert.equal(body.business.product,'cli');assert.equal(body.business.type,'agent');assert.equal(body.business.stage,'processing');assert.equal(body.agent_id,'agent_common');assert.equal(body.task_id,'common');
-  assert.deepEqual(body.parameters,{max_tokens:1024});assert.equal(body.max_tokens,1024);assert.equal(body.parameters.reasoning_effort,undefined);assert.equal(body.parameters.enable_thinking,undefined);assert.equal(body.parameters.context_length,undefined);
+  assert.deepEqual(body.parameters,{max_tokens:65536});assert.equal(body.max_tokens,65536);assert.equal(body.parameters.reasoning_effort,undefined);assert.equal(body.parameters.enable_thinking,undefined);assert.equal(body.parameters.context_length,undefined);
   assert.deepEqual(body.model_config,{key:'qmodel_38max',display_name:'Qwen3.8-Max',model:'',format:'openai',is_vl:true,is_reasoning:true,api_key:'',url:'',source:'system',max_input_tokens:180000});
   assert.equal(body.chat_context.extra.modelConfig.is_reasoning,true);assert.deepEqual(input,before);assert.deepEqual(body.messages,input.messages);assert.equal(headers['X-Model-Key'],'qmodel_38max');assert.equal(headers['X-Model-Source'],'system');
   for(const key of ['request_id','request_set_id','session_id'])assert.equal(body[key].length,36);assert.equal(body.request_id,body.chat_record_id);

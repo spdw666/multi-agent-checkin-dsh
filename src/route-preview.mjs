@@ -56,7 +56,7 @@ function previewInput(body){
 
 function auditEvidence(row,config){
   if(!record(row))return {source:'not_recorded',checkedAt:null,status:'unknown',tests:[]};
-  return {source:'saved_model_audit',checkedAt:time(row.finishedAt),status:['passed','failed','partial','uncertain','unavailable','running'].includes(row.status)?row.status:'unknown',tests:(Array.isArray(row.tests)?row.tests:[]).filter(t=>['ordinary','stream','tools','roundtrip'].includes(t.stage)).map(t=>({stage:t.stage,ok:typeof t.ok==='boolean'?t.ok:null,status:['unsupported','skipped'].includes(t.status)?t.status:null,elapsedMs:number(t.elapsedMs),errorCode:diagnosticCode(t.error?.code,config)})),note:'历史体检结果独立展示，不代表当前目录新鲜度或本次完整请求已验收'};
+  return {source:'saved_model_audit',checkedAt:time(row.finishedAt),status:['passed','failed','partial','uncertain','unavailable','running'].includes(row.status)?row.status:'unknown',tests:(Array.isArray(row.tests)?row.tests:[]).filter(t=>['ordinary','stream','output','tools','roundtrip'].includes(t.stage)).map(t=>({stage:t.stage,ok:typeof t.ok==='boolean'?t.ok:null,status:['unsupported','skipped'].includes(t.status)?t.status:null,elapsedMs:number(t.elapsedMs),errorCode:diagnosticCode(t.error?.code,config)})),note:'历史体检结果独立展示，不代表当前目录新鲜度或本次完整请求已验收'};
 }
 
 export function previewRoute(service,body,{now=Date.now()}={}){

@@ -23,36 +23,89 @@ function mock(t,{poll=()=>[assistant()],afterCreate}={}){
     calls.push({url:String(url),method,body,aborted:options.signal?.aborted});
     if(method==='POST'&&String(url).endsWith('/api/session')){afterCreate?.();return Response.json({data:{id:'SAMPLE_SESSION'}});}
     if(method==='POST'&&String(url).endsWith('/prompt'))return Response.json({data:{accepted:true}});
+    if(method==='GET'&&new URL(url).pathname.endsWith('/permission'))return Response.json({data:[]});
     if(method==='GET'&&new URL(url).pathname.endsWith('/message'))return Response.json({data:poll(++polls)});
     if(method==='DELETE')return new Response(null,{status:204});
     throw Error('Unexpected SAMPLE mock '+method+' '+url);
   });
   return {calls,polls:()=>polls};
 }
-test('OpenCode explicitly selects Model.Ref and sends the single user prompt without flattening',async t=>{
+test('OpenCode explicitly selects Model.Ref and keeps the caller text verbatim under a role marker',async t=>{
   const m=mock(t),value=input();await openCodeChat(upstream,credential,value);
   assert.deepEqual(m.calls.find(x=>x.url.endsWith('/api/session')).body.model,{providerID:'opencode',id:value.model});
-  assert.deepEqual(m.calls.find(x=>x.url.endsWith('/prompt')).body,{text:value.messages[0].content});
+  // 会话桥只有 text 一个入口，角色用标记保留；用户原文一个字都不改。
+  assert.deepEqual(m.calls.find(x=>x.url.endsWith('/prompt')).body,{text:'<|user|>\n'+value.messages[0].content});
 });
-test('OpenCode catalog declares bridge capabilities, not upstream external-tool/image support',async t=>{
-  t.mock.method(globalThis,'fetch',async()=>Response.json({data:[{id:'SAMPLE-free',providerID:'opencode',capabilities:{tools:true,input:['text','image']},limit:{context:10000,output:1000}}]}));
-  const [m]=await openCodeModels(credential,upstream);assert.equal(m.tools,false);assert.equal(m.multimodal,false);
+test('OpenCode catalog declares the live upstream tool and image capabilities',async t=>{
+  t.mock.method(globalThis,'fetch',async()=>Response.json({data:[{id:'SAMPLE-free',providerID:'opencode',capabilities:{tools:true,input:['text','image']},limit:{context:10000,output:1000},variants:[{id:'low'},{id:'high'},{id:'max'}]}]}));
+  const [m]=await openCodeModels(credential,upstream);
+  assert.equal(m.tools,true);assert.equal(m.multimodal,true);
+  assert.deepEqual(m.reasoning.supportedEfforts,['low','high','max']);
+  assert.equal(m.maxTokensSource,'official_catalog');assert.equal(m.maxTokens,1000);
 });
-for(const [name,extra,code] of [
-  ['tools',{tools:[{type:'function',function:{name:'SAMPLE_TOOL',parameters:{type:'object'}}}],tool_choice:'required'},'tools_not_supported'],
-  ['legacy functions',{functions:[{name:'SAMPLE_TOOL'}],function_call:'auto'},'tools_not_supported'],
-  ['max_tokens',{max_tokens:4096},'relay_capacity_incompatible'],
-  ['max_completion_tokens',{max_completion_tokens:4096},'relay_capacity_incompatible'],
-  ['temperature',{temperature:0},'relay_capacity_incompatible'],
-  ['stop',{stop:['SAMPLE_STOP']},'relay_capacity_incompatible'],
-  ['response format',{response_format:{type:'json_object'}},'relay_capacity_incompatible'],
-  ['history roles',{messages:[{role:'system',content:'SAMPLE_SYSTEM'},{role:'user',content:'SAMPLE_USER'}]},'relay_context_incompatible'],
-  ['tool history',{messages:[{role:'tool',tool_call_id:'SAMPLE_CALL',content:'SAMPLE_RESULT'}]},'tools_not_supported'],
-  ['image parts',{messages:[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,SAMPLE'}}]}]},'images_not_supported'],
+test('OpenCode catalog withholds image when the upstream omits it',async t=>{
+  t.mock.method(globalThis,'fetch',async()=>Response.json({data:[{id:'SAMPLE-text-free',providerID:'opencode',capabilities:{tools:true,input:['text']},limit:{context:10000,output:1000},variants:[]}]}));
+  const [m]=await openCodeModels(credential,upstream);
+  assert.equal(m.multimodal,false);assert.equal(m.tools,true);
+  // 上游没声明 variants 时不能凭空编出思考档；router 侧统一用 `?? null` 兜底。
+  assert.equal(m.reasoning??null,null);assert.equal(m.reasoningEfforts??null,null);
+});
+// 会话桥仍没有原生通道的只有采样参数：这些必须继续明确拒绝，绝不静默丢弃。
+for(const [name,extra] of [
+  ['temperature',{temperature:0}],
+  ['stop',{stop:['SAMPLE_STOP']}],
+  ['response format',{response_format:{type:'json_object'}}],
 ])test('OpenCode rejects unsupported '+name+' before dispatch and preserves caller input',async t=>{
   const m=mock(t),value={...input(),...extra},before=structuredClone(value);
-  await assert.rejects(()=>openCodeChat(upstream,credential,value),e=>e.code===code);
+  await assert.rejects(()=>openCodeChat(upstream,credential,value),e=>e.code==='relay_capacity_incompatible');
   assert.equal(m.calls.length,0);assert.deepEqual(value,before);
+});
+test('OpenCode rejects an unknown reasoning effort instead of silently ignoring it',async t=>{
+  const m=mock(t),value={...input(),reasoning_effort:'turbo'},before=structuredClone(value);
+  await assert.rejects(()=>openCodeChat(upstream,credential,value),e=>e.code==='reasoning_effort_not_supported');
+  assert.equal(m.calls.length,0);assert.deepEqual(value,before);
+});
+test('OpenCode maps reasoning_effort onto the catalog variant and still sends one prompt',async t=>{
+  const calls=[];let polls=0;
+  t.mock.method(globalThis,'fetch',async(url,options={})=>{
+    const method=options.method??'GET',body=options.body?JSON.parse(options.body):null;
+    calls.push({url:String(url),method,body});
+    if(method==='GET'&&new URL(url).pathname==='/api/model')return Response.json({data:[{id:'SAMPLE-free',providerID:'opencode',capabilities:{tools:true,input:['text','image']},limit:{context:10000,output:1000},variants:[{id:'low'},{id:'high'},{id:'max'}]}]});
+    if(method==='POST'&&String(url).endsWith('/api/session'))return Response.json({data:{id:'SAMPLE_SESSION'}});
+    if(method==='POST'&&String(url).endsWith('/prompt'))return Response.json({data:{accepted:true}});
+    if(method==='GET'&&new URL(url).pathname.endsWith('/permission'))return Response.json({data:[]});
+    if(method==='GET'&&new URL(url).pathname.endsWith('/message'))return Response.json({data:[assistant()]});
+    if(method==='DELETE')return new Response(null,{status:204});
+    throw Error('Unexpected SAMPLE mock '+method+' '+url);
+  });
+  const r=await openCodeChat(upstream,credential,{...input(),reasoning_effort:'max'});
+  assert.match(await r.response.text(),/SAMPLE_FINAL/);
+  assert.deepEqual(calls.find(x=>x.url.endsWith('/api/session')).body.model,{providerID:'opencode',id:'SAMPLE-free',variant:'max'});
+  assert.equal(calls.filter(x=>x.method==='POST'&&x.url.endsWith('/prompt')).length,1);
+  void polls;
+});
+test('OpenCode carries max_tokens-bearing and multi-role requests through instead of refusing them',async t=>{
+  const m=mock(t);
+  const value={model:'SAMPLE-free',max_tokens:4096,messages:[{role:'system',content:'SAMPLE_SYSTEM'},{role:'user',content:'SAMPLE_USER'},{role:'assistant',content:'SAMPLE_PRIOR'},{role:'user',content:'SAMPLE_CONTINUE'}]};
+  const before=structuredClone(value);
+  const r=await openCodeChat(upstream,credential,value);
+  assert.match(await r.response.text(),/SAMPLE_FINAL/);
+  const posted=m.calls.find(x=>x.url.endsWith('/prompt')).body.text;
+  for(const marker of ['<|system|>','<|user|>','<|assistant|>','SAMPLE_SYSTEM','SAMPLE_PRIOR','SAMPLE_CONTINUE'])assert.ok(posted.includes(marker),marker);
+  assert.deepEqual(value,before);
+});
+test('OpenCode forwards image parts as FileAttachment data URIs with a valid PNG signature',async t=>{
+  const png='iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=';
+  const m=mock(t);
+  await openCodeChat(upstream,credential,{model:'SAMPLE-free',messages:[{role:'user',content:[{type:'text',text:'What colour?'},{type:'image_url',image_url:{url:'data:image/png;base64,'+png}}]}]});
+  const body=m.calls.find(x=>x.url.endsWith('/prompt')).body;
+  assert.equal(body.files.length,1);assert.equal(body.files[0].uri,'data:image/png;base64,'+png);assert.match(body.text,/What colour\?/);
+});
+test('OpenCode drops a malformed data URI instead of failing the whole turn',async t=>{
+  const m=mock(t);
+  await openCodeChat(upstream,credential,{model:'SAMPLE-free',messages:[{role:'user',content:[{type:'text',text:'SAMPLE_TEXT'},{type:'image_url',image_url:{url:'data:image/png;base64,c2FtcGxl'}}]}]});
+  const body=m.calls.find(x=>x.url.endsWith('/prompt')).body;
+  assert.equal(body.files,undefined);assert.match(body.text,/SAMPLE_TEXT/);
 });
 test('OpenCode already-aborted parent dispatches no request',async t=>{
   const m=mock(t),c=new AbortController();c.abort();
@@ -77,7 +130,7 @@ test('OpenCode requests newest page and never accepts an older completed assista
   const old=assistant('SAMPLE_OLD',{id:'SAMPLE_OLD',time:{created:100,completed:101}}),oldIdle={type:'idle',outcome:'succeeded',time:{created:102}};
   const m=mock(t,{poll:n=>[assistant(n===1?'SAMPLE_PARTIAL':'SAMPLE_FINAL',{finish:n===1?undefined:'stop',time:{created:200,...(n===1?{}:{completed:201})}}),oldIdle,old]});
   const r=await openCodeChat(upstream,credential,input());const wire=await r.response.text();assert.equal(m.polls(),2);assert.match(wire,/SAMPLE_FINAL/);assert.doesNotMatch(wire,/SAMPLE_OLD/);
-  const page=new URL(m.calls.find(x=>x.method==='GET').url);assert.equal(page.searchParams.get('order'),'desc');assert.equal(page.searchParams.get('limit'),'200');
+  const page=new URL(m.calls.find(x=>String(x.url).includes('/message')).url);assert.equal(page.searchParams.get('order'),'desc');assert.equal(page.searchParams.get('limit'),'200');
 });
 test('OpenCode final succeeded idle can complete latest assistant without invented early finish',async t=>{
   mock(t,{poll:()=>[{type:'idle',outcome:'succeeded',time:{created:202}},assistant('SAMPLE_FINAL',{finish:undefined,time:{created:200,completed:201}})]});
@@ -123,10 +176,10 @@ test('WB explicit pool off remains off; disabled route and edition isolation rem
   r.accountPool.enabled=true;r.enabled=false;syncWorkBuddyPools(s.config.value);assert.deepEqual(r.accountPool.accountIds,['SAMPLE-A']);r.enabled=true;s.config.value.accounts[2].edition='global';syncWorkBuddyPools(s.config.value);assert.deepEqual(r.accountPool.accountIds,['SAMPLE-A']);
 });
 
+// 会话桥仍缺原生采样通道：真正不兼容的请求必须原样交给同型号 standby。
 for(const [name,extra] of [
   ['tools and tool-result history',{tools:[{type:'function',function:{name:'SAMPLE_TOOL',parameters:{type:'object'}}}],messages:[{role:'assistant',content:null,tool_calls:[{id:'SAMPLE_CALL',type:'function',function:{name:'SAMPLE_TOOL',arguments:'{}'}}]},{role:'tool',tool_call_id:'SAMPLE_CALL',content:'SAMPLE_RESULT'},{role:'user',content:'SAMPLE continuation'}]}],
-  ['explicit output budget',{max_tokens:4096}],
-  ['system/history roles',{messages:[{role:'system',content:'SAMPLE_SYSTEM'},{role:'user',content:'SAMPLE_USER'},{role:'assistant',content:'SAMPLE_PRIOR'},{role:'user',content:'SAMPLE_CONTINUE'}]}],
+  ['sampling temperature',{temperature:0}],
 ])test('Router hands '+name+' unchanged to compatible same-model standby without an OpenCode POST',async t=>{
   const m=mock(t),records=[],meta=new Map(),seen=[];
   const config={value:{accounts:[{id:'SAMPLE_OC',platform:'opencode'},{id:'SAMPLE_STANDBY',platform:'codebuddy'}],upstreams:[{id:'SAMPLE_OC',kind:'opencode',accountId:'SAMPLE_OC'},{id:'SAMPLE_STANDBY',kind:'codebuddy',accountId:'SAMPLE_STANDBY'}],routes:[{id:'SAMPLE_ROUTE',targets:[{upstreamId:'SAMPLE_OC',model:'SAMPLE-free'}]},{id:'SAMPLE_OTHER_ROUTE',targets:[{upstreamId:'SAMPLE_STANDBY',model:'SAMPLE-free'}]}],modelRelay:{enabled:true,reservePercent:10,reserveCredits:100,balanceMaxAgeSeconds:60}}};
@@ -140,4 +193,24 @@ for(const [name,extra] of [
   const response=await collectChat(router.chat(value));assert.equal(response.choices[0].message.content,'SAMPLE_STANDBY_COMPLETE');
   assert.deepEqual(seen.at(-1).request,before);assert.equal(seen.at(-1).target.upstreamId,'SAMPLE_STANDBY');
   assert.equal(m.calls.filter(x=>x.method==='POST').length,0);assert.deepEqual(value,before);
+});
+
+// 反向断言：长文预算、多轮历史和图像现在由 OpenCode 自己承接，不应该再外抛给 standby。
+for(const [name,extra] of [
+  ['explicit output budget',{max_tokens:4096}],
+  ['system/history roles',{messages:[{role:'system',content:'SAMPLE_SYSTEM'},{role:'user',content:'SAMPLE_USER'},{role:'assistant',content:'SAMPLE_PRIOR'},{role:'user',content:'SAMPLE_CONTINUE'}]}],
+  ['image part',{messages:[{role:'user',content:[{type:'text',text:'SAMPLE_VISION'},{type:'image_url',image_url:{url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII='}}]}]}],
+])test('Router keeps '+name+' on OpenCode because the bridge now carries it',async t=>{
+  const seen=[],meta=new Map();
+  const config={value:{accounts:[{id:'SAMPLE_OC',platform:'opencode'},{id:'SAMPLE_STANDBY',platform:'codebuddy'}],upstreams:[{id:'SAMPLE_OC',kind:'opencode',accountId:'SAMPLE_OC'},{id:'SAMPLE_STANDBY',kind:'codebuddy',accountId:'SAMPLE_STANDBY'}],routes:[{id:'SAMPLE_ROUTE',targets:[{upstreamId:'SAMPLE_OC',model:'SAMPLE-free'}]},{id:'SAMPLE_OTHER_ROUTE',targets:[{upstreamId:'SAMPLE_STANDBY',model:'SAMPLE-free'}]}],modelRelay:{enabled:true,reservePercent:10,reserveCredits:100,balanceMaxAgeSeconds:60}}};
+  const ledger={get:k=>meta.get(k),set:(k,v)=>meta.set(k,v),record:()=>{},beginUsage:()=>{},finishUsage:()=>{}};
+  const platforms={models:async id=>[{id:'SAMPLE-free',callable:true,contextWindow:100000,maxTokens:10000,tools:true,multimodal:true}],chat:async(target,request)=>{
+    seen.push(target.upstreamId);
+    if(target.upstreamId==='SAMPLE_OC')return {response:Response.json({choices:[{message:{role:'assistant',content:'SAMPLE_OC_COMPLETE'},finish_reason:'stop'}]})};
+    return {response:Response.json({choices:[{message:{role:'assistant',content:'SAMPLE_STANDBY_COMPLETE'},finish_reason:'stop'}]})};
+  }};
+  const router=new Router(config,platforms,{ledger});
+  const response=await collectChat(router.chat({...input(),...extra,model:'SAMPLE_ROUTE'}));
+  assert.equal(response.choices[0].message.content,'SAMPLE_OC_COMPLETE');
+  assert.deepEqual(seen,['SAMPLE_OC']);
 });

@@ -128,6 +128,9 @@ export const CODEARTS_CHAT_VERIFIED = Object.freeze({
 // Local contracts stay below those windows; GLM-5.2 keeps its deployed 512K contract and
 // the two hidden VL models use explicit local 256K contracts. The builtin catalog publishes
 // no exact context/output numbers: official* stays null.
+// 实测档位（_probe/ds-eff3.mjs，2026-11-17）：八档全部被上游接受且都产出思考内容。
+export const CODEARTS_EFFORTS = Object.freeze(['none','minimal','low','medium','high','xhigh','max']);
+
 export const CODEARTS_CONFIGURED_LIMITS = Object.freeze({
   'GLM-5.2': Object.freeze({contextWindow:524288,maxTokens:65536}),
   'Qwen3-VL-235B': Object.freeze({contextWindow:262144,maxTokens:65536}),
@@ -592,6 +595,12 @@ export async function codeartsModels(credential, {limit = 500, ...options} = {})
       toolsSource: toolsVerified ? 'live_tool_calls_verified' : 'unproven',
       toolChoiceModes: ['auto','none'], auditToolChoice: 'auto', toolRoundtripVerified: toolsVerified && chatVerified && !!limits,
       multimodal: row?.supports_images === true,
+      // 2026-11-17 实测（_probe/ds-eff3.mjs）：base/none/minimal/low/medium/high/xhigh/max 八档
+      // 全部 200、正文一致、reasoning_content 均有内容（40–67 字符）。上游接受任意 reasoning_effort，
+      // 之前目录里 eff=null 只是网关没声明，不是模型没有思考档位。
+      reasoning: {supportedEfforts: [...CODEARTS_EFFORTS], defaultEffort: 'medium', canDisableThinking: true},
+      reasoningEfforts: Object.fromEntries(CODEARTS_EFFORTS.map(e => [e, e])),
+      reasoningSource: 'gateway_live_effort_sweep_2026-11-17',
       callable: enabled && chatVerified && !!limits,
       callableReason: !enabled ? 'disabled_upstream' : !limits ? 'context_window_unknown' : !chatVerified ? 'chat_unverified' : null,
       enabled,

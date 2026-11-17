@@ -145,7 +145,7 @@
 
 | status | 含义 |
 |---|---|
-| `passed` | 四项阶段全部通过 |
+| `passed` | 五项阶段全部通过 |
 | `partial` | 聊天通过但工具链未全通过，或前两阶段通过但存在非硬性失败 |
 | `uncertain` | 超时、断连或无法判定，属**待复测**，不等于模型永久下线 |
 | `unavailable` | 当前目录或通道不提供该条目（如无活动权益、未声明调用通道） |
@@ -157,10 +157,10 @@
 
 ### 7.4 阶段、超时与并发
 
-- 四个阶段：普通回复、流式、工具调用、工具结果回传。流式要求拿到完整文本与结束事件；工具阶段要求真实结构化 `tool_calls`（名称与参数需匹配）且参数一致；回传阶段要求模型确认本地工具结果。上游未声明工具能力时标记 `unsupported` 并跳过，不伪造通过。
-- 阶段超时：**OpenCode 每阶段 `120000`**；精确 `trae-code-cn/deepseek-v4.1-flash` 为 `120000`；NVIDIA 普通模型 `120000`，NVIDIA `moonshotai/kimi-k3` 与 `deepseek-ai/deepseek-v4.1-flash` 为有界 `600000`；其他上游 `45000`。阶段计时从**真正开始请求**时计起，排队不消耗阶段预算。目录刷新另有 45000ms 有界等待，不与阶段生成时间混用。
+- 五个阶段：普通回复、流式、长文输出、工具调用、工具结果回传。长文阶段用 `min(8192, maxTokens)` 预算要求输出 ≥600 字符并写到 200，测不出长文就判失败，不靠“聊天能回话”冒充支持长文。流式要求拿到完整文本与结束事件；工具阶段要求真实结构化 `tool_calls`（名称与参数需匹配）且参数一致；回传阶段要求模型确认本地工具结果。上游未声明工具能力时标记 `unsupported` 并跳过，不伪造通过。
+- 阶段超时：**OpenCode 每阶段 `300000`**；精确 `trae-code-cn/deepseek-v4.1-flash` 为 `120000`；NVIDIA 普通模型 `120000`，NVIDIA `moonshotai/kimi-k3` 与 `deepseek-ai/deepseek-v4.1-flash` 为有界 `600000`；其他上游 `45000`。阶段计时从**真正开始请求**时计起，排队不消耗阶段预算。目录刷新另有 45000ms 有界等待，不与阶段生成时间混用。
 - 本地阶段预算耗尽保存 `error.code:audit_stage_timeout`、`error.status:408`、`timeoutSource:local_audit_deadline` 和实际 `timeoutMs`；它不是官方返回的 HTTP 408。真正上游错误仍保存其 typed 错误与原因，不能统一改成“模型不可用”。
-- OpenCode 体检使用桥接支持的单条用户纯文本，不带 `max_tokens`；这只调整体检探针形状，真实客户端的历史、工具、采样或显式输出预算不会被静默删除。桥接契约见 [OpenCode](opencode.md)。
+- OpenCode 体检走本机会话桥，不带 `max_tokens`（桥协议没有该字段，路由器会剥离）；这只调整体检探针形状，真实客户端的图像附件、多轮历史与提示词工具契约都会被承接。桥接契约见 [OpenCode](opencode.md)。
 - 并发上限 2；同一 NVIDIA 账号的体检串行执行（按账号分道），避免互相挤占限流窗口。
 - 仅支持自动选工具的上游会在记录中标明 `auditToolChoice`，仍要求结构化工具与回传成功。
 - 报告同时写入服务账本的 `model-audit` 状态，并落盘到 `AI_CREDIT_MEMORY`（未设置时为当前用户主目录下 `.ai-credit-gateway/memory`）下 `测试记录/模型全量体检.json`、`模型全量体检.md`；每个本轮完成结果追加到 `体检事件.jsonl`。WebView2 便携实例显式设置自己的 `user-data/memory`，不采用开发者机器路径。相同 `upstreamId+model` 的当前记录更新时，通过 `previousAttempts` 保留最多 5 条先前尝试，失败阶段与原因不以新一次成功抹去。定向测试之外的模型记录保持原样。

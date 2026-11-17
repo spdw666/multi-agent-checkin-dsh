@@ -12,7 +12,7 @@
 {"id":"qoder-cn","platform":"qoder","edition":"cn","enabled":false,"credentials":{"kind":"desktop","file":"auto"},"tasks":[{"id":"daily-checkin","enabled":true}]}
 ```
 
-对应 upstream 的 kind 与 account.platform 必须相同。先查模型目录，再导入需要发布的模型；保留用户此前停用的账号和模型。目录存在不表示每个模型都经过普通、SSE、工具调用和工具回传四项验收。
+对应 upstream 的 kind 与 account.platform 必须相同。先查模型目录，再导入需要发布的模型；保留用户此前停用的账号和模型。目录存在不表示每个模型都经过普通、SSE、长文输出、工具调用和工具回传五项验收。
 
 ## 每日活动
 
@@ -28,6 +28,6 @@
 
 ## 调用与验收
 
-DSH 与 Hermes 继续使用既有 ai-credit Provider 和启用路由，默认模型不会因导入新平台而被擅自更换。管理 API 选测：POST /admin/model-tests，body 为 {"scope":"selected","routeIds":["精确路由ID"]}。结果区分 passed、partial、uncertain、unavailable、failed；聊天通过但工具未声明不会显示四项全通过。
+DSH 与 Hermes 继续使用既有 ai-credit Provider 和启用路由，默认模型不会因导入新平台而被擅自更换。管理 API 选测：POST /admin/model-tests，body 为 {"scope":"selected","routeIds":["精确路由ID"]}。结果区分 passed、partial、uncertain、unavailable、failed；聊天通过但工具未声明不会显示五项全通过。
 
 参考与许可证：[provider-b.md](provider-b.md)、[provider-attributions.md](provider-attributions.md)。各平台详细文档按 provider 名称分列。

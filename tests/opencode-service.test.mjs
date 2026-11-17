@@ -67,9 +67,11 @@ test('official FreeTierError keeps HTTP403 and its specific cause, not generic l
   });
   await assert.rejects(()=>openCodeChat({baseUrl:service.baseUrl},credential,{model:'SAMPLE-free',messages:[{role:'user',content:'SAMPLE prompt'}]}),e=>e.status===403&&e.code==='opencode_free_tier_rejected');
 });
-test('unsupported original tools remain intact and reject before service startup',async()=>{
-  const request={model:'SAMPLE-free',messages:[{role:'user',content:'SAMPLE'}],tools:[{type:'function',function:{name:'SAMPLE_TOOL',parameters:{type:'object'}}}]},before=structuredClone(request);
-  await assert.rejects(()=>openCodeChat({...service,baseUrl:'https://SAMPLE.invalid'},credential,request),e=>e.code==='tools_not_supported');assert.deepEqual(request,before);
+test('sampling parameters the bridge cannot carry stay intact and reject before service startup',async()=>{
+  // 工具/图像/多轮现在由提示词契约与 files 承接；只有采样参数（temperature/stop/...）
+  // 在会话桥里没有通道，必须继续在起服务前明确拒绝，绝不静默丢弃。
+  const request={model:'SAMPLE-free',messages:[{role:'user',content:'SAMPLE'}],temperature:0.2},before=structuredClone(request);
+  await assert.rejects(()=>openCodeChat({...service,baseUrl:'https://SAMPLE.invalid'},credential,request),e=>e.code==='relay_capacity_incompatible');assert.deepEqual(request,before);
 });
 test('official model country restriction keeps HTTP403 and is not mislabeled login failure',async t=>{
   t.mock.method(globalThis,'fetch',async(url,options={})=>{

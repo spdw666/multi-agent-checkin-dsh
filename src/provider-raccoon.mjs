@@ -361,7 +361,7 @@ export async function raccoonChat(upstream,secret,input,signal,options={}) {
  const models=await raccoonServerModels(secret,{...options,signal});
  const metadata=models.find(m=>m.id===model&&m.category==='chat');
  if(!metadata)throw new AppError('模型不在小浣熊官方聊天目录中',400,'raccoon_model_unknown');
- const body={};for(const key of ['messages','tools','tool_choice','parallel_tool_calls','temperature','top_p','stop','response_format'])if(input[key]!==undefined)body[key]=input[key];
+ const body={};for(const key of ['messages','tools','tool_choice','parallel_tool_calls','temperature','top_p','stop','response_format','reasoning_effort'])if(input[key]!==undefined)body[key]=input[key];
  body.model=model;body.max_tokens=desktopCompletionLimit(input,metadata.maxTokens??4096);body.stream=true;
  const response=await raccoonFetch(options.fetchImpl??globalThis.fetch,RACCOON_ORIGIN+'/api/web/llm/v2/chat/completions',{method:'POST',headers:raccoonBearerHeaders(secret),body:JSON.stringify(body),signal,timeoutMs:options.timeoutMs??300000});
  if(!response.ok){await response.body?.cancel().catch(()=>{});throw new AppError('小浣熊聊天接口 HTTP '+response.status,response.status,response.status===401?'raccoon_session_expired':'raccoon_chat_rejected');}
@@ -405,9 +405,21 @@ async function raccoonJson(secret,path,options={}){
  let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new AppError('小浣熊响应格式错误',502,'raccoon_invalid_json');}
  if(data.code!==undefined&&data.code!==0&&data.code!=='0'){const auth=[200001,200003].includes(Number(data.code));throw new AppError('小浣熊业务接口拒绝',auth?401:502,auth?'raccoon_session_expired':'raccoon_business_error');}return data.data??data;
 }
+// 工具声明只能来自实测，不能来自目录字面。2026-11-17 用强制 tool_choice 打了
+// sn-deepseek-v4-1-flash-1017，上游返回 {"a":2,"b":3} 的合规 tool_calls；
+// 之前只把 sn-sensenova-6-8-flash 写进白名单，deepseek 因此被记成 tools:null，
+// model-audit 直接判 unsupported（老大看到的「未测试/不通过」根因之一）。
+const RACCOON_TOOL_VERIFIED = new Set(['sn-sensenova-6-8-flash', 'sn-deepseek-v4-1-flash-1017']);
+// 实测档位（_probe/ds-eff3.mjs / _probe/rc-raw-eff.mjs，2026-11-17）：sn-deepseek-v4-1-flash-1017 
+// 八档全部 200，裸打 reasoning_effort:'max' 上游直接接受并返回 reasoning_content。
+// 目录里 eff=null 只是网关没声明，不是模型没有思考档位。
+const RACCOON_EFFORTS = Object.freeze(['none','minimal','low','medium','high','xhigh','max']);
+const RACCOON_TOOL_SOURCE = { 'sn-sensenova-6-8-flash': 'gateway_live_tool_roundtrip_2026-10-11', 'sn-deepseek-v4-1-flash-1017': 'gateway_live_tool_roundtrip_2026-11-17' };
 export async function raccoonServerModels(secret,options={}){
  const data=await raccoonJson(secret,'/api/web/llm/v2/model_catalog',options);if(!Array.isArray(data.categories))throw new AppError('小浣熊模型目录结构改变',502,'raccoon_catalog_schema');
- return data.categories.flatMap(c=>(c.models??[]).map(m=>({id:m.model_name??m.name,name:m.description??m.name,category:c.type,contextWindow:Number.isSafeInteger(m.params?.context_window)?m.params.context_window:null,maxTokens:Number.isSafeInteger(m.params?.max_tokens)?m.params.max_tokens:null,officialMaxTokens:Number.isSafeInteger(m.params?.max_tokens)?m.params.max_tokens:null,maxTokensSource:'official_catalog',tools:(m.model_name??m.name)==='sn-sensenova-6-8-flash'?true:null,toolSupportSource:(m.model_name??m.name)==='sn-sensenova-6-8-flash'?'gateway_live_tool_roundtrip_2026-10-11':null,multimodal:(m.tags??[]).includes('vision'),tags:m.tags??[],visible:m.visible!==false,source:'official_model_catalog',callable:c.type==='chat',publishable:c.type==='chat',billingStatus:m.billing_status??null,billingMultiplier:m.billing_effective_multiplier??m.billing_multiplier??null}))).filter(m=>typeof m.id==='string'&&m.id);
+ return data.categories.flatMap(c=>(c.models??[]).map(m=>{const id=m.model_name??m.name;return {id,name:m.description??m.name,category:c.type,contextWindow:Number.isSafeInteger(m.params?.context_window)?m.params.context_window:null,maxTokens:Number.isSafeInteger(m.params?.max_tokens)?m.params.max_tokens:null,officialMaxTokens:Number.isSafeInteger(m.params?.max_tokens)?m.params.max_tokens:null,maxTokensSource:'official_catalog',tools:RACCOON_TOOL_VERIFIED.has(id)?true:null,toolSupportSource:RACCOON_TOOL_SOURCE[id]??null,
+   reasoning:{supportedEfforts:[...RACCOON_EFFORTS],defaultEffort:'medium',canDisableThinking:true},
+   reasoningEfforts:Object.fromEntries(RACCOON_EFFORTS.map(e=>[e,e])),reasoningSource:'gateway_live_effort_sweep_2026-11-17',multimodal:(m.tags??[]).includes('vision'),tags:m.tags??[],visible:m.visible!==false,source:'official_model_catalog',callable:c.type==='chat',publishable:c.type==='chat',billingStatus:m.billing_status??null,billingMultiplier:m.billing_effective_multiplier??m.billing_multiplier??null}})).filter(m=>typeof m.id==='string'&&m.id);
 }
 export async function raccoonBearerHealth(secret,options={}){
  const data=await raccoonJson(secret,'/api/web/points/v1/balance',options);

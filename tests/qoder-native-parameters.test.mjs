@@ -20,9 +20,10 @@ test('Qoder native thinking preserves declared modes and actual effort identifie
  assert.deepEqual(native.thinking,{source:'thinking_config',modes:[{id:'disabled',isDefault:false},{id:'enabled',isDefault:true}],defaultMode:'enabled',efforts:[{id:'xhigh',isDefault:false},{id:'low',isDefault:false},{id:'medium',isDefault:true}],defaultEffort:'medium'});
 });
 
-test('Qoder native declarations never invent generic reasoning controls',()=>{
- const model=parse(declared());assert.equal(model.reasoning,null);assert.equal(model.reasoningEfforts,undefined);
- assert.equal(model.maxTokens,1024);assert.equal(model.maxTokensSource,'configured_default');assert.equal(model.officialMaxTokens,null);
+test('Qoder native declarations surface the declared thinking efforts without inventing levels',()=>{
+ const model=parse(declared());assert.deepEqual(model.reasoning,{supportedEfforts:['xhigh','low','medium'],defaultEffort:'medium',canDisableThinking:true});
+ assert.deepEqual(model.reasoningEfforts,{xhigh:'xhigh',low:'low',medium:'medium'});assert.equal(model.reasoningSource,'qoder_thinking_config');
+ assert.equal(model.maxTokens,65536);assert.equal(model.maxTokensSource,'configured_limit');assert.equal(model.officialMaxTokens,null);
 });
 
 test('Qoder explicit input and output limits outrank native context selector metadata',()=>{
@@ -49,7 +50,7 @@ test('Qoder malformed parameter structures and invalid token counts are not prom
 
 test('Qoder native parser leaves source rows and unrelated fields untouched',()=>{
  const raw=declared();raw.unknown={retained:true};raw.thinking_config.enabled.efforts.future_native_level={};const original=structuredClone(raw);const model=parse(raw);
- assert.deepEqual(raw,original);assert.ok(model.qoderNativeParameters.thinking.efforts.some(e=>e.id==='future_native_level'));assert.equal(model.reasoningEfforts,undefined);
+ assert.deepEqual(raw,original);assert.ok(model.qoderNativeParameters.thinking.efforts.some(e=>e.id==='future_native_level'));assert.ok(model.reasoningEfforts.future_native_level==='future_native_level');
 });
 
 test('Qoder boolean reasoning without a native parameter declaration keeps the old contract',()=>{

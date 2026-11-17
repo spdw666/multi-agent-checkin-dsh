@@ -117,9 +117,9 @@ Invoke-RestMethod 'http://127.0.0.1:19421/v1/chat/completions' `
 
 使用 `adminKey` 发送到 `POST /admin/model-tests`。它接受 1–500 个唯一 `upstreamId+model` 选择；已有体检执行时返回 `409 audit_in_progress`。HTTP 202 只代表已启动；轮询 `GET /admin/model-tests`，按本轮 `jobKeys/total/completed` 看进度，不用含历史条目的 `results.length` 计数。
 
-每个 OpenCode 阶段有界 **120 秒**；探针只发送桥接支持的纯文本，不加显式输出预算。普通与 SSE 分别执行。外部工具与回传因未声明而标记 `unsupported`，不伪造通过。失败保留阶段、耗时、错误码与原因；`audit_stage_timeout` 是本地体检 120 秒截止（408），不冒充官方 HTTP 408。
+每个 OpenCode 阶段有界 **300 秒**；探针走本机会话桥，不加显式输出预算。普通、SSE、长文、工具与回传五项分别执行。工具能力来自上游 `/api/model` 的 `capabilities.tools`，可用提示词契约承接结构化 `tool_calls`；图像来自 `capabilities.input` 含 `image`。失败保留阶段、耗时、错误码与原因；`audit_stage_timeout` 是本地体检 300 秒截止（408），不冒充官方 HTTP 408。
 
-底层审计 `status:partial/capabilityStatus:chat_only` 且普通与 SSE 均通过时，目录显示 `chat_verified` / **对话已验证**。它不代表 `passed` 四项全部通过，不代表图片和外部工具可用。普通通过但 SSE 失败时不满足这个标记。
+底层审计 `status:partial/capabilityStatus:chat_only` 且普通与 SSE 均通过时，目录显示 `chat_verified` / **对话已验证**。它不代表 `passed` 五项全部通过。普通通过但 SSE 失败时不满足这个标记。
 
 报告写入服务账本及配置的体检 JSON/Markdown，完成事件追加到 JSONL；重测同一模型保留最多 5 条先前尝试，不触碰其他模型历史与导入开关。原生目录读取相同保存状态，旧窗口重开后再看最新记录。完整持久化与校验契约见 [API](api.md#7-模型体检post-adminmodel-tests)。
 

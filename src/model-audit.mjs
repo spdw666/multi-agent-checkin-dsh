@@ -5,19 +5,23 @@ import {mkdir,writeFile,appendFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {homedir} from 'node:os';
 export const memoryRoot=process.env.AI_CREDIT_MEMORY||join(homedir(),'.ai-credit-gateway','memory');
+// 体检阶段顺序：长文（output）插在工具之前，用来区分"能聊天"和"能做长任务"。
+export const AUDIT_STAGES=Object.freeze(['ordinary','stream','output','tools','roundtrip']);
 const names={passed:'全部通过',failed:'未通过',partial:'仅聊天 / 工具未通过',uncertain:'待复测',unavailable:'当前通道未提供',running:'检测中'};
 export function auditLabel(row){return row?.capabilityStatus==='chat_only'?'聊天通过 / 工具未声明':row?names[row.status]??row.status:'未测试';}
 export async function saveAudit(service,report){
  service.ledger.set('model-audit',report);
  const dir=join(memoryRoot,'测试记录');await mkdir(dir,{recursive:true});await atomicJson(join(dir,'模型全量体检.json'),report);
  const esc=s=>String(s??'').replaceAll('|','/').replaceAll('\n',' ');
- await writeFile(join(dir,'模型全量体检.md'),'# 模型全量体检\n\n更新：'+report.updatedAt+'；进度 '+report.completed+'/'+report.total+'；状态 '+report.status+'。\n\n四项：普通回复、流式、工具调用、工具结果回传。超时/断连标记待复测，不当成永久不可用；未提供调用通道的条目单列。\n\n|平台|模型|普通|流式|工具|回传|结果|原因|\n|---|---|---|---|---|---|---|---|\n'+report.results.map(r=>'|'+[r.upstreamId,r.model,...['ordinary','stream','tools','roundtrip'].map(k=>{const t=r.tests?.find(t=>t.stage===k);return t?t.ok?'通过':t.status==='unsupported'?'未声明':'失败':'—'}),auditLabel(r),r.reason].map(esc).join('|')+'|').join('\n')+'\n','utf8');
+ await writeFile(join(dir,'模型全量体检.md'),'# 模型全量体检\n\n更新：'+report.updatedAt+'；进度 '+report.completed+'/'+report.total+'；状态 '+report.status+'。\n\n五项：普通回复、流式、长文输出、工具调用、工具结果回传。长文阶段要求模型在单次回复里连续输出 ≥600 字符，用来区分「能聊天」和「能做长任务」；超时/断连标记待复测，不当成永久不可用；未提供调用通道的条目单列。\n\n|平台|模型|普通|流式|长文|工具|回传|结果|原因|\n|---|---|---|---|---|---|---|---|---|\n'+report.results.map(r=>'|'+[r.upstreamId,r.model,...AUDIT_STAGES.map(k=>{const t=r.tests?.find(t=>t.stage===k);return t?t.ok?'通过':t.status==='unsupported'?'未声明':t.status==='skipped'?'—':'失败':'—'}),auditLabel(r),r.reason].map(esc).join('|')+'|').join('\n')+'\n','utf8');
 }
 export function auditStageTimeout(upstream,model){
  // This exact native route has measured first tool output near the old 45s
  // ceiling. Match its native 120s budget without changing unrelated audits.
  if(upstream.kind==='trae'&&upstream.id==='trae-code-cn'&&model?.id==='deepseek-v4.1-flash')return 120000;
- if(upstream.kind==='opencode')return 120000;
+ // OpenCode 会话桥实测：3000 词请求 95.9s、5,533 输出 token 才 finish。旧值
+ // 120000 正好卡在这类"长文/长任务"上，与 provider 侧 SESSION_TIMEOUT_MS 对齐到 300000。
+ if(upstream.kind==='opencode')return 300000;
  return upstream.kind==='nvidia'?(['moonshotai/kimi-k3','deepseek-ai/deepseek-v4.1-flash'].includes(model?.id)?600000:120000):45000;
 }
 export function auditRoundtripMatches(text){const value=String(text??'').trim();return /^(?:5|`5`|\*\*5\*\*|\*5\*|__5__|_5_)$/.test(value)||/^```(?:text|plaintext|json)?[ \t]*\r?\n[ \t]*5[ \t]*\r?\n```$/i.test(value);}
@@ -27,13 +31,17 @@ export async function testModel(service,u,m,{timeoutMs=auditStageTimeout(u,m)}={
  const routeId='audit/model',config={value:{...service.config.value,routes:[{id:routeId,targets:[{upstreamId:u.id,model:m.id}]}]}},router=new Router(config,service.platforms,{ledger:service.ledger});
  const user={role:'user',content:'Reply with only AUDIT_OK.'},tool={type:'function',function:{name:'audit_add',description:'Adds two numbers locally',parameters:{type:'object',properties:{a:{type:'number'},b:{type:'number'}},required:['a','b']}}};
  let toolMessage;
- for(const stage of ['ordinary','stream','tools','roundtrip']){
+ for(const stage of AUDIT_STAGES){
   if((stage==='tools'||stage==='roundtrip')&&m.tools!==true){result.tests.push({stage,ok:false,status:'unsupported',reason:'上游未声明结构化工具调用'});continue;}
   if(stage==='roundtrip'&&!toolMessage){result.tests.push({stage,ok:false,status:'skipped',reason:'前一步未产生有效工具调用'});continue;}
   // Probe the bridge's actual supported contract. Do not weaken the provider's
   // validation of explicit parameters in real client requests.
-  const request={model:routeId,messages:[user],...(u.kind==='opencode'?{}:{max_tokens:Math.min(4096,m.maxTokens??4096)})};
+  // 长文阶段必须拿到真实输出预算：4096 连 600 字符都写不满就分辨不出长任务能力。
+  const outputBudget=Math.min(8192,m.maxTokens??8192);
+  const stageBudget=stage==='output'?outputBudget:Math.min(4096,m.maxTokens??4096);
+  const request={model:routeId,messages:[user],...(u.kind==='opencode'?{}:{max_tokens:stageBudget})};
   if(m.auditReasoningEffort)request.reasoning_effort=m.auditReasoningEffort;
+  if(stage==='output'){request.messages=[{role:'user',content:'List the integers from 1 to 200 in a single space-separated line, then on a new line write one short sentence confirming the list ends at 200. No other text.'}];}
   if(stage==='tools'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3. You must call the tool, not calculate it yourself.'}];request.tools=[tool];request.tool_choice=m.auditToolChoice==='auto'?'auto':{type:'function',function:{name:'audit_add'}};}
   if(stage==='roundtrip'){request.messages=[{role:'user',content:'Use audit_add to add 2 and 3.'},toolMessage,{role:'tool',tool_call_id:toolMessage.tool_calls[0].id,content:'5'},{role:'user',content:'The local tool returned 5. Reply with only 5; do not call another tool.'}];request.tools=[tool];request.tool_choice='none';}
   const start=Date.now(),signal=AbortSignal.timeout(timeoutMs);try{
@@ -41,6 +49,13 @@ export async function testModel(service,u,m,{timeoutMs=auditStageTimeout(u,m)}={
    const response=await collectChat(router.chat(request,signal,{source:"audit"}));message=response.choices?.[0]?.message;
    if(stage==='tools'){const call=message?.tool_calls?.[0];if(call?.function?.name!=='audit_add')throw Error('模型未返回约定的结构化工具调用');const args=JSON.parse(call.function.arguments);if(args.a!==2||args.b!==3)throw Error('工具参数与输入不一致');toolMessage=message;}
    else if(!message?.content?.trim())throw Error('模型返回空文本');
+   else if(stage==='output'){
+    // 真正的长文验收：正文必须连续写满 600 字符，且数字 200 必须写在里面。
+    // finish=length 不算失败——那说明模型还在写，只是本轮预算到顶。
+    const longText=message.content;
+    if(longText.trim().length<600)throw Error('长文输出不足 600 字符（实际 '+longText.trim().length+'）');
+    if(!/\b200\b/.test(longText))throw Error('长文输出未写到 200');
+   }
    if(stage==='roundtrip'&&!auditRoundtripMatches(message.content))throw Error('回传结果未得到确认');
    result.tests.push({stage,ok:true,elapsedMs:Date.now()-start,...(stage==='tools'?{tool:'audit_add',args:{a:2,b:3}}:{text:message.content.slice(0,160)})});
   }catch(e){const timedOut=signal.aborted&&signal.reason?.name==='TimeoutError';const v=errorView(timedOut?new AppError('本地体检阶段等待超过 '+(timeoutMs/1000)+' 秒',408,'audit_stage_timeout'):e);result.tests.push({stage,ok:false,elapsedMs:Date.now()-start,error:v,...(timedOut?{timeoutSource:'local_audit_deadline',timeoutMs}: {})});}
