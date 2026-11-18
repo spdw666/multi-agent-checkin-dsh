@@ -18,7 +18,15 @@ export async function desktopSseResponse(response,{stream=true,model='',signal,p
     let row;try{row=JSON.parse(raw);}catch{throw new AppError('上游流格式错误',502,prefix+'_stream_invalid');}
     const ec=row.error_code??row.error?.code??row.code;
     if(event==='error'||row.error||(row.error_code!=null&&!['','0',0].includes(row.error_code))){
-     const status=[401,40100,51100].includes(Number(ec))?401:[403,40300].includes(Number(ec))?403:[429,42900].includes(Number(ec))?429:502;
+     // CodeArts 的业务码是字符串 `InferHub.ModelArts.81114.429`：数字相等判不出来，Number() 得到
+     // NaN，于是一个真实的 429 限流被降级成默认的 502 upstream_unavailable，relay 记 15 秒退避
+     // 而不是按限流处理。先按数字判，判不出来再看业务码尾段（`.429` / `.401` / `.403`）。
+     const numeric=Number(ec);
+     const status=[401,40100,51100].includes(numeric)?401
+      :[403,40300].includes(numeric)?403
+      :[429,42900].includes(numeric)?429
+      :(typeof ec==='string'&&/\.(401|403|429)\d*$/.test(ec))?Number(ec.match(/\.(401|403|429)\d*$/)[1])
+      :502;
      const error=new AppError('上游返回流内业务错误',status,prefix+'_stream_upstream_error');
      if(ec!==undefined&&ec!==null)error.upstreamCode=redact(String(ec)).slice(0,128);
      const message=row.error?.message??row.error_msg??row.message??row.msg;

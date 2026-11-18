@@ -85,6 +85,11 @@ export const CODEARTS_TRANSIENT_CODES = Object.freeze({
   // repairs those shapes before the body is signed, so a still-reachable 81001 means some OTHER
   // field is invalid and must be bisected rather than retried.
   INVALID_ARGUMENT: {code: 'InferHub.ModelArts.81001.400', meaning: '引擎判定请求参数非法（只观察到一个成因：历史 tool_calls.arguments 为空/非法 JSON，已在构造请求体时归一化）', retryable: false},
+  // HTTP 200 流内业务错误。2026-11-18 实测：`Too many requests, the rate limit is 600000000
+  // tokens per minute`，是账号级每分钟 token 配额打满，不是请求本身有问题。此前 provider-sse
+  // 只按数字比较错误码，字符串业务码一律落到 502 upstream_unavailable（15 秒退避），
+  // 现已在 provider-sse 按码尾段识别 429，并按限流类别记冷却。
+  RATE_LIMITED: {code: 'InferHub.ModelArts.81114.429', meaning: '账号级每分钟 token 配额打满（HTTP 200 流内业务错误，真实语义是 429）', retryable: true},
 });
 
 /**
@@ -805,7 +810,21 @@ export async function codeartsChat(upstream, credential, input, signal, options 
   const signed = signCodeArtsRequest(credential, {method: 'POST', path: CODEARTS_CHAT_PATH, rawQuery: '', headers, payload, xSdkDate: sdkDate(now)});
   const response = await fetchImpl(`${CODEARTS_ORIGIN}${CODEARTS_CHAT_PATH}`, {method: 'POST', redirect: 'error', headers: signed, body: payload, signal:signal??AbortSignal.timeout(120000)});
   if (!response.ok) throw await codeartsChatFailure(response,signal);
-  const normalized=await desktopSseResponse(response,{stream:input.stream===true,model,signal,prefix:"codearts",legacyText:true});
+  let normalized;
+  try {
+    normalized=await desktopSseResponse(response,{stream:input.stream===true,model,signal,prefix:"codearts",legacyText:true});
+  } catch (error) {
+    // 流内 429 是账号级时间窗配额（每分钟 token 数），不是瞬时限流：`transient` 那一类会带
+    // 短冷却重试，而这里重试只会继续撞配额。按 `long_window` 记 60 秒，并把上游业务码
+    // 放进 knownRateCodes 认得的位置，让 relay 的冷却是「限流」而不是「上游挂了」。
+    if (error?.status === 429) {
+      error.rateLimitKind = 'long_window';
+      error.rateLimitRetryable = false;
+      error.localRetrySeconds = 60;
+      error.retryAfterSource = 'local_default';
+    }
+    throw error;
+  }
   return {response:await trackCodeArtsTools(normalized,credential,model,chatId,input.stream===true),chatId};
 }
 
