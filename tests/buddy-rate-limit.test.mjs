@@ -15,6 +15,37 @@ async function rejection(value,options={},signal){
   assert.doesNotMatch(JSON.stringify(seen)+seen.stack,/SAMPLE-PRIVATE|secret\.invalid|ORIGINAL-SECRET/);
   return seen;
 }
+// CodeBuddy 客户端面板显示的那句「将在 … UTC+8 重置」就是从 429 响应体里来的。
+// buddyChatRejection 原先只读 Retry-After 头，body 里的时刻从来没被读出来。
+// 用一个相对当前时间生成的时刻，避免测试随时间推移失效。
+function utc8Stamp(ms){
+  const d=new Date(ms+8*3600*1000);
+  const pad=n=>String(n).padStart(2,'0');
+  return d.getUTCFullYear()+'-'+pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate())+' '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds());
+}
+
+test('Buddy 429 body text deadline becomes official_body when no Retry-After header',async()=>{
+  const deadline=utc8Stamp(Date.now()+1800*1000);
+  const error=await rejection(response({code:6004,msg:'您的使用量已超出频率限制，将在 '+deadline+' UTC+8 重置，您也可以切换其他模型继续使用。'}));
+  assert.equal(error.rateLimitKind,'long_window');
+  assert.equal(error.retryAfterSource,'official_body');
+  assert.ok(error.retryAfterSeconds>1780&&error.retryAfterSeconds<=1801,
+    'deadline should resolve to roughly 30 minutes, got '+error.retryAfterSeconds);
+});
+
+test('a Retry-After header outranks the body deadline',async()=>{
+  const deadline=utc8Stamp(Date.now()+1800*1000);
+  const error=await rejection(response({code:6004,msg:'将在 '+deadline+' UTC+8 重置'},{'retry-after':'120'}));
+  assert.equal(error.retryAfterSource,'official_header');
+  assert.equal(error.retryAfterSeconds,120);
+});
+
+test('a body without a parsable deadline leaves the cooldown local instead of guessing',async()=>{
+  const error=await rejection(response({code:6004,msg:'请求过于频繁，请稍后再试'}));
+  assert.equal(error.rateLimitKind,'long_window');
+  assert.equal(error.retryAfterSeconds,undefined);
+  assert.equal(error.retryAfterSource,undefined);
+});
 // WorkBuddy 平台（vendor/workbuddy-core.mjs 的 chatStream）不走 buddyChatRejection：
 // 它把 vendor 的 kind 字符串直接当错误码抛出，于是 6004 对外一直是 unknown、
 // 也拿不到恢复时刻。applyRateLimitEvidence 就是给它补这一段的地方。

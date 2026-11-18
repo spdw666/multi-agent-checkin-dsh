@@ -102,6 +102,19 @@ async function boundedErrorJson(response,{signal,maxBytes,timeoutMs}){
 // 把「这个 429 是谁限的、属于哪一类、什么时候恢复」一次性贴到错误对象上。
 // 官方业务码决定类别；displayMsg 里的绝对时刻决定恢复时间。任何一项解析不出来
 // 就不设那一项 —— 上层会退化为本地冷却，并如实标注它不代表官方恢复时间。
+// 从结构化的错误体里取出那一段人类可读文本。只用于读「什么时候恢复」，
+// 绝不参与业务码分类或重试策略判断 —— 那两项只认结构化字段。
+function upstreamMessageText(value){
+  if(!record(value))return;
+  const display=own(value,'displayMsg');
+  if(typeof display==='string')return display;
+  if(record(display)){
+    const pick=display.zh??display.en;
+    if(typeof pick==='string')return pick;
+  }
+  const msg=own(value,'msg');
+  return typeof msg==='string'?msg:undefined;
+}
 export function applyRateLimitEvidence(error,{status,detail,now=Date.now()}={}){
   if(!error||status!==429)return error;
   const code=detail?.upstreamCode,kind=businessRateLimitKind(code);
@@ -111,10 +124,18 @@ export function applyRateLimitEvidence(error,{status,detail,now=Date.now()}={}){
   return error;
 }
 export async function buddyChatRejection(response,{signal,errorBodyMaxBytes,errorBodyTimeoutMs}={}){
-  const now=Date.now();let retryAfterSeconds;
-  try{retryAfterSeconds=parseBuddyRetryAfter(response.headers?.get('retry-after'),now)}catch{}
+  const now=Date.now();let retryAfterSeconds,retryAfterSource;
+  try{retryAfterSeconds=parseBuddyRetryAfter(response.headers?.get('retry-after'),now);if(retryAfterSeconds!==undefined)retryAfterSource='official_header';}catch{}
   const data=await boundedErrorJson(response,{signal,maxBytes:boundedOption(errorBodyMaxBytes,MAX_ERROR_BYTES),timeoutMs:boundedOption(errorBodyTimeoutMs,MAX_ERROR_TIME_MS)});
   const upstreamCode=officialBusinessCode(data),diagnosticCode=businessDiagnosticCode(data);
+  // 上游把重置时刻写在文本里（CodeBuddy 客户端面板显示的就是这一句）：
+  //   您的使用量已超出频率限制，将在 2026-11-18 14:35:43 UTC+8 重置
+  // Retry-After 头优先；头没给才看文本。只认 parseResetDeadline 那一种绝对时刻，
+  // 别的不认识就不设，让上层退化为本地冷却并如实说明。
+  if(retryAfterSeconds===undefined){
+    const reset=parseResetDeadline(upstreamMessageText(data),now);
+    if(reset){retryAfterSeconds=reset.seconds;retryAfterSource='official_body';}
+  }
   const rateLimitKind=transientCodes.has(upstreamCode)?'transient':longWindowCodes.has(upstreamCode)?'long_window':usageCodes.has(upstreamCode)?'usage_limit':'unknown';
   const rateLimitRetryable=response.status===429&&rateLimitKind==='transient';
   const labels={transient:'官方短窗口限流',long_window:'官方长窗口限流',usage_limit:'官方用量或订阅条件限制',unknown:'官方请求受限，具体原因待确认'};
@@ -123,6 +144,6 @@ export async function buddyChatRejection(response,{signal,errorBodyMaxBytes,erro
   const error=new AppError(`Buddy聊天接口 HTTP ${response.status}${response.status===429?'：'+labels[rateLimitKind]:''}${diagnosticCode!==undefined?` [businessCode=${diagnosticCode}]`:''}`,response.status,'provider_chat_rejected');
   if(upstreamCode!==undefined)error.upstreamCode=upstreamCode;
   error.rateLimitKind=rateLimitKind;error.rateLimitRetryable=rateLimitRetryable;
-  if(retryAfterSeconds!==undefined){error.retryAfterSeconds=retryAfterSeconds;error.retryAfterSource='official_header'}
+  if(retryAfterSeconds!==undefined){error.retryAfterSeconds=retryAfterSeconds;error.retryAfterSource=retryAfterSource}
   return error;
 }
