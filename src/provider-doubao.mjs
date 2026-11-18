@@ -56,18 +56,20 @@ export const DOUBAO_MODELS = [
   {id: 'deepseek-v4-pro', key: 'person-deepseek-v4-pro-ga-260813', name: 'DeepSeek V4 Pro', vendor: 'deepseek', defaultEffort: 'high', tools: true, vision: true},
 ];
 
-const EFFORTS = {low: '3', medium: '4', high: '5'};
+// 客户端暴露低/中/高三级菜单，但实测上游 2026-11-18 接受 3~7 五档
+// （doubaowork2api 的 catalog 也印证：low/medium/high/xhigh/max → 3/4/5/6/7）。
+// 档位越高思维链越长，正文预算被挤压，所以默认仍是中档，只在调用方显式要求时升档。
+const EFFORTS = {low: '3', medium: '4', high: '5', xhigh: '6', max: '7'};
 
-// 客户端只暴露低/中/高三级；OpenAI 的 minimal/xhigh 等档位在这里没有对应，直接拒绝而不是静默降级。
 function wireEffort(effort, fallback) {
   if (effort == null || effort === '') return EFFORTS[fallback];
   const s = String(effort).trim();
   // 目录里 reasoningEfforts 是 {low:'3',medium:'4',high:'5'}；relay 在跨目标转发时
-  // 会先把档位换成线值再交给 provider，所以这里必须幂等接受 3/4/5，否则同一请求
+  // 会先把档位换成线值再交给 provider，所以这里必须幂等接受 3~7，否则同一请求
   // 直连能过、走 relay 就报「只支持低/中/高」。
-  if (s === '3' || s === '4' || s === '5') return s;
+  if (s === '3' || s === '4' || s === '5' || s === '6' || s === '7') return s;
   const v = EFFORTS[s];
-  if (!v) throw new AppError(`豆包工作模式只支持低/中/高（low|medium|high），收到 ${effort}`, 400, 'reasoning_effort_not_supported');
+  if (!v) throw new AppError(`豆包工作模式只支持 low|medium|high|xhigh|max（线值 3~7），收到 ${effort}`, 400, 'reasoning_effort_not_supported');
   return v;
 }
 
@@ -107,9 +109,9 @@ export function doubaoModels() {
     maxTokens: 16384,
     contextWindowSource: 'client_model_extra_params_total_window_size',
     maxTokensSource: 'doubao_client_work_mode_unverified',
-    reasoning: {supportedEfforts: ['low', 'medium', 'high'], control: 'effort', defaultEffort: m.defaultEffort},
+    reasoning: {supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], control: 'effort', defaultEffort: m.defaultEffort},
     reasoningEfforts: {...EFFORTS},
-    reasoningSource: 'client_observed_2026-11-13',
+    reasoningSource: 'client_observed_2026-11-13_plus_upstream_probe_2026-11-18',
     defaultEffort: m.defaultEffort,
     callable: true,
   }));
@@ -131,22 +133,32 @@ function safeParseJson(v) {
 // DSH 一次会递上几百个工具定义（实测 351 个）。原实现把每个工具的完整 JSON Schema 都写进
 // 契约，光这一项就能撑到十几万字符，豆包会直接判 710020202 common invalid param。
 // 这里只保留名称、参数名和一句描述：调用方本来就按名称分发，模型不需要看到 schema 全文。
-const TOOL_CONTRACT_MAX_SPECS = 32;
+// 上限按**字符**而不是个数。原来的 32 是按完整 JSON Schema 定的（那时 351 个工具的
+// schema 全文 572148 字符，必然撑爆），改成压缩格式后这个数字被误继承了下来。
+// 后果：字母序前 32 个恰好全是 agent_teams(14)+browser(11)+config(6)，
+// 真正高频的 ops_bash / read / write / edit / skill / todo_write 全落在 33 位之后，
+// 只剩名字没签名 —— 模型猜不出参数，只能回空的思维链标题（doubao_empty_answer）。
+// 实测 395 个工具按当前压缩格式共约 59000 字符，仅占 MAX_TEXT_CHARS(280000) 的 21%，
+// 全量给出是安全的；120000 是工具数暴涨时的安全阀。
+const TOOL_CONTRACT_MAX_CHARS = 120000;
 
 function toolSpecLines(tools) {
-  const picked = tools.slice(0, TOOL_CONTRACT_MAX_SPECS);
-  const lines = picked.map(t => {
+  const lines = [];
+  let used = 0;
+  for (const t of tools) {
     const fn = t?.function ?? t ?? {};
     const params = fn.parameters ?? {};
     const argList = Object.keys(params?.properties ?? {}).join(', ') || '无参数';
     const desc = String(fn.description ?? '').replace(/\s+/g, ' ').slice(0, 80);
-    return '- ' + (fn.name ?? '') + '(' + argList + ')' + (desc ? ': ' + desc : '');
-  });
-  if (tools.length > picked.length) {
-    // 曾把剩余工具名全部列出（实测 461 个、近万字符），结果契约被稀释到模型
-    // 只记住「本地工具」而忘记输出 JSON 回执。这里只给数量与示例。
-    const rest = tools.slice(picked.length).map(t => (t?.function ?? t ?? {}).name ?? '').filter(Boolean);
-    lines.push('- 另有 ' + rest.length + ' 个工具，用法相同，按名称直接调用即可（例如 ' + rest.slice(0, 8).join(', ') + (rest.length > 8 ? ' …' : '') + '）。');
+    const line = '- ' + (fn.name ?? '') + '(' + argList + ')' + (desc ? ': ' + desc : '');
+    if (used + line.length + 1 > TOOL_CONTRACT_MAX_CHARS) {
+      // 触发安全阀时不列剩余名字：曾把 461 个名字全列出（近万字符），
+      // 契约被稀释到模型只记住「本地工具」而忘记输出 JSON 回执。
+      lines.push('- 另有 ' + (tools.length - lines.length) + ' 个工具，用法相同，按名称直接调用即可。');
+      return lines.join('\n');
+    }
+    lines.push(line);
+    used += line.length + 1;
   }
   return lines.join('\n');
 }
@@ -593,11 +605,14 @@ function textDelta(payload) {
 // 10040 的 thinking_block 在 summary 模式下通常只有阶段标题（streaming_title/finish_title），
 // 没有思考正文。但「有过思维链、正文却为空」正是推理吃满输出预算的特征，
 // 必须采出来当诊断依据与降档重试的判据，否则整轮只能以空正文收场。
-// 降档阶梯：high(5) → medium(4) → low(3)。豆包在长上下文 + 高推理档下常把输出预算
-// 全烧在思维链上，正文一个字符都不出（10040 有标题、10000 为空）。provider 内部先降一档
-// 重试，比把空响应甩给上层判 empty_response 有效得多。已到 low 则返回 null 表示不能再降。
+// 降档阶梯：max(7) → xhigh(6) → high(5) → medium(4) → low(3)。豆包在长上下文 + 高推理档下
+// 常把输出预算全烧在思维链上，正文一个字符都不出（10040 有标题、10000 为空）。
+// provider 内部先降一档重试，比把空响应甩给上层判 empty_response 有效得多。
+// 已到 low 则返回 null 表示不能再降。
 function lowerEffort(effort) {
   const v = String(effort ?? "").trim();
+  if (v === "max" || v === "7") return "xhigh";
+  if (v === "xhigh" || v === "6") return "high";
   if (v === "high" || v === "5") return "medium";
   if (v === "medium" || v === "4") return "low";
   return null;
