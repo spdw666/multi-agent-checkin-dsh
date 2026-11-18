@@ -431,7 +431,7 @@ namespace GatewayWebViewHost {
             core.Navigate(BridgePolicy.Home);
             if (await Task.WhenAny(navigationReady.Task, Task.Delay(25000)) != navigationReady.Task) throw new TimeoutException();
             await navigationReady.Task;
-            if(options.Portable)await Eval("(function(){const label=document.querySelector('.window-bar>span>span');if(label)label.textContent='Web UI '+"+Json.Encode(options.UiVersion)+";document.title='AI 积分网关 · Web UI '+"+Json.Encode(options.UiVersion)+";window.__gatewayPortableRelease="+Json.Encode(new{uiVersion=options.UiVersion,backendVersion="0.8.2"})+";return true;})()");
+            if(options.Portable)await Eval("(function(){const label=document.querySelector('.window-bar>span>span');if(label)label.textContent='Web UI '+"+Json.Encode(options.UiVersion)+";document.title='AI 积分网关 · Web UI '+"+Json.Encode(options.UiVersion)+";window.__gatewayPortableRelease="+Json.Encode(new{uiVersion=options.UiVersion,backendVersion="0.8.3"})+";return true;})()");
             currentStage = "local-page-loaded";
         }
 

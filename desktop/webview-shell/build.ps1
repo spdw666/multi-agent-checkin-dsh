@@ -104,7 +104,7 @@ if($BundleCore) {
     if((& $NodeExecutable -p 'process.versions.node').Trim() -ne '22.23.3'){throw 'This portable release pins Node.js 22.23.3.'}
     $coreRoot=[IO.Path]::GetFullPath($CoreDirectory)
     $version=(Get-Content -LiteralPath (Join-Path $coreRoot 'package.json') -Raw|ConvertFrom-Json).version
-    if($version -ne '0.8.2'){throw 'This Web UI release packages backend 0.8.2.'}
+    if($version -ne '0.8.3'){throw 'This Web UI release packages backend 0.8.3.'}
     $destination=Join-Path $output 'core';New-Item -ItemType Directory -Path $destination,(Join-Path $output 'runtime') -Force|Out-Null
     foreach($folder in @('bin','bundle','src','web')) {
         $from=Join-Path $coreRoot $folder
@@ -141,8 +141,8 @@ if($Portable) {
     packageSha256 = $packageHash
     buildTarget = 'x64 .NET Framework / WebView2 net462 / twelve Web workspaces'
     executable = $(if($Portable){'AI积分网关.exe'}else{$target})
-    uiVersion = '0.8.2-web.1'
-    backendVersion = $(if($BundleCore){'0.8.2'}else{$null})
+    uiVersion = '0.8.3-web.1'
+    backendVersion = $(if($BundleCore){'0.8.3'}else{$null})
     portable = [bool]$Portable
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'BUILD-MANIFEST.json') -Encoding UTF8
 Write-Output "WEBVIEW2_BUILD_OK sdk=$sdkVersion target=$target"

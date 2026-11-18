@@ -28,7 +28,7 @@ foreach($file in $files){
 $sha=[Security.Cryptography.SHA256]::Create()
 try{$lines=foreach($file in $files|Sort-Object FullName){$stream=[IO.File]::OpenRead($file.FullName);try{$hash=-join($sha.ComputeHash($stream)|ForEach-Object{$_.ToString('x2')})}finally{$stream.Dispose()};$relative=$file.FullName.Substring($root.Length+1).Replace('\','/');"$hash  $relative"}}finally{$sha.Dispose()}
 [IO.File]::WriteAllLines((Join-Path $root 'checksums.sha256'),$lines,(New-Object Text.UTF8Encoding($false)))
-if(-not $ArchivePath){$ArchivePath=Join-Path (Split-Path $root -Parent) 'AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip'}
+if(-not $ArchivePath){$ArchivePath=Join-Path (Split-Path $root -Parent) 'AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip'}
 if(Test-Path -LiteralPath $ArchivePath){throw 'Select a new archive path; release archives are not silently overwritten.'}
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($root,[IO.Path]::GetFullPath($ArchivePath),[IO.Compression.CompressionLevel]::Optimal,$false)

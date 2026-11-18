@@ -6,20 +6,20 @@
 
 | 项目 | 本发行 |
 |---|---|
-| UI / 后端 / Node | `0.8.2-web.1` / `0.8.2` / 官方 `22.23.3 x64` |
-| 标签与类型 | [`v0.8.2-desktop-webview2.1`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.2-desktop-webview2.1)，独立预览发行 |
-| ZIP | [`AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip) |
-| 大小 | **43,469,759 字节** |
-| ZIP SHA-256 | `e6a39de2f6264f158802e61bba65bdb6bd183568d7d3217897d2a2573bb294be` |
-| 附件 | [SHA256SUMS](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/SHA256SUMS)、[ZIP.sha256](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip.sha256)、[BUILD-INFO.json](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.2-desktop-webview2.1/BUILD-INFO.json) |
+| UI / 后端 / Node | `0.8.3-web.1` / `0.8.3` / 官方 `22.23.3 x64` |
+| 标签与类型 | [`v0.8.3-desktop-webview2.1`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.3-desktop-webview2.1)，独立预览发行 |
+| ZIP | [`AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip`](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.3-desktop-webview2.1/AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip) |
+| 大小 | **43,482,191 字节** |
+| ZIP SHA-256 | `3e10c6b23e0a8b0ca3bdf88c45f3373a6001b5e5547c5172a60b5bcc4f4f60f6` |
+| 附件 | [SHA256SUMS](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.3-desktop-webview2.1/SHA256SUMS)、[ZIP.sha256](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.3-desktop-webview2.1/AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip.sha256)、[BUILD-INFO.json](https://github.com/spdw666/multi-agent-checkin-dsh/releases/download/v0.8.3-desktop-webview2.1/BUILD-INFO.json) |
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip
+Get-FileHash -Algorithm SHA256 .\AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip
 ```
 
 先比对附件名和完整 hash，再解压。ZIP 内 `checksums.sha256` 列出原始发行文件；首次运行生成的个人数据不在发行清单内。旧 `v0.8.1` 的 `dsh-ai-credit-gateway-0.8.1.tgz` 是后端/npm 资产，不是 Windows 桌面包。
 
-后端基于公开 0.8.2，加通用运行记忆目录与通用剪贴板用户名路径识别的便携适配。Web UI 独立增加，不表述成后端新版本。`desktop/build.ps1` 和 `desktop/AiCreditDesktop.cs` 继续作为默认 WinForms 构建入口；本包不替换原生配置或快捷方式。
+后端基于公开 0.8.3，加通用运行记忆目录与通用剪贴板用户名路径识别的便携适配。Web UI 独立增加，不表述成后端新版本。`desktop/build.ps1` 和 `desktop/AiCreditDesktop.cs` 继续作为默认 WinForms 构建入口；本包不替换原生配置或快捷方式。
 
 ## 下载后开始
 
@@ -84,7 +84,7 @@ WB 导入先预览真实条目，再选择和确认；取消确认可返回预�
 ```powershell
 git clone https://github.com/spdw666/multi-agent-checkin-dsh.git
 Set-Location multi-agent-checkin-dsh
-git checkout v0.8.2-desktop-webview2.1
+git checkout v0.8.3-desktop-webview2.1
 npm ci
 npm run build
 node --test tests/portable-path-defaults.test.mjs tests/webview-distribution.test.mjs tests/webview-import-selection.test.mjs
@@ -109,7 +109,7 @@ $repo = (Get-Location).Path
 .\desktop\webview-shell\package-portable.ps1 `
   -CoreDirectory $repo -NodeExecutable $node `
   -OutputDirectory "$repo\artifacts\webview-release" `
-  -ArchivePath "$repo\artifacts\AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip" `
+  -ArchivePath "$repo\artifacts\AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip" `
   -DependencyDirectory "$repo\.cache\webview2"
 ```
 

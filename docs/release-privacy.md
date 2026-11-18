@@ -9,8 +9,8 @@
 | 对象 | 本页描述的范围 |
 |---|---|
 | 当前源码主干 | 本轮公开文档整理及明确列出的历史截图移除；最终以已发布 commit 为准 |
-| 固定 Web 标签 | `v0.8.2-desktop-webview2.1` 的源码与自动生成 source archives；`v0.8.1-desktop-webview2.1` 与 `v0.8.1` 作为历史资产原字节保留，与之后更新的 main 分开 |
-| Windows 下载原件 | `AiCreditGateway-WebView2-0.8.2-web.1-win-x64.zip`，以[发行页](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.2-desktop-webview2.1)的完整 SHA-256 和文件大小识别 |
+| 固定 Web 标签 | `v0.8.3-desktop-webview2.1` 的源码与自动生成 source archives；`v0.8.2-desktop-webview2.1`、`v0.8.1-desktop-webview2.1` 与 `v0.8.1` 作为历史资产原字节保留，与之后更新的 main 分开 |
+| Windows 下载原件 | `AiCreditGateway-WebView2-0.8.3-web.1-win-x64.zip`，以[发行页](https://github.com/spdw666/multi-agent-checkin-dsh/releases/tag/v0.8.3-desktop-webview2.1)的完整 SHA-256 和文件大小识别 |
 | 原 `v0.8.1`、旧提交与历史附件 | 旧 `.tgz` 逐项检查，全部可达 Git 历史另行复核；历史状态截图明确保留，不把凭据检查通过说成所有历史都没有账号状态 |
 | 第一次运行后的文件夹 | 含用户自己的配置、凭据、账本、profile 和备份，不是可公开再分发的原件 |
 

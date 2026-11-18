@@ -20,6 +20,7 @@ vendor/trae-core.mjs
 /.cache/
 /desktop/webview-shell/dist/
 /desktop/webview-shell/dependencies/
+/desktop/dependencies/
 /desktop/webview-shell/user-data/
 /desktop/webview-shell/prerequisites/*.exe
 /proof/

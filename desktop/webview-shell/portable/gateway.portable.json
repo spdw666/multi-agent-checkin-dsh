@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "configuration": "user-data/config.local.json",
-  "uiVersion": "0.8.2-web.1",
+  "uiVersion": "0.8.3-web.1",
   "mode": "portable",
-  "backendVersion": "0.8.2",
+  "backendVersion": "0.8.3",
   "template": "core/config.first-run.json"
 }

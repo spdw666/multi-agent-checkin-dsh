@@ -1,7 +1,7 @@
 {
   "mode": "demo",
   "generatedAt": "2026-10-28T08:30:00.000Z",
-  "service": {"online": true, "version": "0.8.2", "baseUrl": "http://127.0.0.1:19421", "pid": null},
+  "service": {"online": true, "version": "0.8.3", "baseUrl": "http://127.0.0.1:19421", "pid": null},
   "accounts": [
     {"id": "demo-workbuddy", "platform": "workbuddy", "label": "WorkBuddy · 日常工作", "enabled": true, "balance": {"value": 1280, "unit": "积分", "stale": false, "updatedAt": "2026-10-28T08:28:00.000Z"}, "status": {"kind": "ok", "label": "认证有效", "detail": "演示状态：账号认证有效"}, "checkin": {"status": "already", "label": "今日已领取", "amount": 100, "automaticRewardConfirmed": false}},
     {"id": "demo-codearts", "platform": "codearts", "label": "CodeArts · 开发账号", "enabled": true, "balance": {"value": 860, "unit": "积分", "stale": false, "updatedAt": "2026-10-28T08:27:00.000Z"}, "status": {"kind": "ok", "label": "登录状态正常", "detail": "演示状态：仅用于展示与布局验收"}, "checkin": {"status": "already", "label": "今日已领取", "amount": 100, "automaticRewardConfirmed": false}},
