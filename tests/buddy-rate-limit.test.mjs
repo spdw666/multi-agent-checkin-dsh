@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buddyChat} from '../src/provider-buddy.mjs';
+import {applyRateLimitEvidence,parseResetDeadline,businessRateLimitKind} from '../src/provider-rate-limit.mjs';
 
 const credential={accessToken:'SAMPLE-PRIVATE-BUDDY-TOKEN',uid:'SAMPLE',principal:'SAMPLE',domain:'www.workbuddy.ai'};
 const input={model:'deepseek-v4.1-flash',messages:[{role:'user',content:'SAMPLE complete history'}],tools:[{type:'function',function:{name:'read_file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}}],max_completion_tokens:128000,reasoning_effort:'max',stream:false};
@@ -14,6 +15,63 @@ async function rejection(value,options={},signal){
   assert.doesNotMatch(JSON.stringify(seen)+seen.stack,/SAMPLE-PRIVATE|secret\.invalid|ORIGINAL-SECRET/);
   return seen;
 }
+// WorkBuddy 平台（vendor/workbuddy-core.mjs 的 chatStream）不走 buddyChatRejection：
+// 它把 vendor 的 kind 字符串直接当错误码抛出，于是 6004 对外一直是 unknown、
+// 也拿不到恢复时刻。applyRateLimitEvidence 就是给它补这一段的地方。
+// 真实报文（usage_calls 43525）：
+const WB_RESET='您的使用量已超出频率限制，将在 2026-11-18 14:35:43 UTC+8 重置，您也可以切换其他模型继续使用。';
+const WB_NOW=Date.parse('2026-11-18T13:50:00+08:00');
+
+test('WorkBuddy 429 gains the official business code and its reset clock from displayMsg',()=>{
+  const error=new Error('workbuddy upstream soft_rate (http 429): '+WB_RESET);
+  applyRateLimitEvidence(error,{status:429,detail:{upstreamCode:6004,displayMsg:WB_RESET},now:WB_NOW});
+  assert.equal(error.upstreamCode,6004);
+  assert.equal(error.rateLimitKind,'long_window');
+  assert.equal(error.rateLimitRetryable,false);
+  // 13:50:00 -> 14:35:43 = 2743 秒
+  assert.equal(error.retryAfterSeconds,2743);
+  assert.equal(error.retryAfterSource,'official_body');
+});
+
+test('WorkBuddy 429 without a parsable deadline yields no official evidence instead of guessing',()=>{
+  const error=new Error('workbuddy upstream soft_rate (http 429): 请求过于频繁');
+  applyRateLimitEvidence(error,{status:429,detail:{upstreamCode:6004,displayMsg:'请求过于频繁，请稍后再试'},now:WB_NOW});
+  // 类别仍然由官方业务码决定，但恢复时刻不许编。
+  assert.equal(error.rateLimitKind,'long_window');
+  assert.equal(error.retryAfterSeconds,undefined);
+  assert.equal(error.retryAfterSource,undefined);
+});
+
+test('non-429 responses never gain rate-limit evidence',()=>{
+  const error=new Error('workbuddy upstream client (http 400): bad request');
+  applyRateLimitEvidence(error,{status:400,detail:{upstreamCode:6004,displayMsg:WB_RESET},now:WB_NOW});
+  assert.equal(error.upstreamCode,undefined);
+  assert.equal(error.retryAfterSeconds,undefined);
+});
+
+test('an unknown official code stays uncategorised rather than defaulting to a kind',()=>{
+  const error=new Error('workbuddy upstream soft_rate (http 429): x');
+  applyRateLimitEvidence(error,{status:429,detail:{upstreamCode:999999,displayMsg:WB_RESET},now:WB_NOW});
+  assert.equal(error.upstreamCode,undefined);
+  assert.equal(error.rateLimitKind,undefined);
+  // 时间仍然可用：它来自报文本身，不依赖业务码是否认识。
+  assert.equal(error.retryAfterSeconds,2743);
+});
+
+test('reset deadline parsing is strict about the clock it accepts',()=>{
+  assert.deepEqual(parseResetDeadline(WB_RESET,WB_NOW),{seconds:2743,at:Date.UTC(2026,10,18,6,35,43)});
+  assert.equal(parseResetDeadline('14:35:43 重置',WB_NOW),undefined);
+  assert.equal(parseResetDeadline('2026-11-18T14:35:43+08:00',WB_NOW),undefined);
+  assert.equal(parseResetDeadline('2026-11-18 14:35:43 UTC+9',WB_NOW),undefined);
+});
+
+test('business code classification is shared, not duplicated per platform',()=>{
+  assert.equal(businessRateLimitKind(6004),'long_window');
+  assert.equal(businessRateLimitKind(6001),'transient');
+  assert.equal(businessRateLimitKind(14015),'usage_limit');
+  assert.equal(businessRateLimitKind(6000),'unknown');
+  assert.equal(businessRateLimitKind(999999),undefined);
+});
 const cases=[
   [6000,'unknown',false],
   ...[6001,6002,6005,6006,14003].map(code=>[code,'transient',true]),

@@ -28,6 +28,36 @@ function officialBusinessCode(value){
   const code=businessDiagnosticCode(value);return knownCodes.has(code)?code:undefined;
 }
 
+// 业务码 → 限流类别。WorkBuddy 平台原先没有走这套分类：它把 vendor 给的
+// kind 字符串（如 "soft_rate"）直接当错误码抛出，于是 6004 明明是长窗口
+// 限流，对外却是 rateLimitKind=unknown。这里把分类单独导出，让所有复用同
+// 一套官方业务码的适配器都能落在同一张表上。
+export function businessRateLimitKind(code){
+  if(!Number.isSafeInteger(code))return undefined;
+  if(transientCodes.has(code))return 'transient';
+  if(longWindowCodes.has(code))return 'long_window';
+  if(usageCodes.has(code))return 'usage_limit';
+  return knownCodes.has(code)?'unknown':undefined;
+}
+// 上游把恢复时刻写在自然语言里，例如：
+//   您的使用量已超出频率限制，将在 2026-11-18 14:35:43 UTC+8 重置
+// 只认「YYYY-MM-DD HH:MM:SS UTC+8」这一种带明确时区的绝对时刻。别的写法
+// 一律返回 undefined —— 宁可退化为本地冷却并如实说明，也不从一个不认识的
+// 句子里猜一个时刻给调用方。
+const RESET_DEADLINE=/[^0-9]([0-9]{4})-([0-9]{2})-([0-9]{2})[ T]([0-9]{2}):([0-9]{2}):([0-9]{2})\s*UTC\+8/;
+export function parseResetDeadline(value,now=Date.now()){
+  if(typeof value!=='string'||value.length>512||!Number.isFinite(now))return;
+  const match=RESET_DEADLINE.exec(value);
+  if(!match)return;
+  const year=Number(match[1]),month=Number(match[2]),day=Number(match[3]),hour=Number(match[4]),minute=Number(match[5]),second=Number(match[6]);
+  if(month<1||month>12||day<1||day>31||hour>23||minute>59||second>59)return;
+  // UTC+8 是固定偏移，直接换算成 UTC 毫秒，不依赖运行机器的时区设置。
+  const at=Date.UTC(year,month-1,day,hour-8,minute,second);
+  if(!Number.isFinite(at))return;
+  const seconds=Math.ceil((at-now)/1000);
+  if(!Number.isSafeInteger(seconds)||seconds<0||seconds>MAX_RETRY_SECONDS)return;
+  return {seconds,at};
+}
 export function parseBuddyRetryAfter(value,now=Date.now()){
   if(typeof value!=='string'||value.length>80||!Number.isFinite(now))return;
   const text=value.trim();let seconds;
@@ -69,6 +99,17 @@ async function boundedErrorJson(response,{signal,maxBytes,timeoutMs}){
   }
 }
 
+// 把「这个 429 是谁限的、属于哪一类、什么时候恢复」一次性贴到错误对象上。
+// 官方业务码决定类别；displayMsg 里的绝对时刻决定恢复时间。任何一项解析不出来
+// 就不设那一项 —— 上层会退化为本地冷却，并如实标注它不代表官方恢复时间。
+export function applyRateLimitEvidence(error,{status,detail,now=Date.now()}={}){
+  if(!error||status!==429)return error;
+  const code=detail?.upstreamCode,kind=businessRateLimitKind(code);
+  if(kind!==undefined){error.upstreamCode=code;error.rateLimitKind=kind;error.rateLimitRetryable=kind==='transient';}
+  const reset=parseResetDeadline(detail?.displayMsg,now);
+  if(reset){error.retryAfterSeconds=reset.seconds;error.retryAfterSource='official_body';}
+  return error;
+}
 export async function buddyChatRejection(response,{signal,errorBodyMaxBytes,errorBodyTimeoutMs}={}){
   const now=Date.now();let retryAfterSeconds;
   try{retryAfterSeconds=parseBuddyRetryAfter(response.headers?.get('retry-after'),now)}catch{}

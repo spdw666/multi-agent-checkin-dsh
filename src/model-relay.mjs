@@ -23,6 +23,24 @@ export function relayRateLimitMetadata(error={}){
  const rateLimitRetryable=rateLimitKind==='transient'&&transientRateCodes.has(upstreamCode)&&error.rateLimitRetryable===true;
  return {upstreamStatus:429,...(upstreamCode!==undefined?{upstreamCode}:{}),rateLimitKind,rateLimitRetryable,retryAfterSeconds,retryAfterSource};
 }
+// 恢复时刻按本机时区显示到秒；跨天时补上日期，避免「05:20 恢复」看不出是哪天。
+function resetClock(ms){
+  const at=new Date(ms);
+  const pad=n=>String(n).padStart(2,'0');
+  const clock=pad(at.getHours())+':'+pad(at.getMinutes())+':'+pad(at.getSeconds());
+  const sameDay=at.toDateString()===new Date().toDateString();
+  return sameDay?clock:pad(at.getMonth()+1)+"-"+pad(at.getDate())+" "+clock;
+}
+// 人类可读的剩余时长：秒 / 分 / 小时，最多两段，避免「4027 秒」这种数字。
+function humanizeSeconds(seconds){
+  if(!Number.isFinite(seconds)||seconds<0)return '未知时长';
+  const total=Math.round(seconds);
+  if(total<60)return total+' 秒';
+  const minutes=Math.floor(total/60);
+  if(minutes<60)return minutes+' 分 '+(total%60)+' 秒';
+  const hours=Math.floor(minutes/60);
+  return hours+' 小时 '+(minutes%60)+' 分';
+}
 export const relayDefaults={enabled:false,reservePercent:10,reserveCredits:100,balanceMaxAgeSeconds:60};
 export function modelFamily(id){return String(id??'').toLowerCase().replace(/^(?:deepseek-ai|deepseek|z-ai|moonshotai|qwen|meta-llama|nvidia)\//,'').replace(/:free$/,'').replaceAll('_','-');}
 // An opaque native key is an alias only while its signed, live catalogue says
@@ -124,8 +142,14 @@ export class ModelRelay{
  rateLimitError(blocked,{capability=false}={}){
   const rows=blocked.filter(r=>r?.reasonCode==='rate_limited').sort((a,b)=>a.until-b.until);if(!rows.length)return null;
   const row=rows[0],metadata=relayRateLimitMetadata(row),label={transient:'短时限流',long_window:'长窗口限制',usage_limit:'用量或许可限制',unknown:'限流原因待确认'}[metadata.rateLimitKind];
-  const error=new AppError(`同型号供应返回 HTTP 429（${label}）；${capability?'其余候选未确认可完整承接当前请求；':''}${metadata.retryAfterSource==='local_default'?'本地冷却不代表官方恢复时间；':''}模型、历史、工具和输出预算均已保留`,429,'same_model_rate_limited');
-  Object.assign(error,metadata,{gatewayManagedRetry:true,retryAfterSeconds:Math.max(0,Math.ceil((row.until-Date.now())/1000))});return error;
+  const seconds=Math.max(0,Math.ceil((row.until-Date.now())/1000)),at=row.until;
+  // 调用方要能一眼看到「什么时候能接着用」，而不是只被告知「被限流」。官方给了
+  // 重置时刻就写成具体钟点并注明来源；只有本地冷却时必须说清它不代表官方时间，
+  // 否则 23 秒后的重试会被误当成「快好了」。
+  const official=metadata.retryAfterSource!=='local_default';
+  const when=`${official?'官方预计':'本地冷却'} ${resetClock(at)} 恢复（${humanizeSeconds(seconds)}后${official?'':'；不代表官方恢复时间'}）`;
+  const error=new AppError(`同型号供应返回 HTTP 429（${label}）；${when}；${capability?'其余候选未确认可完整承接当前请求；':''}模型、历史、工具和输出预算均已保留`,429,'same_model_rate_limited');
+  Object.assign(error,metadata,{gatewayManagedRetry:true,retryAfterSeconds:seconds,retryAfterAt:new Date(at).toISOString()});return error;
  }
  clearRateLimit(target,expectedUntil){
   const key='relay-cooldown:'+target.upstreamId+'\0'+target.model,row=this.get(key);

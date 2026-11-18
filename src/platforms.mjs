@@ -15,6 +15,7 @@ import {WorkBuddyUpstreamClient, prepareChatBody, declaredTools} from '../vendor
 import {fetchWorkBuddyCreditDetails} from './workbuddy-resources.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {workBuddyChannelError,workBuddyChannelSkipped,workBuddyTransportChannel} from './workbuddy-channel.mjs';
+import {applyRateLimitEvidence} from './provider-rate-limit.mjs';
 import {doubaoModels,doubaoChat,doubaoHealth,doubaoStatus,doubaoClaim,doubaoProvider} from './provider-doubao.mjs';
 import {TraeSoloUpstreamClient,TraeSoloBridge,TraeSoloRemoteCatalogClient,mergeTraeModelSources,TraeUsageClient,regionOfCredential} from '../vendor/trae-core.mjs';
 import {AppError,jsonFetch,dayIn,errorView} from './util.mjs';
@@ -283,7 +284,16 @@ export class Platforms {
       let c=await this.credentials.resolve(u.accountId);await ensureInference();ensureChannel(c);let result=await this.wb.chatStream(c,body,signal);
       if(!result.ok&&result.status===401){const newer=await this.credentials.resolve(u.accountId,{force:true,renew:true});if(newer.accessToken!==c.accessToken){await ensureInference();ensureChannel(newer);c=newer;result=await this.wb.chatStream(c,body,signal);}}
       if(!result.ok&&result.status===0){const v=fetchTransportErrorView(result.transportFailure,signal);throw Object.assign(new AppError(v.message,v.status,v.code),v);}
-      if(!result.ok)throw workBuddyChannelError(result.message,{status:result.status,channel:workBuddyTransportChannel(c)})??new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
+      if(!result.ok){
+        const channelError=workBuddyChannelError(result.message,{status:result.status,channel:workBuddyTransportChannel(c)});
+        if(channelError)throw channelError;
+        const error=new AppError(`WorkBuddy ${result.kind}: ${result.message}`,result.status||502,result.kind);
+        // 429 必须带出「谁限的、什么类别、什么时候恢复」。vendor 只给了 kind 字符串，
+        // 官方业务码与恢复时刻都在 detail 里：不补这一段，对外的 rateLimitKind 永远
+        // 是 unknown，调用方也就只能看到一个没有时限的 429。
+        applyRateLimitEvidence(error,{status:result.status,detail:result.detail});
+        throw error;
+      }
       return {response:result.response,workBuddyChannel:workBuddyTransportChannel(c),recovery:tools?{declaredNames:tools.names,requiredParameters:tools.requiredParameters,pinnedToolName:tools.pinnedToolName}:undefined};
     }
     if(u.kind==='trae') {

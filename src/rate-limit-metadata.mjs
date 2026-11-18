@@ -13,6 +13,9 @@ export function rateLimitMetadata(error){
     result.rateLimitKind=error.rateLimitKind;
     if(typeof error.rateLimitRetryable==='boolean')result.rateLimitRetryable=error.rateLimitKind==='transient'&&transientCodes.has(error.upstreamCode)&&error.rateLimitRetryable;
   }
+  // 恢复时刻的绝对时间（ISO-8601 UTC）。调用方可以直接显示「几点能接着用」，
+  // 不必自己拿 retryAfterSeconds 加当前时钟；两者都由网关从同一个 until 算。
+  if(typeof error.retryAfterAt==='string'&&/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/.test(error.retryAfterAt))result.retryAfterAt=error.retryAfterAt;
   if(typeof error.retryAfterSeconds==='number'&&Number.isFinite(error.retryAfterSeconds)&&error.retryAfterSeconds>=0&&error.retryAfterSeconds<=86400){
     result.retryAfterSeconds=error.retryAfterSeconds;
     if(sources.has(error.retryAfterSource))result.retryAfterSource=error.retryAfterSource;

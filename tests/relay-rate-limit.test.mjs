@@ -23,7 +23,7 @@ function rate({kind='unknown',code,retry,retryable=false,source='official_header
 function rejectPrimary(f,error,{thenSuccess=false}={}){const normal=f.platforms.chat;let count=0;f.platforms.chat=async(t,r,s)=>{if(t.upstreamId==='primary'&&(!thenSuccess||count++===0)){f.calls.push({target:structuredClone(t),request:structuredClone(r),hash:digest(r)});throw error;}return normal(t,r,s);};}
 async function failure(f,raw=request(),signal){try{await collectChat(f.router.chat(raw,signal));assert.fail('Expected a failure');}catch(e){if(e.code==='ERR_ASSERTION')throw e;return e;}}
 function unchanged(f,raw){const expected=digest(raw);for(const row of f.calls){assert.equal(row.hash,expected);assert.deepEqual(row.request,raw);}assert.equal(digest(raw),expected);}
-function assertRate(e,{kind='unknown',source='local_default'}={}){assert.equal(e.status,429);assert.equal(e.code,'same_model_rate_limited');assert.equal(e.upstreamStatus,429);assert.equal(e.rateLimitKind,kind);assert.equal(e.retryAfterSource,source);assert.equal(e.gatewayManagedRetry,true);assert.ok(Number.isFinite(e.retryAfterSeconds));assert.ok(!e.message.includes('SAMPLE private'));assert.equal(e.message.includes('本地冷却不代表官方恢复时间'),source==='local_default');}
+function assertRate(e,{kind='unknown',source='local_default'}={}){assert.equal(e.status,429);assert.equal(e.code,'same_model_rate_limited');assert.equal(e.upstreamStatus,429);assert.equal(e.rateLimitKind,kind);assert.equal(e.retryAfterSource,source);assert.equal(e.gatewayManagedRetry,true);assert.ok(Number.isFinite(e.retryAfterSeconds));assert.ok(!e.message.includes('SAMPLE private'));assert.equal(e.message.includes('不代表官方恢复时间'),source==='local_default');assert.ok(/恢复（/.test(e.message),'message must state when it recovers');assert.ok(Number.isFinite(Date.parse(e.retryAfterAt)),'retryAfterAt must be ISO');assert.ok(Math.abs(Date.parse(e.retryAfterAt)-(Date.now()+e.retryAfterSeconds*1000))<=1500);}
 
 test('single unknown 429 is terminal 429 with a local probe delay, not a disguised503',async()=>{
  const f=fixture({single:true}),raw=request();rejectPrimary(f,rate());const e=await failure(f,raw);assertRate(e);assert.equal(e.rateLimitRetryable,false);assert.equal(f.calls.length,1);assert.equal(f.waits.length,0);unchanged(f,raw);
@@ -65,6 +65,21 @@ test('short-window code without official Retry-After has only local_default and 
 });
 for(const [code,kind]of [[6004,'long_window'],[14015,'usage_limit']])test(`${kind} without official reset explicitly labels30 seconds as a local probe, not recovery`,async()=>{
  const f=fixture({single:true});rejectPrimary(f,rate({kind,code}));const e=await failure(f);assertRate(e,{kind});assert.equal(e.rateLimitRetryable,false);assert.equal(f.waits.length,0);assert.equal(f.state.get(key('primary')).retryAfterSeconds,30);
+});
+test('an official reset deadline is rendered as a clock time, not just a second count',async()=>{
+ const f=fixture({single:true});rejectPrimary(f,rate({kind:'long_window',code:6004,retry:2743}));const e=await failure(f);
+ assertRate(e,{kind:'long_window',source:'official_header'});
+ // 官方时刻必须写成「官方预计 HH:MM:SS 恢复」，并带上人类可读的剩余时长
+ assert.match(e.message,/官方预计 \d{2}:\d{2}:\d{2} 恢复/);
+ assert.match(e.message,/（\d+ 分 \d+ 秒后）/);
+ assert.ok(!e.message.includes('不代表官方恢复时间'));
+});
+test('a local-only cooldown states its own clock time and denies being the official reset',async()=>{
+ const f=fixture({single:true});rejectPrimary(f,rate({kind:'long_window',code:6004}));const e=await failure(f);
+ assertRate(e,{kind:'long_window'});
+ assert.match(e.message,/本地冷却 \d{2}:\d{2}:\d{2} 恢复/);
+ assert.ok(e.message.includes('不代表官方恢复时间'));
+ assert.equal(e.retryAfterSeconds,30);
 });
 test('official Retry-After0 plus explicit transient code recovers exactly once and clears the matching circuit',async()=>{
  const f=fixture({single:true}),raw=request();rejectPrimary(f,rate({kind:'transient',code:6001,retry:0,retryable:true}),{thenSuccess:true});const result=await collectChat(f.router.chat(raw));assert.equal(result.choices[0].message.content,'SAMPLE_COMPLETE');assert.equal(f.calls.length,2);assert.equal(f.waits.length,1);assert.ok(f.waits[0]>=25);assert.equal(f.state.get(key('primary')).until,0);unchanged(f,raw);
