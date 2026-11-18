@@ -221,6 +221,20 @@ const TOOL_CONTRACT_MAX_SPECS = 32;
 // 单条 prompt 的字符预算：会话桥按上游 200K 窗口收，留出契约与模板余量。
 const PROMPT_CHAR_BUDGET = 400000;
 
+// 采样参数与原生输出上限是会话桥唯一真实缺失的通道；保留原样交给兼容供应。
+//
+// 例外：stream_options / store 不是生成参数，而是我方能准确兑现的传输控制，
+// 收下即等价，不算静默丢弃调用方约束：
+//   - stream_options.include_usage：桥本来就自己聚合 usage（assistant.tokens
+//     换算成 prompt_tokens/completion_tokens），不需要上游再发 usage 分片；
+//   - store：桥每次请求都新建 session，并在 finally 里 DELETE 掉整段 transcript，
+//     本身就等于 store:false。
+// DSH 的 pi-ai openai-completions 适配器会无条件带这两个键（supportsUsageInStreaming
+// 与 supportsStore 默认都是 true），不收就会让整轮对话在起服务前 400：
+// 2026-11-17T15:27Z aigw-298984b7 实测报「未提供本次显式生成参数：stream_options, store」。
+// 真正的采样参数（temperature/top_p/stop/response_format/seed 等）仍然明确拒绝。
+export const ABSORBED_TRANSPORT_CONTROLS = Object.freeze(['stream_options', 'store']);
+
 function toolSpecLines(tools) {
   const picked = tools.slice(0, TOOL_CONTRACT_MAX_SPECS);
   const lines = picked.map(t => {
@@ -355,8 +369,8 @@ function bridgeRequest(input) {
   if (!messages.length) throw new AppError('OpenCode 请求缺少消息', 400, 'empty_messages');
   const tools = Array.isArray(input?.tools) ? input.tools : Array.isArray(input?.functions) ? input.functions : [];
   const effort = wantsVariant(input);
-  // 采样参数与原生输出上限是会话桥唯一真实缺失的通道；保留原样交给兼容供应。
-  const unsupported = Object.keys(input ?? {}).filter(key => !['model', 'messages', 'stream', 'tools', 'tool_choice', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'reasoning_effort'].includes(key) && input[key] !== undefined);
+  // 采样参数与原生输出上限是会话桥唯一真实缺失的通道；见 ABSORBED_TRANSPORT_CONTROLS。
+  const unsupported = Object.keys(input ?? {}).filter(key => !['model', 'messages', 'stream', 'tools', 'tool_choice', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'reasoning_effort', ...ABSORBED_TRANSPORT_CONTROLS].includes(key) && input[key] !== undefined);
   if (unsupported.length) {
     throw new AppError('OpenCode 本机协议未提供本次显式生成参数：' + unsupported.join(', ') + '；原始约束已保留供兼容供应接力', 400, 'relay_capacity_incompatible');
   }

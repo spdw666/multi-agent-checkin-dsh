@@ -38,26 +38,31 @@ test('known output ceiling, tool and image incompatibility have typed skip reaso
   assert.equal(previewRoute(fixture({model:{...caps,multimodal:false}}),{...metadata,hasImages:true},{now}).candidates[0].reasonCode,'images_not_supported');
   const configured=previewRoute(fixture({model:{...caps,maxTokensSource:'configured_default',officialMaxTokens:undefined}}),metadata,{now});assert.equal(configured.candidates[0].capabilities.outputCapacity,null);assert.equal(configured.candidates[0].state,'unknown');
 });
-test('OpenCode complete request gate mirrors single user plain-text bridge',()=>{
-  const s=fixture({kind:'opencode',model:{...caps,tools:false,multimodal:false}});
+test('OpenCode complete request gate only rejects sampling params the session bridge cannot carry',()=>{
+  // 2026-11-18：多轮历史、图像、工具都已由会话桥承接（text 拼接 + FileAttachment +
+  // 提示词契约），旧版按「单条 user 纯文本」判的三类跳过全部作废。
+  const s=fixture({kind:'opencode'});
   const plain={model:'public/model',messages:[{role:'user',content:'SAMPLE'}]};
   assert.notEqual(previewRoute(s,plain,{now}).candidates[0].state,'skipped');
-  const incompatible=[
-    [{...plain,messages:[{role:'system',content:'SAMPLE'},{role:'user',content:'SAMPLE'}]},'relay_context_incompatible'],
-    [{...plain,messages:[{role:'user',content:[{type:'text',text:'SAMPLE'}]}]},'relay_context_incompatible'],
-    [{...plain,messages:[{role:'user',content:'SAMPLE',name:'SAMPLE'}]},'relay_context_incompatible'],
-    [{...plain,max_tokens:500},'relay_capacity_incompatible'],
-    [{...plain,temperature:0},'relay_capacity_incompatible'],
-    [{...plain,reasoning_effort:'high'},'relay_capacity_incompatible'],
-    [{...plain,messages:[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,SAMPLE'}}]}]},'images_not_supported'],
-    [{...plain,tools:[{type:'function',function:{name:'SAMPLE'}}],tool_choice:'none'},'tools_not_supported'],
-    [{...plain,messages:[{role:'assistant',tool_calls:[{id:'SAMPLE'}],content:null},{role:'tool',content:'SAMPLE',tool_call_id:'SAMPLE'}]},'tools_not_supported'],
+  const nowSupported=[
+    {...plain,messages:[{role:'system',content:'SAMPLE'},{role:'user',content:'SAMPLE'}]},
+    {...plain,messages:[{role:'user',content:[{type:'text',text:'SAMPLE'}]}]},
+    {...plain,messages:[{role:'user',content:'SAMPLE',name:'SAMPLE'}]},
+    {...plain,reasoning_effort:'high'},
+    {...plain,messages:[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,SAMPLE'}}]}]},
+    {...plain,tools:[{type:'function',function:{name:'SAMPLE'}}],tool_choice:'none'},
+    {...plain,messages:[{role:'assistant',tool_calls:[{id:'SAMPLE'}],content:null},{role:'tool',content:'SAMPLE',tool_call_id:'SAMPLE'}]},
+    {...plain,max_tokens:500,stream_options:{include_usage:true},store:false},
   ];
-  for(const [input,reason]of incompatible){const original=structuredClone(input),r=previewRoute(s,input,{now});assert.equal(r.candidates[0].state,'skipped');assert.equal(r.candidates[0].reasonCode,reason);assert.deepEqual(input,original);}
+  for(const input of nowSupported){const original=structuredClone(input),r=previewRoute(s,input,{now});assert.notEqual(r.candidates[0].state,'skipped',JSON.stringify(Object.keys(input)));assert.deepEqual(input,original);}
+  // 采样参数仍然没有通道，必须继续跳过。
+  for(const input of [{...plain,temperature:0},{...plain,top_p:0.5},{...plain,stop:['SAMPLE']}]){const original=structuredClone(input),r=previewRoute(s,input,{now});assert.equal(r.candidates[0].state,'skipped');assert.equal(r.candidates[0].reasonCode,'relay_capacity_incompatible');assert.deepEqual(input,original);}
 });
 test('OpenCode metadata gate handles explicit budget, multi-role, images and tools',()=>{
   const s=fixture({kind:'opencode'});
-  for(const [change,reason]of [[{messageCount:2,outputBudget:0},'relay_context_incompatible'],[{explicitParameters:['temperature'],outputBudget:0},'relay_capacity_incompatible'],[{hasImages:true},'images_not_supported'],[{hasToolHistory:true},'tools_not_supported'],[{requiresTools:true},'tools_not_supported']])assert.equal(previewRoute(s,{...metadata,...change},{now}).candidates[0].reasonCode,reason);
+  // 采样参数仍判不过；多轮 / 图像 / 工具已支持，不再跳过。
+  assert.equal(previewRoute(s,{...metadata,explicitParameters:['temperature'],outputBudget:0},{now}).candidates[0].reasonCode,'relay_capacity_incompatible');
+  for(const change of [{messageCount:2,outputBudget:0},{hasImages:true},{hasToolHistory:true},{requiresTools:true},{explicitParameters:['stream_options','store'],outputBudget:0}])assert.notEqual(previewRoute(s,{...metadata,...change},{now}).candidates[0].state,'skipped',JSON.stringify(change));
 });
 test('saved audit remains separate evidence and never invents model capacity or freshness',()=>{
   const rows=new Map([['model-audit',{results:[{upstreamId:'up',model:'model-v1',status:'passed',finishedAt:'2026-10-17T00:00:00Z',tests:[{stage:'ordinary',ok:true,text:'LEAK_TEXT',elapsedMs:123},{stage:'tools',ok:true,args:{password:'LEAK_ARGS'}}],reason:'LEAK_REASON'}]}]]);

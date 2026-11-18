@@ -5,6 +5,7 @@ import {AppError} from './util.mjs';
 import {RequestPlan,outputCapacity} from './request-plan.mjs';
 import {WorkBuddyPool} from './workbuddy-pool.mjs';
 import {ModelRelay,catalogModelFamily,relayPartition} from './model-relay.mjs';
+import {ABSORBED_TRANSPORT_CONTROLS} from './provider-opencode.mjs';
 import {workBuddyEdition} from './workbuddy-auth.mjs';
 import {diagnosticAccountRef,diagnosticText,diagnosticCode} from './request-diagnostics.mjs';
 
@@ -92,10 +93,12 @@ export function previewRoute(service,body,{now=Date.now()}={}){
     if(outputFit==='insufficient')skip('relay_capacity_incompatible');
     if(input.contract.hasToolHistory&&model?.tools===false)skip('tools_not_supported');
     if(u?.kind==='opencode'){
-      if(input.hasMultiRole)skip('relay_context_incompatible');
-      if(input.explicitParameters.length)skip('relay_capacity_incompatible');
-      if(input.contract.hasImages)skip('images_not_supported');
-      if(input.contract.requiresTools||input.contract.hasToolHistory||input.request.tools?.length||input.request.functions?.length)skip('tools_not_supported');
+      // 多轮历史、图像与工具已由会话桥承接（text 拼接 + FileAttachment + 提示词契约），
+      // 旧版按「单条 user 纯文本」判的 relay_context_incompatible / images_not_supported
+      // / tools_not_supported 三条已作废，继续保留会让预演与实际能力背离。
+      // 唯一的真实缺口仍是采样参数；stream_options / store 由桥吸收，不算缺口。
+      const openCodeUnsupported=input.explicitParameters.filter(k=>!ABSORBED_TRANSPORT_CONTROLS.includes(k)&&!['max_tokens','max_completion_tokens','reasoning_effort'].includes(k));
+      if(openCodeUnsupported.length)skip('relay_capacity_incompatible');
     }
     const cooldowns=[read('relay-cooldown:'+target.upstreamId+'\0'+target.model),...(u?.kind==='workbuddy'&&u.accountId?[read('wb-pool-cooldown:'+u.accountId)]:[])].filter(r=>r&&r.reasonCode!=='capability_unavailable'&&number(r.until)!==null&&r.until>now&&r.until<=8640000000000000).sort((a,b)=>b.until-a.until);
     const cooldown=cooldowns[0]??null;
@@ -106,7 +109,7 @@ export function previewRoute(service,body,{now=Date.now()}={}){
     if(a?.enabled===false)skip('account_disabled');
     if(!u||u.enabled===false)skip('upstream_disabled_or_missing');
     if(route.enabled===false)skip('route_disabled');
-    return {position:index+1,platform:safeCode(u?.kind)??'unknown',model:diagnosticText(target.model,value),accountRef:diagnosticAccountRef(u?.accountId),state:status,reasonCode:safeCode(reasonCode),capabilities:{tools:typeof model?.tools==='boolean'?model.tools:null,multimodal:typeof model?.multimodal==='boolean'?model.multimodal:null,contextWindow,outputCapacity:maxOutput},contextFit,outputFit,catalog:{source:model?'memory_catalog':'not_cached_or_model_not_listed',checkedAt:null,freshness:'unknown',completeness:'unknown',callableDeclared:typeof model?.callable==='boolean'?model.callable:null},audit:auditEvidence(audit?.results?.find(r=>r.upstreamId===target.upstreamId&&r.model===target.model),value),cooldown:cooldown?{reasonCode:safeCode(cooldown.reasonCode??cooldown.reason),until:new Date(cooldown.until).toISOString(),retryAfterSeconds:Math.ceil((cooldown.until-now)/1000)}:null,notes:['目录缓存新鲜度未知；未刷新认证、余额或上游模型目录','上下文仅为保守充分适配估计，不是分词结果或生成成功保证',...(u?.kind==='opencode'?['OpenCode 当前文本桥仅保留单条 user 纯文本；不接受显式生成参数、图像或外部工具协议']:[])]};
+    return {position:index+1,platform:safeCode(u?.kind)??'unknown',model:diagnosticText(target.model,value),accountRef:diagnosticAccountRef(u?.accountId),state:status,reasonCode:safeCode(reasonCode),capabilities:{tools:typeof model?.tools==='boolean'?model.tools:null,multimodal:typeof model?.multimodal==='boolean'?model.multimodal:null,contextWindow,outputCapacity:maxOutput},contextFit,outputFit,catalog:{source:model?'memory_catalog':'not_cached_or_model_not_listed',checkedAt:null,freshness:'unknown',completeness:'unknown',callableDeclared:typeof model?.callable==='boolean'?model.callable:null},audit:auditEvidence(audit?.results?.find(r=>r.upstreamId===target.upstreamId&&r.model===target.model),value),cooldown:cooldown?{reasonCode:safeCode(cooldown.reasonCode??cooldown.reason),until:new Date(cooldown.until).toISOString(),retryAfterSeconds:Math.ceil((cooldown.until-now)/1000)}:null,notes:['目录缓存新鲜度未知；未刷新认证、余额或上游模型目录','上下文仅为保守充分适配估计，不是分词结果或生成成功保证',...(u?.kind==='opencode'?['OpenCode 会话桥已承接多轮历史、图像与提示词工具契约；采样参数（temperature/top_p/stop/response_format 等）没有通道，仍会跳过']:[])]};
   });
   const preferred=relayActive?read('relay-preferred:'+route.id):null;
   if(preferred)candidates.sort((a,b)=>{const ap=targets[a.position-1],bp=targets[b.position-1];return Number(bp?.upstreamId===preferred.upstreamId&&bp?.model===preferred.model)-Number(ap?.upstreamId===preferred.upstreamId&&ap?.model===preferred.model);});

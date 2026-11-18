@@ -73,6 +73,26 @@ test('sampling parameters the bridge cannot carry stay intact and reject before 
   const request={model:'SAMPLE-free',messages:[{role:'user',content:'SAMPLE'}],temperature:0.2},before=structuredClone(request);
   await assert.rejects(()=>openCodeChat({...service,baseUrl:'https://SAMPLE.invalid'},credential,request),e=>e.code==='relay_capacity_incompatible');assert.deepEqual(request,before);
 });
+
+test('transport controls pi-ai always sends are absorbed instead of rejected as sampling',async t=>{
+  // 回归 2026-11-17T15:27Z aigw-298984b7 / 15:28Z aigw-cbcc6568：DSH 的 pi-ai
+  // openai-completions 适配器无条件带 stream_options 与 store（supportsUsageInStreaming
+  // 与 supportsStore 默认都是 true），旧白名单把它们当采样参数直接 400，整轮对话在起
+  // 服务前就失败，前端只看到「网关请求失败（gateway_terminal_error）」加一串请求 ID。
+  // 这两个键桥都能准确兑现：include_usage 由桥自己聚合 usage；store 由 DELETE transcript 等价。
+  const {ABSORBED_TRANSPORT_CONTROLS}=await import('../src/provider-opencode.mjs');
+  assert.deepEqual([...ABSORBED_TRANSPORT_CONTROLS],['stream_options','store']);
+  t.mock.method(globalThis,'fetch',async(url,options={})=>{
+    if(options.method==='DELETE')return new Response(null,{status:204});
+    if(String(url).endsWith('/api/session'))return Response.json({data:{id:'SAMPLE_SESSION'}});
+    if(String(url).endsWith('/prompt'))return Response.json({data:{accepted:true}});
+    return Response.json({data:[{type:'idle',outcome:'succeeded'},{type:'assistant',model:{providerID:'opencode',id:'SAMPLE-free'},content:[{type:'text',text:'SAMPLE_ANSWER'}],finish:'stop'}]});
+  });
+  const request={model:'SAMPLE-free',messages:[{role:'user',content:'SAMPLE'}],stream:true,store:false,stream_options:{include_usage:true}},before=structuredClone(request);
+  await openCodeChat({baseUrl:service.baseUrl},credential,request);
+  // 调用方原始请求一个字段都不许被改写。
+  assert.deepEqual(request,before);
+});
 test('official model country restriction keeps HTTP403 and is not mislabeled login failure',async t=>{
   t.mock.method(globalThis,'fetch',async(url,options={})=>{
     if(options.method==='DELETE')return new Response(null,{status:204});
